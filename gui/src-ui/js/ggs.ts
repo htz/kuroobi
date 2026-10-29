@@ -1,9 +1,7 @@
-
 import { useCallback, useEffect, useState } from 'react';
 import { ggsApi, jsLog, onGgsSnapshot } from './api';
 import { t, dateLocale } from './i18n';
 import type { GgsSnapshot, MatchView, PlayerView, UserRow } from './types';
-
 
 export function useGgs() {
   const [snap, setSnap] = useState<GgsSnapshot | null>(null);
@@ -31,7 +29,6 @@ export function useGgs() {
   return { snap };
 }
 
-
 interface ClockBase {
   match: MatchView;
   at: number;
@@ -44,7 +41,8 @@ interface ClockState {
 
 export type ClockSide = 'my' | 'opp' | 'p0' | 'p1';
 
-export interface ClockView {
+/** A GGS clock as shown under a board, and whether it is the one running. */
+export interface ClockText {
   text: string;
   active: boolean;
 }
@@ -64,7 +62,7 @@ function oppSince(m: MatchView, sib: MatchView | undefined): number | null {
 }
 
 function clockView(c: ClockBase | undefined, side: ClockSide, now: number,
-                   sib?: MatchView): ClockView {
+                   sib?: MatchView): ClockText {
   if (!c) return { text: '', active: false };
   const m = c.match;
   let base: number | null;
@@ -142,13 +140,19 @@ export function onlineRows(snap: GgsSnapshot): UserRow[] {
   return rows.sort((a, b) => (b.rating ?? b.rating_r ?? 0) - (a.rating ?? a.rating_r ?? 0));
 }
 
+/** A player's rating for the pool of `random` games, or the other one when that is all GGS gave. */
+export const ratingOf = (u: UserRow, random: boolean): string => {
+  const r = random ? (u.rating_r ?? u.rating) : (u.rating ?? u.rating_r);
+  return r != null ? r.toFixed(1) : '';
+};
+
 export function presence(snap: GgsSnapshot, name: string): Presence {
   if (snap.ongoing.some((o) => o.names.includes(name))) return 'playing';
   const on = snap.users.some((u) => u.name === name) || (snap.online ?? []).includes(name);
   return on ? 'online' : 'offline';
 }
 
-export function useClocks(matches: MatchView[]): (id: string, side: ClockSide) => ClockView {
+export function useClocks(matches: MatchView[]): (id: string, side: ClockSide) => ClockText {
   const [state, setState] = useState<ClockState>({ bases: {}, now: 0 });
 
   useEffect(() => {
@@ -176,6 +180,11 @@ export function useClocks(matches: MatchView[]): (id: string, side: ClockSide) =
   );
 }
 
+/** A disc difference GGS writes from black's side ("+12.00"), from one side; null when there is none. */
+export const discDiff = (score: string, black: boolean): number | null => {
+  const d = parseFloat(score);
+  return Number.isFinite(d) ? (black ? d : -d) : null;
+};
 
 export function fmtSecs(s: number): string {
   s = Math.max(0, Math.floor(s));
@@ -221,7 +230,7 @@ export const MIN_CLOCK = 1;
 /** GGS's extension when a request names none. */
 export const DEFAULT_EXT = 120;
 
-/** "4 分 30 秒", "5 分", "30 秒". */
+/** "4 min 30 s", "5 min", "30 s". */
 export function secsText(secs: number): string {
   const m = Math.floor(secs / 60), s = secs % 60;
   if (!m) return t('ggs.clock_choice.seconds', { n: s });
@@ -255,8 +264,8 @@ export function parseClockSpec(spec: string): { main: number; ext: number } | nu
 export const clockChoices = (): [number, string][] =>
   [1, 3, 5, 10, 15, 20, 30].map((n) => [n * 60, t('ggs.clock_choice.minutes', { n })]);
 
-/** "3 分 · 延長 30 秒" */
-export const pairLabel = (main: number, ext: number): string => ext
+/** "3 min · extension 30 s" */
+const pairLabel = (main: number, ext: number): string => ext
   ? t('ggs.clock_choice.pair', { main: secsText(main), ext: secsText(ext) })
   : t('ggs.clock_choice.pair_none', { main: secsText(main) });
 
@@ -264,8 +273,6 @@ export const pairLabel = (main: number, ext: number): string => ext
 export const askClockChoices = (): [string, string][] =>
   ([[60, 30], [180, 30], [300, DEFAULT_EXT], [600, DEFAULT_EXT], [900, DEFAULT_EXT]] as const)
     .map(([m, e]) => [clockSpec(m, e), pairLabel(m, e)]);
-
-
 
 export function ggsMoveToIndex(mv: string): number | null {
   if (/^pa/i.test(mv)) return null;
@@ -285,7 +292,6 @@ export function countDiscs(cells: number[]): { black: number; white: number } {
   }
   return { black, white };
 }
-
 
 export async function translate(text: string, target: string): Promise<string> {
   const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=' +
@@ -460,7 +466,6 @@ function readTime(k: string, v: string): string {
   const idle = span(m[1]);
   return m[2] ? t('ggs.finger.idle_online', { idle, total: span(m[2]) }) : idle;
 }
-
 
 export interface Who {
   me: string;

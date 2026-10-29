@@ -7,7 +7,6 @@ import { Button, Segmented, Select } from './components/primitives';
 import { t } from './i18n';
 import { whenShort } from './when';
 
-
 const lossOf = (c: LearnChange) => c.best - c.after;
 
 const logCols = (): Col[] => [
@@ -191,8 +190,6 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
     </div>
   );
 }
-
-
 
 function BlunderPane({ cur, bad, frame, onOpen }: {
   cur: LearnEntry;

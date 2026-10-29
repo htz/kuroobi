@@ -397,7 +397,6 @@ err:
   bad_formula_kind: "Invalid match-request handling type ({kind})"
   bad_log_channel: "Invalid search log channel (\".\" followed by 1-7 letters, digits, _ or -)"
   bad_square: "That square does not exist"
-  busy_ggs: "Not available during a GGS game"
   busy_ggs_analysis: "No analysis during a GGS game"
   busy_ggs_search: "No local search during a GGS game (please wait until it ends)"
   chat_target_and_text_required: "A recipient and a message are required"
@@ -504,7 +503,6 @@ ggs:
     extension: "Extension"
     format: "Format"
     time_control: "Time control"
-    turn: "Colour"
   filter:
     all: "All"
   finger:

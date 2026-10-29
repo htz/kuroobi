@@ -1,23 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Board, type Cell } from './components/board';
+import { Board, START_CELLS, type Cell } from './components/board';
 import { BoardFit, Divider, Dock, Section } from './components/layout';
 import { Button, Segmented } from './components/primitives';
 import { ScoreRow, StoneDot } from './components/data';
 import { t } from './i18n';
 
-
 type Side = 'b' | 'w';
 type Pos = { cells: Cell[]; turn: Side };
 type Tool = 0 | 1 | 2;   // erase / black / white
 
-const START: Pos = {
-  cells: Array.from({ length: 64 }, (_, sq) => (sq === 27 || sq === 36 ? 2 : sq === 28 || sq === 35 ? 1 : 0)),
-  turn: 'b',
-};
+const START: Pos = { cells: [...START_CELLS], turn: 'b' };
 
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 
-export function legalOf(cells: Cell[], side: Side): number[] {
+function legalOf(cells: Cell[], side: Side): number[] {
   const me = side === 'b' ? 1 : 2, op = 3 - me, out: number[] = [];
   const at = (f: number, r: number) => (f < 0 || f > 7 || r < 0 || r > 7 ? -1 : cells[f * 8 + r]);
   for (let sq = 0; sq < 64; sq++) {
@@ -120,7 +116,7 @@ export function useBoardEdit() {
   };
 }
 
-export type BoardEditor = ReturnType<typeof useBoardEdit>;
+type BoardEditor = ReturnType<typeof useBoardEdit>;
 
 /** Keys while editing: 1–3 pick the stone, ⌘Z / ⇧⌘Z, Esc leaves, ⌘↩ plays from here. */
 export function useEditKeys(ed: BoardEditor, onCancel: () => void, onPlay: () => void) {

@@ -1,4 +1,4 @@
-
+import type { Account } from './components/accounts';
 import type { BookNode, ClockView, EvalPoint, GameView, GgsSnapshot, HintView, LearnEntry, StandbyCfg, ThinkView } from './types';
 
 const core = () => window.__TAURI__?.core;
@@ -106,7 +106,6 @@ export interface ActivityView {
   mem_total: number;
 }
 
-
 export interface SavedServer { addr: string; name: string; public: boolean }
 
 /** The opponent's decline formula as an outline: `group` is set (any / all) on a group line. */
@@ -118,7 +117,7 @@ export type UnfitView = {
 export const ggsApi = {
   connect: (login: string, pw: string, server: string) => call<void>('ggs_connect', { login, pw, server }),
   disconnect: () => call('ggs_disconnect'),
-  accounts: () => call<{ server: string; login: string; last?: number }[]>('ggs_accounts'),
+  accounts: () => call<Account[]>('ggs_accounts'),
   connectSaved: (server: string, login: string) => call<void>('ggs_connect_saved', { server, login }),
   forgetAccount: (server: string, login: string) => call<void>('ggs_forget_account', { server, login }),
   servers: () => call<SavedServer[]>('ggs_servers'),
@@ -146,7 +145,6 @@ export const ggsApi = {
   look: (id: string) => call('ggs_look', { id }),
   ack: () => call('ggs_ack', {}),
   autoview: () => call<string>('ggs_autoview', {}),
-  noRated: () => call<boolean>('ggs_no_rated', {}),
   chat: (target: string, text: string) => call('ggs_chat', { target, text }),
   matchCmd: (id: string, verb: 'undo' | 'abort' | 'break' | 'resign' | 'tell', arg = '') =>
     call('ggs_match_cmd', { id, verb, arg }),

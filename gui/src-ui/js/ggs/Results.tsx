@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { ggsApi } from '../api';
 import type { BoardRecord, GameResult, GgsSnapshot } from '../types';
-import { fmtSecs, gtypeLabel } from '../ggs';
+import { discDiff, fmtSecs, gtypeLabel } from '../ggs';
 import { t } from '../i18n';
-import { Divider, Drawer, Section, Toolbar } from '../components/layout';
+import { captionStyle, Divider, Drawer, KeyValue, Section, Toolbar } from '../components/layout';
 import { Button, Segmented, Select } from '../components/primitives';
-import { KeyValue } from '../components/layout';
 import { EvalTrend, RateChart, ResultHead, ResultRow, StoneDot, type ResultBoard, type ResultEnding } from '../components/data';
 import { askSheet } from '../AskSheet';
 import { Blank, clockLabel, Page, RankRates, rateLabel, Rows, Sections, signed, sumBoards, Table, type TrendPoint, useWidth, useWindowHeight } from '../ggsui';
@@ -17,7 +16,7 @@ type Period = 'all' | '7' | '30' | '90';
 // GGS reuses match numbers and seq restarts with the app; the finish time tells them apart.
 const rowKey = (r: GameResult) => `${r.id}#${r.seq}#${r.at ?? 0}`;
 
-export const baseType = (base: string, raw?: string) => {
+const baseType = (base: string, raw?: string) => {
   const fromRaw = raw?.split(/\s+/).find((x) => /^s?8(r\d+)?$/.test(x));
   if (fromRaw) return fromRaw;
   return base.split('.')[0] ?? '';
@@ -27,9 +26,6 @@ const poolOf = (base: string, raw?: string) => {
   if (!kind) return '';
   return kind.includes('r') ? '8r' : '8';
 };
-
-
-type Pt = TrendPoint;
 
 /** A resignation or an adjournment decides the whole match (both boards of a synchro). */
 function endingOf(r: GameResult, me: string): ResultEnding | null {
@@ -59,9 +55,9 @@ const clockLeft = (c: { main: number | null; ext: number | null }) =>
     : fmtSecs(c.main);
 
 /** One board's reported values from a GGF that carries them (`B[F5/1.50/2.00]`), from `me`'s side. */
-function ggfTrend(ggf: string, me: string): Pt[] {
+function ggfTrend(ggf: string, me: string): TrendPoint[] {
   const black = (/PB\[([^\]]*)\]/.exec(ggf)?.[1] ?? '') === me;
-  const out: Pt[] = [];
+  const out: TrendPoint[] = [];
   const re = /([BW])\[([A-Ha-h][1-8]|PA|pa)(?:\/([-\d.]+))?(?:\/([\d.]+))?\]/g;
   let m: RegExpExecArray | null;
   let n = 0;
@@ -76,7 +72,6 @@ function ggfTrend(ggf: string, me: string): Pt[] {
   }
   return out;
 }
-
 
 /** My finished games: the rating trend or both ratings on top, the games below, the chosen one in a drawer. */
 export function Results({ snap, onKifu }: {
@@ -98,10 +93,9 @@ export function Results({ snap, onKifu }: {
     .filter((h) => !known.has(h.id))
     .map((h) => {
       const iAmBlack = h.black === login;
-      const diff = parseFloat(h.score);
       return {
         id: h.id, seq: 0, base: h.gtype, raw: h.gtype, opp: iAmBlack ? h.white : h.black,
-        my_diff: Number.isFinite(diff) ? (iAmBlack ? diff : -diff) : null,
+        my_diff: discDiff(h.score, iAmBlack),
         my_rating: parseFloat(iAmBlack ? h.black_rating : h.white_rating) || null,
         at: Date.parse(h.at) / 1000 || 0,
         kifu: '', ggf: '', archive: h.id,
@@ -132,7 +126,6 @@ export function Results({ snap, onKifu }: {
     [t('results.avg_diff'), avg != null ? (avg > 0 ? '+' : '') + avg.toFixed(1) : '—'],
     [t('results.best'), rates.length ? Math.max(...rates).toFixed(1) : '—'],
   ];
-  const mine = [...snap.my_ranks].sort((a, b) => (a.gtype === '8r' ? 0 : 1) - (b.gtype === '8r' ? 0 : 1));
 
   const trend = sel
     ? sumBoards((sel.boards?.length ? sel.boards.map((b) => b.ggf) : [sel.ggf]).filter(Boolean).map((g) => ggfTrend(g, login)))
@@ -172,7 +165,7 @@ export function Results({ snap, onKifu }: {
           <Sections>
             {pool === 'all' ? (
               <Section title={t('results.ratings')}>
-                <RankRates ranks={mine} />
+                <RankRates ranks={snap.my_ranks} />
               </Section>
             ) : (
               <Section title={t('ggs.results.rating_trend')}>
@@ -257,12 +250,8 @@ export function Results({ snap, onKifu }: {
   );
 }
 
-const HEAD: React.CSSProperties = {
-  fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)',
-  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-};
+const HEAD: React.CSSProperties = { ...captionStyle, overflow: 'hidden', textOverflow: 'ellipsis' };
 
-/** Each board: its result on the board and a time mark, then one row per player with the clock it ended on. */
 /** The result first and on its own: the outcome and the match's disc difference, then each board's. */
 function ResultCard({ r, me }: { r: GameResult; me: string }) {
   const d = r.my_diff;
@@ -299,6 +288,7 @@ function ResultCard({ r, me }: { r: GameResult; me: string }) {
   );
 }
 
+/** Each board, then one row per player with the clock it ended on. */
 function BoardTable({ boards }: { boards: BoardRecord[] }) {
   const row = (last: boolean): React.CSSProperties => ({
     height: 'var(--h-row)', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)',

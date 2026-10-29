@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, ggsApi, onHints, type ActivityView } from './api';
 import type { Game, Hints } from './state';
 import type { GameView, LearnEntry } from './types';
+import type { GraphPoint } from './components/data';
 import { t, tErr } from './i18n';
 
 export function useEngineSettings(g: Game) {
@@ -107,8 +108,6 @@ export function useEngineTurn(g: Game) {
   }, [playing, gv, engineSides, setThinking, setThinkSecs, setThinkTotal,
       setMoveSource, applyView, setPlaying, say, maybeLearn, setStat, holdHints]);
 }
-
-export type GraphPoint = { value: number; exact: boolean; book: boolean };
 
 const lineKey = (v: GameView | null) =>
   v ? v.moves.map((m) => (m == null ? 'p' : m)).join(',') : '';

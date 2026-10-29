@@ -1,10 +1,9 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { Board, BoardDefs } from './board';
+import { Board, BoardDefs, START_CELLS } from './board';
 import { Button, Dot, Segmented } from './primitives';
 import { IconButton } from './Icons';
 import { t, useLang } from '../i18n';
 import icon from '../../assets/icon.svg?raw';
-
 
 export function AppFrame({ children }: { children: React.ReactNode }) {
   return (
@@ -243,7 +242,6 @@ export function StatusBar({ left, right }: { left?: React.ReactNode; right?: Rea
     </div>
   );
 }
-
 
 export function Modal({ title, sub, body, actions, width = 'var(--w-modal)', onClose, scroll, band, children }: {
   title: string;
@@ -597,16 +595,13 @@ export function EmptyState({ title, body, actions, visual }: {
 }
 
 export function EmptyBoard() {
-  const cells: (0 | 1 | 2)[] = Array(64).fill(0);
-  cells[3 * 8 + 3] = 2; cells[4 * 8 + 4] = 2;
-  cells[4 * 8 + 3] = 1; cells[3 * 8 + 4] = 1;
   return (
     <div aria-hidden style={{
       width: 150, flex: 'none', padding: 'var(--sp-1)',
       borderRadius: 'var(--r-4)', background: 'var(--panel)',
     }}>
       <div style={{ borderRadius: 'var(--r-1)', overflow: 'hidden' }}>
-        <Board cells={cells} coords={false} disabled />
+        <Board cells={START_CELLS} coords={false} disabled />
       </div>
     </div>
   );
@@ -699,24 +694,22 @@ export function Drawer({ title, tools, label, onClose, children }: {
   // Placed against the window, so the screen that opens it can sit anywhere inside the frame.
   const edge = { position: 'fixed', top: 'var(--h-window)', bottom: 'var(--h-status)' } as const;
   return (
-    <>
-      <aside ref={box} role="dialog" aria-label={label} style={{
-        ...edge, right: 0, zIndex: 26, width: 'var(--w-drawer)', maxWidth: 'calc(100% - 120px)',
-        display: 'flex', flexDirection: 'column', background: 'var(--panel)',
-        borderLeft: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
+    <aside ref={box} role="dialog" aria-label={label} style={{
+      ...edge, right: 0, zIndex: 26, width: 'var(--w-drawer)', maxWidth: 'calc(100% - 120px)',
+      display: 'flex', flexDirection: 'column', background: 'var(--panel)',
+      borderLeft: '1px solid var(--border)', boxShadow: 'var(--sh-2)',
+    }}>
+      <div style={{
+        flex: 'none', height: 'var(--h-bar)', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+        padding: '0 var(--sp-2) 0 var(--sp-3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
       }}>
-        <div style={{
-          flex: 'none', height: 'var(--h-bar)', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-          padding: '0 var(--sp-2) 0 var(--sp-3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
-        }}>
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-                        fontSize: 'var(--fs-3)', fontWeight: 600, overflow: 'hidden' }}>{title}</div>
-          {tools}
-          <IconButton name="close" label={t('ui.close')} onClick={onClose} />
-        </div>
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>{children}</div>
-      </aside>
-    </>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+                      fontSize: 'var(--fs-3)', fontWeight: 600, overflow: 'hidden' }}>{title}</div>
+        {tools}
+        <IconButton name="close" label={t('ui.close')} onClick={onClose} />
+      </div>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>{children}</div>
+    </aside>
   );
 }
 

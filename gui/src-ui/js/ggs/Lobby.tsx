@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { ggsApi } from '../api';
 import type { GgsSnapshot } from '../types';
-import { gtypeLabel, onlineRows } from '../ggs';
+import { gtypeLabel, onlineRows, ratingOf } from '../ggs';
 import { t } from '../i18n';
 import { Divider, Section, Toolbar } from '../components/layout';
 import { Button, Toggle } from '../components/primitives';
@@ -11,10 +11,7 @@ import { Band, Cell, HeadRow, Line, ListNote, Page, Rows, Sections, Table, condL
 
 const rate = (snap: GgsSnapshot, name: string, gtype: string): string => {
   const u = onlineRows(snap).find((x) => x.name === name);
-  if (!u) return '';
-  const random = gtype.includes('r');
-  const r = random ? (u.rating_r ?? u.rating) : (u.rating ?? u.rating_r);
-  return r != null ? r.toFixed(1) : '';
+  return u ? ratingOf(u, gtype.includes('r')) : '';
 };
 /** The rating a request line carries just before a name ("1724.5 regu"), for a player not in the list yet. */
 const offerRate = (raw: string, name: string): string => {
@@ -23,7 +20,7 @@ const offerRate = (raw: string, name: string): string => {
   return i > 0 && /^\d+(\.\d+)?$/.test(w[i - 1]) ? w[i - 1] : '';
 };
 
-/** "ランダム 2051.2": in the to-do list, which rating the number is. */
+/** "Random 2051.2": in the to-do list, which rating the number is. */
 const poolRate = (snap: GgsSnapshot, name: string, gtype: string, raw = ''): string => {
   const r = rate(snap, name, gtype) || offerRate(raw, name);
   return r ? `${poolLabel(gtype.includes('r') ? '8r' : '8')} ${r}` : '';

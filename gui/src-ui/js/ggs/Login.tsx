@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import type { GgsSnapshot } from '../types';
 import { emitApp, ggsApi } from '../api';
-import { Confirm } from '../Dialogs';
 import { t, tErr } from '../i18n';
-import { Caption, Field, ListRow, Toolbar } from '../components/layout';
+import { Caption, Confirm, Field, ListRow, Toolbar } from '../components/layout';
 import { Button, Select, TextField } from '../components/primitives';
 import { Tag } from '../components/ggs';
 import { PUBLIC_SERVER } from '../components/accounts';
@@ -13,8 +12,6 @@ import { day, whenFull } from '../when';
 
 const ADD = '__add';
 
-/** "10/25": in the list, the day is enough; the detail shows the time too. */
-
 let wantNew: string | null = null;
 /** Opens the login screen on the new-account form the next time it shows, on `server` when given. */
 export const openNewLogin = (server = '') => { wantNew = server; };
@@ -23,7 +20,7 @@ export const openNewLogin = (server = '') => { wantNew = server; };
 export function Login({ conn, server: linkingTo }: { conn: GgsSnapshot['conn']; server: string }) {
   const { servers, accounts } = useServers();
   const [asked] = useState(() => { const w = wantNew; wantNew = null; return w; });
-  const [chosen, setSel] = useState<string | null>(asked !== null ? '' : null);   // "server|login", '' = new account
+  const [chosen, setChosen] = useState<string | null>(asked !== null ? '' : null);   // "server|login", '' = new account
   const [user, setUser] = useState('');
   const [pw, setPw] = useState('');
   const [server, setServer] = useState(asked || PUBLIC_SERVER);
@@ -31,7 +28,6 @@ export function Login({ conn, server: linkingTo }: { conn: GgsSnapshot['conn']; 
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [drop, setDrop] = useState<{ server: string; login: string } | null>(null);
-
 
   const run = async (go: () => Promise<void>, addr: string) => {
     setStatus(t('login.connecting_to', { server: addr }));
@@ -65,7 +61,7 @@ export function Login({ conn, server: linkingTo }: { conn: GgsSnapshot['conn']; 
             <div style={{ flex: 'none', height: 'var(--h-field)', display: 'flex', alignItems: 'center', padding: '0 var(--sp-3)',
                           borderBottom: '1px solid var(--border-weak)' }}><Caption>{t('ggs.login.saved')}</Caption></div>
           } footRow foot={
-            <ListRow on={sel === ''} rule={false} onClick={() => { setSel(''); setStatus(''); }}>
+            <ListRow on={sel === ''} rule={false} onClick={() => { setChosen(''); setStatus(''); }}>
               {t('login.new_row')}
             </ListRow>
           }>
@@ -76,7 +72,7 @@ export function Login({ conn, server: linkingTo }: { conn: GgsSnapshot['conn']; 
                   const key = `${a.server}|${a.login}`;
                   const on = key === sel;
                   return (
-                    <ListRow key={key} on={on} onClick={() => { setSel(key); setStatus(''); }}>
+                    <ListRow key={key} on={on} onClick={() => { setChosen(key); setStatus(''); }}>
                       <b style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.login}</b>
                       <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{a.last ? day(a.last) : ''}</span>
                     </ListRow>
@@ -139,7 +135,7 @@ export function Login({ conn, server: linkingTo }: { conn: GgsSnapshot['conn']; 
                  onOk={() => {
                    const d = drop;
                    setDrop(null);
-                   setSel(null);
+                   setChosen(null);
                    act(ggsApi.forgetAccount(d.server, d.login).then(() => emitApp('servers-changed')));
                  }} />
       )}

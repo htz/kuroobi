@@ -8,11 +8,6 @@ import { Board } from './components/board';
 import { markApplied } from './applied';
 import { StoneDot } from './components/data';
 
-
-// The DS component; screens keep importing it from here.
-export { Confirm };
-
-
 export function PasteKifu({ onLoad, onFile, onCancel }: {
   onLoad: (text: string) => void; onFile: () => void; onCancel: () => void;
 }) {
@@ -89,7 +84,6 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
   );
 }
 
-
 const kinds = (): [string, string][] => [
   ['nnue', t('settings.file.nnue')],
   ['weights', t('settings.file.weights')],
@@ -125,6 +119,15 @@ export function SettingRow({ label, help, error, children }: {
           : help && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{help}</span>}
       </div>
     </div>
+  );
+}
+
+/** A switch in a setting row, on the line of the row's label. */
+export function SettingToggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', height: 'var(--h-ctrl)' }}>
+      <Toggle checked={checked} onChange={onChange} />
+    </span>
   );
 }
 
@@ -364,14 +367,10 @@ export function ViewSettings({ prefs, setPref }: {
       </SettingGroup>
       <SettingGroup title={t('settings.board.title')}>
         <SettingRow label={t('settings.board.coords')}>
-          <span style={{ display: 'flex', alignItems: 'center', height: 'var(--h-ctrl)' }}>
-            <Toggle checked={prefs.coords} onChange={(v) => setPref('coords', v)} />
-          </span>
+          <SettingToggle checked={prefs.coords} onChange={(v) => setPref('coords', v)} />
         </SettingRow>
         <SettingRow label={t('settings.board.grain')}>
-          <span style={{ display: 'flex', alignItems: 'center', height: 'var(--h-ctrl)' }}>
-            <Toggle checked={prefs.grain} onChange={(v) => setPref('grain', v)} />
-          </span>
+          <SettingToggle checked={prefs.grain} onChange={(v) => setPref('grain', v)} />
         </SettingRow>
         <SettingRow label={t('settings.board.flip')}>
           <Segmented value={String(prefs.flipMs)} onChange={(v) => setPref('flipMs', +v as Prefs['flipMs'])}

@@ -388,7 +388,6 @@ err:
   bad_formula_kind: "申し込みの扱いの種別が不正です ({kind})"
   bad_log_channel: "思考ログのチャンネル名が不正です (「.」に続けて英数字・_・- を 1〜7 文字)"
   bad_square: "そのマスはありません"
-  busy_ggs: "GGS 対局中は控えます"
   busy_ggs_analysis: "GGS 対局中は分析を控えます"
   busy_ggs_search: "GGS 対局中はローカルの探索を控えます (終局までお待ちください)"
   chat_target_and_text_required: "宛先と本文が必要です"
@@ -495,7 +494,6 @@ ggs:
     extension: "延長"
     format: "形式"
     time_control: "持ち時間"
-    turn: "手番"
   filter:
     all: "すべて"
   finger:

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import { backendStrings, resolveLang, setLang, type LangPref } from './i18n';
 
-
 export type Theme = 'os' | 'dark' | 'light';
 type Facing = 'black' | 'white' | 'auto';
 
@@ -122,4 +121,3 @@ export function usePrefs() {
 
 export const flipped = (facing: Facing, myColor: 'black' | 'white' | ''): boolean =>
   facing === 'white' || (facing === 'auto' && myColor === 'white');
-

@@ -3,7 +3,7 @@ import { ggsApi } from '../api';
 import type { GgsSnapshot, TourneyView } from '../types';
 import { gtypeLabel, onlineRows } from '../ggs';
 import { t } from '../i18n';
-import { ListRow, Toolbar, TwoLines } from '../components/layout';
+import { captionStyle, ListRow, Toolbar, TwoLines } from '../components/layout';
 import { Button, Dot, Progress, Segmented, Select, TextField } from '../components/primitives';
 import { Tag, type NavId } from '../components/ggs';
 import { askSheet } from '../AskSheet';
@@ -11,7 +11,6 @@ import { focusGame } from './Lobby';
 import { act, Band, Blank, Cell, HeadRow, Line, ListHead, ListNote, ListPane, Page, Rows, TitleBit, useNow } from '../ggsui';
 
 const td = (cmd: string) => act(ggsApi.raw(`tell /td ${cmd}`));
-
 
 const mmss = (secs: number): string => {
   const s = Math.max(0, Math.round(secs));
@@ -166,7 +165,6 @@ function TourneyDetail({ snap, x, now, errText }: {
   const round = pinned ?? cur;
   const [typed, setTyped] = useState<string | null>(null);
   const roundText = typed ?? String(round);
-  const setRoundText = (v: string) => setTyped(v);
   // Two symmetric picks: one player's games, or the games between two.
   const [pick, setPick] = useState<[string, string]>(['', '']);
   const picked = pick.filter(Boolean);
@@ -223,6 +221,10 @@ function TourneyDetail({ snap, x, now, errText }: {
                          { value: 'games' as const, label: t('ggs.tourney.all_games') }]} />
   );
   const sub: CSSProperties = { fontSize: 'var(--fs-6)', color: 'var(--sub)' };
+  const gamesBar: CSSProperties = {
+    flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-field)', padding: '0 var(--sp-3)',
+    borderTop: '1px solid var(--border-weak)', background: 'var(--panel)', whiteSpace: 'nowrap', fontSize: 'var(--fs-5)',
+  };
 
   return (
     <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -313,17 +315,15 @@ function TourneyDetail({ snap, x, now, errText }: {
           {view === 'games' && (
             <>
               {picked.length ? (
-                <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-field)', padding: '0 var(--sp-3)',
-                              borderTop: '1px solid var(--border-weak)', background: 'var(--panel)', whiteSpace: 'nowrap', fontSize: 'var(--fs-5)' }}>
+                <div style={gamesBar}>
                   <b style={{ fontWeight: 600 }}>{t('tourney.filter_who', { who: picked.join(' − ') })}</b>
                   <span style={{ color: 'var(--sub)' }}>{t('tourney.filter_count', { n: shown.length, done: shown.filter(done).length })}</span>
                 </div>
               ) : (
-                <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-field)', padding: '0 var(--sp-3)',
-                              borderTop: '1px solid var(--border-weak)', background: 'var(--panel)', whiteSpace: 'nowrap', fontSize: 'var(--fs-5)' }}>
+                <div style={gamesBar}>
                   <Button square onClick={() => go(round - 1)} title={t('tourney.prev_round')}>‹</Button>
                   <span style={{ color: 'var(--sub)' }}>{t('tourney.round')}</span>
-                  <TextField value={roundText} onChange={setRoundText} numeric align="right" width={52}
+                  <TextField value={roundText} onChange={setTyped} numeric align="right" width={52}
                              onEnter={() => go(Number(roundText) || round)} />
                   <span style={{ color: 'var(--sub)' }}>/ {all}</span>
                   <Button square onClick={() => go(round + 1)} title={t('tourney.next_round')}>›</Button>
@@ -394,7 +394,6 @@ function crossOf(sched: SchedRow[], cur: number): Map<string, Map<string, CrossC
 }
 
 const CELL = 50;
-const headText: CSSProperties = { fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)', whiteSpace: 'nowrap' };
 // The five columns that stay put while the opponents scroll sideways.
 const fixedPart = (bg: string, extra?: CSSProperties): CSSProperties => ({
   position: 'sticky', left: 0, zIndex: 1, alignSelf: 'stretch', display: 'flex', alignItems: 'center',
@@ -411,7 +410,7 @@ function CrossTable({ players, ranks, cross, me, onPick }: {
     <div className="k-scroll" style={{ flex: 1, minHeight: 0, overflow: 'auto', borderTop: '1px solid var(--border-weak)' }}>
       <div style={{ width: 'max-content', minWidth: '100%', display: 'flex', flexDirection: 'column' }}>
         <div style={{ position: 'sticky', top: 0, zIndex: 2, flex: 'none', display: 'flex', alignItems: 'center', height: 'var(--h-head)',
-                      paddingRight: 'var(--sp-3)', borderBottom: '1px solid var(--border)', background: 'var(--bg)', ...headText }}>
+                      paddingRight: 'var(--sp-3)', borderBottom: '1px solid var(--border)', background: 'var(--bg)', ...captionStyle }}>
           <span style={fixedPart('var(--bg)')}>
             <span style={{ width: 32, textAlign: 'right' }}>{t('ggs.tourney.col.rank')}</span>
             <span style={{ width: 96 }}>{t('ggs.tourney.col.player')}</span>

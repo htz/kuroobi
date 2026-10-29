@@ -11,7 +11,6 @@ import type { Move } from './components/data';
 import type { Game } from './state';
 import { t, tErr } from './i18n';
 
-
 /**
  * The right panel of play and study, one page: the strength on top (study: the analysis settings),
  * the record below. Learning lives in the engine settings.
@@ -49,8 +48,8 @@ export function PlayDock({
         flex: 'none', display: 'flex', gap: 'var(--sp-2)',
         padding: 'var(--sp-2) var(--sp-3)', borderTop: '1px solid var(--border-weak)',
       }}>
-        <Button title="⌘O" onClick={() => onPaste()}>{t('dock.record.paste')}</Button>
-        <Button onClick={() => void onLoadFile()}>{t('dock.record.load')}</Button>
+        <Button title="⌘O" onClick={onPaste}>{t('dock.record.paste')}</Button>
+        <Button onClick={onLoadFile}>{t('dock.record.load')}</Button>
         <Button title="⌘E" disabled={editOff} onClick={onEdit}>{t('dock.record.edit')}</Button>
         <Button title="⌘S" disabled={!moves.length}
                 onClick={() => void api.saveKifu(...ggfNames()).catch((e: unknown) => g.say(tErr(e)))}>
@@ -82,7 +81,7 @@ function LevelOrClock({ g, prefs, setClockSecs }: {
 }) {
   const byClock = prefs.clockSecs > 0;
   const [lastClock, setLastClock] = useState(byClock ? prefs.clockSecs : 600);
-  // Started from 「対局開始」 on, and while the record has a move (also when looking back at its start).
+  // Started from "Start" on, and while the record has a move (also when looking back at its start).
   const started = g.playing || (g.view?.moves.length ?? 0) > 0;
   const who = (color: 'black' | 'white') =>
     g.side === 'both' || g.side === color ? t('dock.strength.kuroobi') : t('dock.strength.you');

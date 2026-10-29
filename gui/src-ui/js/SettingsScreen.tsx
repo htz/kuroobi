@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, emitApp, ggsApi, onApp, type SavedServer } from './api';
 import type { GgsSnapshot } from './types';
 import type { Prefs } from './prefs';
+import type { Account } from './components/accounts';
 import { DEFAULT_DECLINE, fingerKey } from './ggs';
 import { t, tErr, useLang } from './i18n';
-import { Field, ListRow, marked, Modal, Overlay } from './components/layout';
+import { Confirm, Field, ListRow, marked, Modal, Overlay } from './components/layout';
 import { ListHead } from './ggsui';
-import { Button, Segmented, Select, TextField, Toggle } from './components/primitives';
+import { Button, Segmented, Select, TextField } from './components/primitives';
 import { Tag } from './components/ggs';
-import { Confirm, EngineSettings, SettingGroup, SettingRow, ViewSettings, type LearnSetting } from './Dialogs';
+import { EngineSettings, SettingGroup, SettingRow, SettingToggle, ViewSettings, type LearnSetting } from './Dialogs';
 import { FormulaField } from './GgsScreens';
 import { openNewLogin } from './ggs/Login';
 import { markApplied } from './applied';
@@ -27,11 +28,10 @@ const groups = (): { title: string; items: [SettingsCat, string][] }[] => [
   },
 ];
 
-export const settingsTitle = (cat: SettingsCat): string =>
-  cat === 'engine' ? t('settings.tab.engine')
-  : cat === 'view' ? t('settings.tab.view')
-  : 'GGS · ' + (cat === 'ggs-account' ? t('settings.cat.account')
-    : cat === 'ggs-play' ? t('settings.cat.play') : t('settings.cat.form'));
+export function settingsTitle(cat: SettingsCat): string {
+  const label = groups().flatMap((g) => g.items).find(([id]) => id === cat)?.[1] ?? '';
+  return cat.startsWith('ggs-') ? `GGS · ${label}` : label;
+}
 
 /** The settings screen: categories on the left, rows on the right. Every change applies at once. */
 export function SettingsScreen({ cat, onCat, prefs, setPref, snap, onLogin, learn }: {
@@ -87,10 +87,9 @@ function Offline() {
 }
 
 /** The saved servers and accounts, re-read whenever another screen changes them. */
-export function useServers(): { servers: SavedServer[]; accounts: { server: string; login: string; last?: number }[];
-  auto: [string, string] | null; reload: () => void } {
+export function useServers() {
   const [servers, setServers] = useState<SavedServer[]>([]);
-  const [accounts, setAccounts] = useState<{ server: string; login: string; last?: number }[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [auto, setAuto] = useState<[string, string] | null>(null);
   const reload = useCallback(() => {
     void ggsApi.servers().then(setServers).catch(() => {});
@@ -102,7 +101,7 @@ export function useServers(): { servers: SavedServer[]; accounts: { server: stri
     const off = onApp('servers-changed', reload);
     return () => { void off.then((f) => f()); };
   }, [reload]);
-  return { servers, accounts, auto, reload };
+  return { servers, accounts, auto };
 }
 
 export const serverName = (servers: SavedServer[], addr: string): string =>
@@ -303,9 +302,7 @@ function GgsPlaySettings({ snap }: { snap: GgsSnapshot }) {
       <SettingRow label={t('ggs.book')} error={err || undefined}
                   help={e.book_loaded ? t('settings.play.book_help') : t('ggs.settings.book_missing')}>
         {e.book_loaded ? (
-          <span style={{ display: 'flex', alignItems: 'center', height: 'var(--h-ctrl)' }}>
-            <Toggle checked={book} onChange={setBook} />
-          </span>
+          <SettingToggle checked={book} onChange={setBook} />
         ) : (
           <Button onClick={async () => {
             const p = await api.pickResource('book');
@@ -314,14 +311,10 @@ function GgsPlaySettings({ snap }: { snap: GgsSnapshot }) {
         )}
       </SettingRow>
       <SettingRow label={t('ggs.settings.auto_play')}>
-        <span style={{ display: 'flex', alignItems: 'center', height: 'var(--h-ctrl)' }}>
-          <Toggle checked={auto} onChange={setAuto} />
-        </span>
+        <SettingToggle checked={auto} onChange={setAuto} />
       </SettingRow>
       <SettingRow label={t('ggs.settings.watch_analysis')}>
-        <span style={{ display: 'flex', alignItems: 'center', height: 'var(--h-ctrl)' }}>
-          <Toggle checked={watch} onChange={setWatch} />
-        </span>
+        <SettingToggle checked={watch} onChange={setWatch} />
       </SettingRow>
       <SettingRow label={t('ggs.settings.log_channel')} help={t('ggs.settings.log_channel_note')}
                   error={logChannelOk ? undefined : t('ggs.settings.log_channel_invalid')}>

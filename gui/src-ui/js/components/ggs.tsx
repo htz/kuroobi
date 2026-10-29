@@ -116,10 +116,6 @@ export function NavRow({ item, active, onSelect }: { item: NavItem; active: bool
   );
 }
 
-
-
-
-
 type Rate = { value: number; dev: number; rank?: number; w: number; l: number; d: number; provisional?: boolean };
 
 export function RateRow({ label, rate }: { label: string; rate: Rate }) {
@@ -225,7 +221,6 @@ export function Tag({ tone = 'sub', children }: { tone?: 'sub' | 'accent' | 'ok'
     color: solid ? 'var(--on-accent)' : `color-mix(in srgb, ${c} 70%, var(--text))`,
   }}>{children}</span>;
 }
-
 
 export function FormulaView({ node, top, who }: { node: Cond; top?: boolean; who?: Who }) {
   if (!isGroup(node)) return <CondChip c={node} who={who} />;
@@ -450,7 +445,6 @@ function AtomRow({ c, onChange, onRemove }: {
   );
 }
 
-
 type Msg = { from: string; mine?: boolean; at: string; body: string; tr?: string; trFailed?: boolean };
 
 /** A chat message. `action` is the small text button under it (Translate / Hide translation). */
@@ -495,7 +489,6 @@ export function DayMark({ children }: { children: React.ReactNode }) {
   }}>{children}</div>;
 }
 
-
 export type LogLine = { seq: number; dir: 'out' | 'in' | 'app'; text: string };
 
 export function ConsoleLog({ lines, follow = true }: { lines: LogLine[]; follow?: boolean }) {
@@ -529,7 +522,6 @@ export function ConsoleLog({ lines, follow = true }: { lines: LogLine[]; follow?
   );
 }
 
-
 type Toast = { id: number; tone: 'bad' | 'gold'; text: string };
 
 export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss: (id: number) => void }) {
@@ -553,7 +545,6 @@ export function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss: (id: n
     </div>
   );
 }
-
 
 export const poolLabel = (pool: string): string =>
   pool === '8' ? t('ggs.pool.normal') : pool === '8r' ? t('ggs.pool.random') : pool;

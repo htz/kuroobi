@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 
-
 type Size = 'chip' | 'row' | 'ctrl' | 'field';
 const H: Record<Size, string> = { chip: 'var(--h-chip)', row: 'var(--h-row)', ctrl: 'var(--h-ctrl)', field: 'var(--h-field)' };
 const PAD: Record<Size, string> = { chip: '0 10px', row: '0 10px', ctrl: '0 12px', field: '0 14px' };
@@ -42,7 +41,6 @@ export function Button({ variant = 'secondary', size = 'ctrl', disabled, childre
     >{children}</button>
   );
 }
-
 
 export function Segmented<T extends string>({ value, options, onChange, fill, disabled }: {
   value: T;
@@ -99,7 +97,6 @@ export function Toggle({ checked, onChange, label, disabled }: {
     </label>
   );
 }
-
 
 export function Select({ value, options, onChange, size = 'field', width, title }: {
   value: string;

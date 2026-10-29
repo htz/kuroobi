@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ggsApi, type ActivityView, type SavedServer } from './api';
 import type { GgsSnapshot } from './types';
+import type { Account } from './components/accounts';
 import { t } from './i18n';
 import { Caption, popoverStyle, StatusBar, useDismiss } from './components/layout';
 import { Dot } from './components/primitives';
@@ -85,10 +86,10 @@ export function GlobalStatus({ snap, cpu, analyzing, thinking, thinkSecs, nodes,
   );
 }
 
-/** "GGS 接続中 (alice · ローカル)"; clicking it opens the account switcher above the bar. */
+/** "GGS Connected (alice · Local)"; clicking it opens the account switcher above the bar. */
 function GgsConn({ snap, servers }: { snap: GgsSnapshot | null; servers: SavedServer[] }) {
   const [open, setOpen] = useState(false);
-  const [saved, setSaved] = useState<{ server: string; login: string }[]>([]);
+  const [saved, setSaved] = useState<Account[]>([]);
   const box = useRef<HTMLSpanElement>(null);
   const conn = snap?.conn ?? 'disconnected';
   const online = conn === 'online';
@@ -173,4 +174,3 @@ function GgsConn({ snap, servers }: { snap: GgsSnapshot | null; servers: SavedSe
 const fmtNodes = (n: number): string =>
   n >= 1e12 ? (n / 1e12).toFixed(1) + 'T' : n >= 1e9 ? (n / 1e9).toFixed(1) + 'G'
     : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(0) + 'k' : String(n);
-

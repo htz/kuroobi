@@ -2,13 +2,12 @@ import { useState } from 'react';
 import { ClockField, Select } from './components/primitives';
 import { t } from './i18n';
 
-/** A clock picked from a few choices, or to the second through 「カスタム…」. */
-export function ClockPick({ secs, onChange, choices, min, max }: {
+/** A clock picked from a few choices, or to the second through "Custom…". */
+export function ClockPick({ secs, onChange, choices, min }: {
   secs: number;
   onChange: (secs: number) => void;
   choices: [number, string][];
   min?: number;
-  max?: number;
 }) {
   const [custom, setCustom] = useState(!choices.some(([v]) => v === secs));
   return (
@@ -23,7 +22,7 @@ export function ClockPick({ secs, onChange, choices, min, max }: {
       {custom && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)',
                       color: 'var(--sub)', whiteSpace: 'nowrap' }}>
-          <ClockField value={secs} onChange={onChange} min={min} max={max} label={t('ggs.clock_choice.unit')} />
+          <ClockField value={secs} onChange={onChange} min={min} label={t('ggs.clock_choice.unit')} />
           <span>{t('ggs.clock_choice.unit')}</span>
         </div>
       )}

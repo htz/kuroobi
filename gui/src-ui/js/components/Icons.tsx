@@ -1,4 +1,3 @@
-
 export type IconName =
   | 'play' | 'study' | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat'
   | 'ggs-tourney' | 'ggs-console' | 'login' | 'cpu' | 'memory'

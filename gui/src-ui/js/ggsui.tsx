@@ -5,7 +5,7 @@ import type { GgsSnapshot } from './types';
 import { RateRow } from './components/ggs';
 import { captionStyle, ListRow, marked, picked as pickedStyle, TableHead } from './components/layout';
 
-/** "5 分" for "00:05:00", "4 分 30 秒 (延長 1 分)" for "00:04:30//00:01:00"; anything unusual as GGS wrote it. */
+/** "5 min" for "00:05:00", "4 min 30 s (extension 1 min)" for "00:04:30//00:01:00"; anything unusual as GGS wrote it. */
 export function clockLabel(time: string): string {
   const c = parseClockSpec(time);
   if (!c) return time;
@@ -14,7 +14,7 @@ export function clockLabel(time: string): string {
   return c.ext ? t('ggs.clock_choice.with_ext', { main, ext: secsText(c.ext) }) : t('ggs.clock_choice.no_ext', { main });
 }
 
-/** "同期・ランダム14手 · 5 分 · レート戦" */
+/** "Synchro random 14 · 5 min · Rated" */
 export const condLine = (gtype: string, time: string, rated: boolean | null): string =>
   [gtypeLabel(gtype), time ? clockLabel(time) : '', rated == null ? '' : rated ? t('ggs.rated') : t('ask.unrated')]
     .filter(Boolean).join(' · ');
@@ -58,8 +58,8 @@ export function Table({ children }: { children: React.ReactNode }) {
 }
 
 /** One cell; `w` undefined makes it the flexible column. */
-export function Cell({ w, align, sub, bold, mono, children, sel }: {
-  w?: number; align?: 'left' | 'right' | 'center'; sub?: boolean; bold?: boolean; mono?: boolean; sel?: boolean;
+export function Cell({ w, align, sub, bold, children, sel }: {
+  w?: number; align?: 'left' | 'right' | 'center'; sub?: boolean; bold?: boolean; sel?: boolean;
   children?: React.ReactNode;
 }) {
   return (
@@ -67,7 +67,6 @@ export function Cell({ w, align, sub, bold, mono, children, sel }: {
       ...(w === undefined ? { flex: 1, minWidth: 0 } : { width: w, flex: 'none' }),
       textAlign: align ?? 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       color: sub ? 'var(--sub)' : undefined, fontWeight: bold ? 600 : undefined,
-      fontFamily: mono ? 'var(--ff-mono)' : undefined,
     }}>{children}</span>
   );
 }
@@ -182,9 +181,7 @@ export const signed = (v: number): string => (v > 0 ? '+' : '') + v;
 export const rateLabel = (day: string, opp: string, discs: number | null, rating: number): string =>
   [day, opp, discs != null ? signed(discs) : '', rating.toFixed(1)].filter(Boolean).join(' · ');
 
-/** Width of an element, kept up to date. */
-// GGS actions a person asked for (accept, watch, resign, ...): a failure must reach the screen.
-// The screens cannot raise a toast themselves, so App listens here and shows it.
+// The screens cannot raise a toast themselves, so App listens here for failed GGS actions.
 const failSubs = new Set<(e: unknown) => void>();
 export function onGgsFailure(f: (e: unknown) => void): () => void {
   failSubs.add(f);
@@ -276,7 +273,7 @@ const PROVISIONAL_DEV = 100;
 export function RankRates({ ranks }: { ranks: GgsSnapshot['my_ranks'] }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', padding: '0 var(--sp-3)' }}>
-      {ranks.map((r) => (
+      {[...ranks].sort((a, b) => (a.gtype === '8r' ? 0 : 1) - (b.gtype === '8r' ? 0 : 1)).map((r) => (
         <RateRow key={r.gtype} label={r.gtype === '8r' ? t('ggs.gtype.rand_opening') : t('ggs.pool.normal')}
                  rate={{ value: r.rating, dev: r.dev, rank: r.rank, w: r.wins, l: r.losses, d: r.draws,
                          provisional: r.dev > PROVISIONAL_DEV }} />

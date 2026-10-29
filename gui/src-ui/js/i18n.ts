@@ -2,7 +2,6 @@ import { useSyncExternalStore } from 'react';
 import en from '../locales/en.yaml';
 import ja from '../locales/ja.yaml';
 
-
 const LANGS = ['en', 'ja'] as const;
 type Lang = (typeof LANGS)[number];
 export type LangPref = 'auto' | Lang;

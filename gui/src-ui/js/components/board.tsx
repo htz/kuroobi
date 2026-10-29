@@ -1,7 +1,6 @@
 import React from 'react';
 import { t } from '../i18n';
 
-
 const CELL = 100;
 const PAD = 40;
 const PITCH = 12.5;          // grain spacing; 7 lines per cell
@@ -39,6 +38,10 @@ export function BoardDefs() {
 
 export type Cell = 0 | 1 | 2;            // 0 empty / 1 black / 2 white
 
+/** The starting position (d5 e4 black, d4 e5 white). */
+export const START_CELLS: readonly Cell[] = Array.from({ length: 64 }, (_, sq) =>
+  (sq === 28 || sq === 35 ? 1 : sq === 27 || sq === 36 ? 2 : 0));
+
 type EvalSource = { book: true } | { exact: true } | { depth: number };
 export type EvalInfo = { score: number; src: EvalSource; best?: boolean };
 
@@ -62,7 +65,7 @@ const fr = (sq: number): [number, number] => [Math.floor(sq / 8), sq % 8];
 export type BoardEdit = { ghost: Cell; onDown: (sq: number) => void; onEnter: (sq: number) => void };
 
 export function Board({ cells, legal = [], evals, last, turn = 'b', coords, grain = true, flip = false, disabled, onPlay, edit }: {
-  cells: Cell[];                                   // 64 (sq = file*8 + rank)
+  cells: readonly Cell[];                          // 64 (sq = file*8 + rank)
   legal?: number[];
   evals?: Record<number, EvalInfo>;
   last?: number | null;

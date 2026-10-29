@@ -2,14 +2,14 @@ import React, { useLayoutEffect, useRef, useState } from 'react';
 import { ggsApi } from './api';
 import type { GgsSnapshot, MatchView } from './types';
 import {
-  condToSrc, countDiscs, ggsMoveToIndex, gtypeLabel, parseCond, useClocks,
-  type ClockSide, type ClockView, type Cond,
+  condToSrc, countDiscs, discDiff, ggsMoveToIndex, gtypeLabel, parseCond, useClocks,
+  type ClockSide, type ClockText, type Cond,
 } from './ggs';
 import { t, useLang } from './i18n';
-import { Caption, EmptyBoard, EmptyState, ListRow, popoverStyle, Toolbar, useDismiss } from './components/layout';
+import { Caption, Confirm, EmptyBoard, EmptyState, ListRow, popoverStyle, Toolbar, useDismiss } from './components/layout';
 import { Icon } from './components/Icons';
 import { Button, Segmented, TextArea } from './components/primitives';
-import { Confirm, SettingRow } from './Dialogs';
+import { SettingRow } from './Dialogs';
 import { FormulaEditor, MatchRow, Tag, type Match, type NavId } from './components/ggs';
 import { Board, type Cell, type EvalInfo } from './components/board';
 import { EvalTrend, PlayerRow } from './components/data';
@@ -23,7 +23,6 @@ import { Tourney } from './ggs/Tourney';
 import { Console } from './ggs/Console';
 import { Login } from './ggs/Login';
 import { act, condLine, ListHead, ListPane, Page, signed as signedNum, sumBoards, TitleBit, type TrendPoint } from './ggsui';
-
 
 export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
   nav: NavId; snap: GgsSnapshot | null; onNav: (id: NavId) => void; prefs: Prefs;
@@ -48,7 +47,7 @@ export function GgsScreen({ nav, snap, onNav, prefs, onKifu }: {
 }
 
 /**
- * "観戦 3": who is watching this match, kept live from the server's notices. Pressing it opens
+ * "Watching 3": who is watching this match, kept live from the server's notices. Pressing it opens
  * their names under it; a name opens that player. With nobody watching it cannot be pressed.
  */
 function Watchers({ names, onPick }: { names: string[]; onPick: (name: string) => void }) {
@@ -97,7 +96,7 @@ function Watchers({ names, onPick }: { names: string[]; onPick: (name: string) =
   );
 }
 
-export function GgsPlay({ snap, onNav, prefs, onKifu }: {
+function GgsPlay({ snap, onNav, prefs, onKifu }: {
   snap: GgsSnapshot; onNav: (id: NavId) => void; prefs: Prefs;
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
@@ -160,8 +159,6 @@ export function GgsPlay({ snap, onNav, prefs, onKifu }: {
   const ended = !!pair?.every((m) => m.over);
   const tourney = snap.td.games.some((g) => g.id === cur || g.id === first?.id);
   // Own games put the login first; watched ones put the first board's black first.
-  const blackOf = (m: MatchView) => m.players.find((p) => p.color === 'black')?.name ?? m.players[0]?.name ?? '?';
-  const whiteOf = (m: MatchView) => m.players.find((p) => p.color === 'white')?.name ?? m.players[1]?.name ?? '?';
   const names: [string, string] = first
     ? (mine ? [snap.login, first.opp_name || '?'] : [blackOf(first), whiteOf(first)])
     : ['?', '?'];
@@ -272,6 +269,9 @@ export function GgsPlay({ snap, onNav, prefs, onKifu }: {
   );
 }
 
+const blackOf = (m: MatchView) => m.players.find((p) => p.color === 'black')?.name ?? m.players[0]?.name ?? '?';
+const whiteOf = (m: MatchView) => m.players.find((p) => p.color === 'white')?.name ?? m.players[1]?.name ?? '?';
+
 /** Whether `name` has black on this board (an own game knows its colour directly). */
 const isBlack = (m: MatchView, name: string): boolean =>
   m.my_color ? m.my_color === 'black'
@@ -279,9 +279,8 @@ const isBlack = (m: MatchView, name: string): boolean =>
 
 /** The final disc difference of one board from `name`'s side (GGS writes it from black's). */
 function boardDiff(m: MatchView, name: string): string {
-  const v = Number.parseFloat(m.result);
-  if (!Number.isFinite(v)) return m.result || '—';
-  const d = isBlack(m, name) ? v : -v;
+  const d = discDiff(m.result, isBlack(m, name));
+  if (d == null) return m.result || '—';
   return d === 0 ? '±0' : signedNum(d);
 }
 
@@ -296,9 +295,9 @@ function matchSum(g: MatchView[], name: string): number | null {
   if (!g.every((x) => x.over && x.ended === 'finished')) return null;
   let total = 0;
   for (const m of g) {
-    const v = Number.parseFloat(m.result);
-    if (!Number.isFinite(v)) return null;
-    total += isBlack(m, name) ? v : -v;
+    const d = discDiff(m.result, isBlack(m, name));
+    if (d == null) return null;
+    total += d;
   }
   return total;
 }
@@ -307,7 +306,7 @@ function matchRowOf(g: MatchView[], login: string): Match {
   const m = g[0];
   const mine = g.some((x) => x.my_color);
   // Own games name the login first; watched ones name the first board's black first.
-  const a = mine ? login : m.players.find((p) => p.color === 'black')?.name ?? m.players[0]?.name ?? '?';
+  const a = mine ? login : blackOf(m);
   const b = mine ? (m.opp_name || '?') : m.players.find((p) => p.name !== a)?.name ?? '?';
   const sum = matchSum(g, a);
   return {
@@ -321,8 +320,7 @@ function matchRowOf(g: MatchView[], login: string): Match {
   };
 }
 
-/** The play column's side padding (`--sp-3`); a synchro board keeps it from the divider too. */
-// Each board column keeps var(--sp-3) on both sides and var(--sp-2) above, as in the design.
+// Each board column keeps var(--sp-3) on both sides and var(--sp-2) above.
 const EDGE_PAD = 12;
 const TOP_PAD = 8;
 // The graph's chart: its usual height, the least it shrinks to in a short window, the most it grows to,
@@ -403,21 +401,19 @@ const column: React.CSSProperties = {
 };
 
 // GGS numbers a pass like a move; only placed discs count as moves here.
-const isPass = (mv: string) => /^(pa|pass)$/i.test(mv);
-const placed = (m: MatchView) => m.moves.filter((mv) => !isPass(mv)).length;
+const placedMoves = (m: MatchView) => m.moves.filter((mv) => !/^(pa|pass)$/i.test(mv)).map((mv) => mv.toLowerCase());
+const placed = (m: MatchView) => placedMoves(m).length;
 // Both boards of a synchro pair start from one position; the first move that differs is where the
 // two games split (counted in placed discs, like the graph).
 function splitAt(a: MatchView, b: MatchView): number | undefined {
-  const pa = a.moves.filter((mv) => !isPass(mv)).map((mv) => mv.toLowerCase());
-  const pb = b.moves.filter((mv) => !isPass(mv)).map((mv) => mv.toLowerCase());
+  const pa = placedMoves(a);
+  const pb = placedMoves(b);
   const n = Math.min(pa.length, pb.length);
   for (let i = 0; i < n; i++) if (pa[i] !== pb[i]) return i + 1;
   return undefined;
 }
 
 const pliesOf = (m: MatchView) => m.cells.filter((c) => c === 0).length + placed(m);
-
-
 
 // Each side's reported evals, turned to `name`'s side: an own game reports "mine" for the login,
 // a watched one for black, so a board where `name` is white swaps the two lines.
@@ -447,7 +443,7 @@ function trendOf(pair: MatchView[], name: string): TrendPoint[] {
 }
 
 function MatchBoard({ snap, m, clock, prefs, face, side, lead }: {
-  snap: GgsSnapshot; m: MatchView; clock: (id: string, side: ClockSide) => ClockView; prefs: Prefs;
+  snap: GgsSnapshot; m: MatchView; clock: (id: string, side: ClockSide) => ClockText; prefs: Prefs;
   face?: number;
   side: number;
   /** The player named first; results under the board are from their side. */
@@ -617,4 +613,3 @@ export function FormulaField({ label, src, onSave, preset }: {
     </SettingRow>
   );
 }
-

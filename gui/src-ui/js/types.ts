@@ -1,4 +1,3 @@
-
 export interface GameView {
   cells: number[];
   player: 'black' | 'white';
@@ -40,7 +39,6 @@ export interface EvalPoint {
   exact: boolean;
   from_book: boolean;
 }
-
 
 export interface LogLine {
   seq: number;
@@ -292,7 +290,7 @@ export interface TourneyView {
   schedule: string;
 }
 
-export interface TdView {
+interface TdView {
   tourneys: TourneyView[];
   reply: { cmd: string; text: string; err: boolean; at: number } | null;
   games: { id: string; tid: number; opp: string; diff: number | null }[];

@@ -1,8 +1,4 @@
-/* KUROOBI design tokens
- * Replaces the :root block of gui/src-ui/style.css.
- * Dark is the default; data-theme="light" or the OS setting switches to light.
- * From here on, components must never hard-code colors or px dimensions.
- */
+/* KUROOBI design tokens. Dark is the default; data-theme="light" or the OS switches to light. */
 :root {
   /* Colors */
   --bg:#16191d; --panel:#1e2329; --card:#252b33;
@@ -13,18 +9,12 @@
   --track:rgba(255,255,255,.09);      /* bar groove; never use a state color (--hover) as a surface */
   --board:#77914e; --board-dark:#3f4f2c; --line:#3d5226; --grain:#33421d;
   --gold:#ffd479; --ok:#8bc34a; --bad:#ef7a7a;
-  /* Text and marks drawn on accent / bad surfaces. **They move with the
-     surface, so they are tokens** — a literal #fff in a component makes the
-     text vanish the day accent turns light, and only whoever wrote it knows
-     which components break.
-     Today both are white in either theme (accent stays blue in light and dark) */
+  /* Text on accent / bad surfaces: a token, so it follows the surface if accent ever turns light */
   --on-accent:#ffffff; --on-bad:#ffffff;
   --scrim:rgba(0,0,0,.45);   /* scrim; black regardless of theme */
   --stone-black:#111213; --stone-black-edge:#2c2e30;
   --stone-shadow:rgba(0,0,0,.25);
-  /* Legal-move dots and eval discs take the colour of the side to move, in either theme, so the
-     board says whose turn it is. Translucent enough that the tatami shows through and they never
-     pass for stones; text keeps 4.5:1 over every tatami (light straw to dark forest). */
+  /* Board marks in the colour of the side to move; text keeps 4.5:1 over every tatami */
   --mark-b-bg:rgba(0,0,0,.5); --mark-b-edge:rgba(0,0,0,.55);
   --mark-b-text:#eef2ec; --mark-b-strong:#ffffff; --mark-b-weak:#c3cec6; --mark-b-neg:#ffb4a8; --mark-b-best:#ffd479;
   --mark-b-dot:rgba(17,18,19,.6); --mark-b-dot-edge:rgba(255,255,255,.35);
@@ -32,47 +22,34 @@
   --mark-w-text:#101510; --mark-w-strong:#101510; --mark-w-weak:#1f261a; --mark-w-neg:#5a1006; --mark-w-best:#3d2c00;
   --mark-w-dot:rgba(241,241,241,.72); --mark-w-dot-edge:rgba(0,0,0,.22);
   --stone-white:#f1f1f1; --stone-white-edge:#c9cdd1;
-  /* The edge of a small black stone mark on the screen's own surfaces (score row, side pickers).
-     The board's black edge is as dark as the ground in dark, so the mark vanished; this one
-     keeps 3:1 against bg, panel and card. On the board the stones keep --stone-black-edge. */
+  /* Small black stone marks off the board: 3:1 against bg, panel and card */
   --stone-black-dot-edge:#737a83; --stone-black-dot-hi:#5d636b;
 
   /* Spacing */
   --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px;
   --sp-0:6px;    /* fine gaps inside a row (stone and name, badge and number) */
   --sp-2h:10px;  /* left/right of list rows; a little more air than 8 without losing density */
-  --sp-3h:14px;  /* left/right of primary buttons; balances the --h-field height */
 
   /* Heights — do not invent values outside this set */
-  --h-window:32px;   /* window bar. Traffic lights (12px) with 10px above and
-                        below. At 28px the 1px bottom rule eats the space and
-                        the margins stop looking even */
+  --h-window:32px;   /* window bar: the 12px traffic lights with 10px above and below */
   --h-bar:44px;      /* screen toolbar / tab strip */
   --h-status:28px;   /* status bar */
   --h-field:32px;    /* inputs, selects, modal buttons */
   --h-ctrl:28px;     /* buttons, segmented controls, icon buttons */
   --h-row:24px;      /* table rows, list rows */
-  /* Rows carrying two lines (name + detail) plus a button: lobby's in-play /
-     invitations / adjourned games. The design treats this as **a separate
-     type from the 24px row** (measured 40 in the mockup).
-     Not in the design tokens, so added here (needs pushing back) */
-  --h-row2:40px;
+  --h-row2:40px;     /* rows of two lines (name + detail) */
   --h-head:20px;     /* table and section headings */
   --h-chip:20px;     /* buttons and badges inside the status bar */
   --w-dock:290px;    /* right dock; identical on all 3 screens */
   --w-drawer:480px;  /* details of a picked row, slid in from the right (players, results) */
   --w-nav:208px;     /* left menu */
   --w-list:268px;    /* GGS match list, record column */
-  --w-book-tree:269px; /* book tree column; measured from design §7 */
+  --w-book-tree:269px; /* book tree column */
   --w-label:200px;   /* the name column of a settings row */
   --w-label-sm:96px; /* the name column of a form inside a sheet or a detail pane (request sheet, profile) */
   --w-signals:78px;  /* traffic-light inset. 12x3 + gap 8x2 + 12 left = 64, + gap 14 */
-  --w-text:720px;    /* wrap width for prose. Tables, lists and the board may fill the
-                        window, but at 1500px per line the eye cannot find the next one */
+  --w-text:720px;    /* wrap width for prose */
   --w-gtype:120px;   /* game-type name column; wide enough for the longest Japanese label (synchronous, random 20 moves) on one line */
-  /* Only two overlay widths. **Callers must not write px** — the same 520 was
-     written separately in the record viewer and the record importer
-     (rules 1 and 6) */
   --swatch-dark:#16191d;  /* the theme picker's samples: each theme's ground, the same in either theme */
   --swatch-light:#faf8f3;
   --w-list-narrow:216px; /* a list or side column in a window of 1040px or less */
@@ -83,7 +60,7 @@
   --w-settings:820px;    /* the settings page's text column */
   --w-popover:300px;   /* menus and pickers that float over the screen */
   --w-modal:340px;      /* confirmation and login boxes; text alone is enough */
-  --w-modal-wide:520px; /* overlays with real content (record viewer, record import; rule 71) */
+  --w-modal-wide:520px; /* overlays with real content (record viewer, record import) */
 
   /* Corner radii */
   --r-0:3px;   /* 4px bars and thin strips; --r-1's 5 cannot be used on a 4px bar */
@@ -91,48 +68,32 @@
   --r-2:7px;   /* buttons, segmented items */
   --r-3:8px;   /* inputs, segmented outer frame */
   --r-4:11px;  /* floating boxes, windows */
-  --r-5:14px;  /* EmptyState icon container (64px); 11 leaves the corners too sharp */
   --r-bubble:9px; /* bubbles and toasts; between --r-3 and --r-4 */
   --r-pill:50px;
 
-  /* Shadows — only floating things have them. Large blurs are for Modal /
-     Popover / Toast only */
+  /* Shadows — only floating things have them */
   --sh-1:0 1px 2px rgba(0,0,0,.28);
   --sh-2:0 20px 48px rgba(0,0,0,.6);
-  /* Stone shadows are drawn as an svg circle (board.tsx), not a CSS
-     box-shadow. --stone-shadow owns the color, so no shadow token is needed
-     here */
 
   /* Type */
   --ff:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Helvetica Neue",sans-serif;
   --ff-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
   --fs-1:20px; --fs-2:17px; --fs-3:15px; --fs-4:13px;
   --fs-5:12px; --fs-6:11px; --fs-7:10px;
-  --fs-tag:9.5px; /* Tag text only. The floor for readable text is --fs-7
-                     (rule 20); this is a classification mark, hence the
-                     exception — never use it anywhere else */
+  --fs-tag:9.5px; /* Tag text only: below the --fs-7 floor for a classification mark */
 
   --dur:120ms;
   --ease:cubic-bezier(.2,.7,.3,1);
 }
 
-/* Light text colors are **darkened until they meet 4.5:1 against their
-   ground**. Straight from the mockup, --sub only reaches 3.2-3.6:1 and is
-   unreadable at fs-6 (11px) or fs-7 (10px); --gold 3.4, --bad 4.1 and
-   --accent 4.3 (over --panel) fell short too. **The hardest ground is --panel
-   (#f2efe8)**, so each was darkened by the minimum that reaches 4.5 there (to
-   stay close to the mockup). Dark is fine everywhere at 4.7 or above.
-   Needs pushing back */
+/* Light text colours are darkened to the minimum that keeps 4.5:1 on --panel, the hardest ground */
 :root[data-theme="light"] {
   --bg:#faf8f3; --panel:#f2efe8; --card:#ffffff;
   --border:#ddd8cd; --border-weak:#e8e3d9;
   --text:#1e2124; --sub:#656d78;
   --accent:#296bc9; --accent-dim:#296bc9; --hover:rgba(0,0,0,.075); --hover-on:rgba(0,0,0,.04); --track:rgba(0,0,0,.10);
   --board:#8fa661; --board-dark:#4a3323; --line:#3f5323; --grain:#5c6b38;
-  /* White stone edge. Dark's #c9cdd1 gives only 1.41:1 over --panel
-     (#f2efe8), and 1.007:1 against the fill (#f1f1f1), so **the stone is
-     invisible**. It is fine on the (green) board, but the small stones on
-     name cards and lists disappear. Darkened to 3:1 */
+  /* Dark's white stone edge is 1.41:1 over --panel; small stones off the board vanished */
   --stone-white-edge:#8b9198;
   --stone-black-dot-edge:#2c2e30; --stone-black-dot-hi:#4a4e53;
   --stone-shadow:rgba(0,0,0,.22);
@@ -141,7 +102,7 @@
   --sh-2:0 20px 48px rgba(60,50,35,.28);
 }
 
-/* Follow the OS. This applies unless main.tsx writes data-theme */
+/* Follow the OS unless prefs.ts sets data-theme; the same values as above */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     --bg:#faf8f3; --panel:#f2efe8; --card:#ffffff;
@@ -149,12 +110,8 @@
     --text:#1e2124; --sub:#656d78;
     --accent:#296bc9; --accent-dim:#296bc9; --hover:rgba(0,0,0,.075); --hover-on:rgba(0,0,0,.04); --track:rgba(0,0,0,.10);
     --board:#8fa661; --board-dark:#4a3323; --line:#3f5323; --grain:#5c6b38;
-    /* White stone edge. Dark's #c9cdd1 gives only 1.41:1 over --panel
-       (#f2efe8), and 1.007:1 against the fill (#f1f1f1), so **the stone is
-       invisible**. It is fine on the (green) board, but the small stones on
-       name cards and lists disappear. Darkened to 3:1 */
     --stone-white-edge:#8b9198;
-  --stone-black-dot-edge:#2c2e30; --stone-black-dot-hi:#4a4e53;
+    --stone-black-dot-edge:#2c2e30; --stone-black-dot-hi:#4a4e53;
     --stone-shadow:rgba(0,0,0,.22);
     --gold:#876819; --ok:#4b782b; --bad:#b54c39;
     --sh-1:0 1px 2px rgba(0,0,0,.18);

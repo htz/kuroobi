@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ggsApi } from '../api';
 import type { GgsSnapshot, UserRow } from '../types';
-import { fingerGroups, fingerKey, fingerValue, gtypeLabel, onlineRows, parseCond, presence } from '../ggs';
+import { discDiff, fingerGroups, fingerKey, fingerValue, gtypeLabel, onlineRows, parseCond, presence } from '../ggs';
 import { t } from '../i18n';
 import { Caption, Drawer, Section, Toolbar } from '../components/layout';
 import { Button, Segmented, Select, TextField } from '../components/primitives';
@@ -12,10 +12,14 @@ import { openChat } from './Chat';
 import { act, Blank, Cell, HeadRow, Line, ListHead, ListNote, Page, RankRates, rateLabel, Rows, Sections, Table } from '../ggsui';
 import { secsOfText, whenFull, whenShort } from '../when';
 
-
 const fmt = (r: number | null, d: number | null) =>
   r == null ? '—' : `${r.toFixed(1)}${d != null ? ` ±${Math.round(d)}` : ''}`;
 
+/** Whether a player takes requests (`open` from `who`: + yes, x ghost, - no). */
+const openOf = (open: string | null): { label: string; color: string } =>
+  open === '+' ? { label: t('ggs.users.open_yes'), color: 'var(--accent)' }
+    : open === 'x' ? { label: t('ggs.users.open_ghost'), color: 'var(--bad)' }
+    : { label: open ? t('ggs.users.open_no') : '—', color: 'var(--sub)' };
 let wantedPlayer = '';
 /** Opens a player's details the next time the players screen opens (from the observers list). */
 export const focusPlayer = (name: string) => { wantedPlayer = name; };
@@ -45,8 +49,6 @@ export function Players({ snap, onNav, onKifu }: {
   const pages = Math.max(1, Math.ceil(rows.length / perPage));
   const cur = Math.min(page, pages - 1);
   const slice = rows.slice(cur * perPage, (cur + 1) * perPage);
-  const mine = [...snap.my_ranks].sort((a, b) => (a.gtype === '8r' ? 0 : 1) - (b.gtype === '8r' ? 0 : 1));
-  const pick = (name: string) => setSel(name);
 
   return (
     <>
@@ -77,8 +79,8 @@ export function Players({ snap, onNav, onKifu }: {
       <Page row>
         <Sections>
           <Section title={t('ggs.users.rating_of', { name: snap.login })}>
-            {!mine.length && <ListNote>{t('ggs.no_records')}</ListNote>}
-            <RankRates ranks={mine} />
+            {!snap.my_ranks.length && <ListNote>{t('ggs.no_records')}</ListNote>}
+            <RankRates ranks={snap.my_ranks} />
           </Section>
           <Section title={mode === 'who' ? t('ggs.users.online') : t('players.top_title', { pool: pool === '8r' ? t('ggs.pool.random') : t('ggs.pool.normal') })}
                    aside={t('players.count', { n: rows.length })} grow>
@@ -95,7 +97,7 @@ export function Players({ snap, onNav, onKifu }: {
                 : <Rows>
                     {slice.map((u, i) => (
                       <PlayerLine key={u.name} snap={snap} u={u} mode={mode} rank={cur * perPage + i + 1}
-                                  picked={u.name === sel} onPick={() => pick(u.name)} />
+                                  picked={u.name === sel} onPick={() => setSel(u.name)} />
                     ))}
                   </Rows>}
             </Table>
@@ -124,9 +126,8 @@ function PlayerTitle({ snap, name }: { snap: GgsSnapshot; name: string }) {
       <span className="k-sel" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
       {presence(snap, name) === 'playing' && <Tag tone="ok">{t('ggs.state.playing')}</Tag>}
       {u?.open && (
-        <span style={{ flex: 'none', fontSize: 'var(--fs-6)', fontWeight: 400,
-                       color: u.open === '+' ? 'var(--accent)' : u.open === 'x' ? 'var(--bad)' : 'var(--sub)' }}>
-          {u.open === '+' ? t('ggs.users.open_yes') : u.open === 'x' ? t('ggs.users.open_ghost') : t('ggs.users.open_no')}
+        <span style={{ flex: 'none', fontSize: 'var(--fs-6)', fontWeight: 400, color: openOf(u.open).color }}>
+          {openOf(u.open).label}
         </span>
       )}
     </>
@@ -161,9 +162,7 @@ function PlayerLine({ snap, u, mode, rank, picked, onPick }: {
       <Cell w={112} align="right">{fmt(u.rating_r, u.dev_r)}</Cell>
       <Cell w={112} align="right" sub>{fmt(u.rating, u.dev)}</Cell>
       <Cell w={72} align="right">
-        <span style={{ fontSize: 'var(--fs-6)', color: u.open === '+' ? 'var(--accent)' : u.open === 'x' ? 'var(--bad)' : 'var(--sub)' }}>
-          {u.open === '+' ? t('ggs.users.open_yes') : u.open === 'x' ? t('ggs.users.open_ghost') : u.open ? t('ggs.users.open_no') : '—'}
-        </span>
+        <span style={{ fontSize: 'var(--fs-6)', color: openOf(u.open).color }}>{openOf(u.open).label}</span>
       </Cell>
       {stateCell}
     </Line>
@@ -201,8 +200,7 @@ function PlayerDetail({ snap, name, tab, onNav, onKifu }: {
               <Rows>
                 {rows.map((h) => {
                   const black = h.black === name;
-                  const d = parseFloat(h.score);
-                  const v = Number.isFinite(d) ? (black ? d : -d) : null;
+                  const v = discDiff(h.score, black);
                   return (
                     <ResultRow key={h.id} opponent={black ? h.white : h.black}
                                win={(v ?? 0) > 0} draw={v === 0} adjourned={v == null} discs={v ?? 0}
@@ -255,9 +253,8 @@ function PlayerDetail({ snap, name, tab, onNav, onKifu }: {
     .filter((h) => (pool === '8r') === isRandom(h.gtype))
     .map((h) => {
       const black = h.black === name;
-      const d = parseFloat(h.score);
       return { at: h.at, r: Number(black ? h.black_rating : h.white_rating), opp: black ? h.white : h.black,
-               discs: Number.isFinite(d) ? (black ? d : -d) : null };
+               discs: discDiff(h.score, black) };
     })
     .filter((p) => Number.isFinite(p.r) && p.r > 0)
     .reverse();

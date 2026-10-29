@@ -9,7 +9,6 @@ import { t, tErr } from './i18n';
 import { gtypeLabel } from './ggs';
 import { clockLabel, signed, useWindowHeight } from './ggsui';
 
-
 interface KifuViewerProps {
   title: string;
   kifu: string;
@@ -20,16 +19,14 @@ interface KifuViewerProps {
   parts?: string[];
 }
 
-const playerOf = (ggf: string, tag: 'PB' | 'PW'): string => tagOf(ggf, tag);
-
 export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts }: KifuViewerProps) {
   const [pick, setPick] = useState({ key: '', face: 0 });
   const key = parts?.[0] ?? '';
   const face = pick.key === key ? pick.face : 0;
   const setFace = (i: number) => setPick({ key, face: i });
   const shown = parts && parts.length > 1 ? (parts[face] ?? kifu) : kifu;
-  const pb = playerOf(shown, 'PB');
-  const pw = playerOf(shown, 'PW');
+  const pb = tagOf(shown, 'PB');
+  const pw = tagOf(shown, 'PW');
   const [got, setGot] = useState<{ kifu: string; frames?: KifuFrame[]; err?: string } | null>(null);
   const [at, setAt] = useState<number | null>(null);
   const [note, say] = useFlash();
@@ -82,16 +79,16 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts }: 
     return isFinite(v) ? (i === 0 ? v : -v) : null;
   });
   const total = res.every((v) => v != null) ? res.reduce((x, v) => x + (v ?? 0), 0) : null;
-  const first = faces[0];
+  const [type, clock, black, white] = (['TY', 'TI', 'PB', 'PW'] as const).map((tag) => tagOf(faces[0], tag));
   const sub = [
     // A synchro game's boards say "8r14" on some servers and "s8r14" on others.
-    tagOf(first, 'TY') ? gtypeLabel((faces.length > 1 && !tagOf(first, 'TY').startsWith('s') ? 's' : '') + tagOf(first, 'TY')) : '',
-    tagOf(first, 'TI') ? clockLabel(tagOf(first, 'TI')) : '',
+    type ? gtypeLabel((faces.length > 1 && !type.startsWith('s') ? 's' : '') + type) : '',
+    clock ? clockLabel(clock) : '',
     // Told the way the game screen tells it: a draw, or who won and by how much.
-    playerOf(first, 'PB') && playerOf(first, 'PW')
-      ? (total == null ? `${playerOf(first, 'PB')} − ${playerOf(first, 'PW')}`
+    black && white
+      ? (total == null ? `${black} − ${white}`
         : Math.round(total) === 0 ? t('play.draw')
-        : t('play.won_by', { name: total > 0 ? playerOf(first, 'PB') : playerOf(first, 'PW'), d: Math.abs(Math.round(total)) }))
+        : t('play.won_by', { name: total > 0 ? black : white, d: Math.abs(Math.round(total)) }))
       : '',
   ].filter(Boolean).join(' · ');
 

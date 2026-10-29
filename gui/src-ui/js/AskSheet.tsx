@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ggsApi, type UnfitView } from './api';
 import type { GgsSnapshot, StandbyCfg, UserRow } from './types';
-import { askClockChoices, clockSpec, DEFAULT_EXT, gtypeChoices, gtypeLabel, MIN_CLOCK, onlineRows, parseClockSpec, presence } from './ggs';
+import { askClockChoices, clockSpec, DEFAULT_EXT, gtypeChoices, gtypeLabel, MIN_CLOCK, onlineRows, parseClockSpec, presence, ratingOf } from './ggs';
 import { ListNote } from './ggsui';
 import { t, tErr } from './i18n';
 import { marked, Modal, Overlay, popoverStyle, useDismiss } from './components/layout';
 import { Button, ClockField, Segmented, Select, TextField, Toggle } from './components/primitives';
 
 /** What the sheet opens with. Every field is optional: the rest comes from the last request. */
-export interface AskInit {
+interface AskInit {
   opponent?: string;
   gtype?: string;
   time?: string;
@@ -53,11 +53,6 @@ function registered(snap: GgsSnapshot): boolean {
   return f.fields.some(([k, v]) => k.toLowerCase().startsWith('email') && v.trim() !== '' && v.trim() !== '-');
 }
 
-const ratingOf = (u: UserRow, random: boolean): string => {
-  const r = random ? (u.rating_r ?? u.rating) : (u.rating ?? u.rating_r);
-  return r != null ? r.toFixed(1) : '';
-};
-
 export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
   const sb = snap.standby;
   const running = sb.enabled;
@@ -96,7 +91,6 @@ export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
       : u.open === '-' ? { label: t('ask.state_closed'), color: 'var(--sub)' }
       : { label: t('ask.state_open'), color: 'var(--accent)' };
   };
-  const pick = (name: string) => setOpp(name);
 
   // The opponent's decline formula, checked here so a request it would refuse is never sent.
   useEffect(() => { if (opp) ggsApi.finger(opp).catch(() => {}); }, [opp]);
@@ -175,9 +169,9 @@ export function AskSheet({ snap, init }: { snap: GgsSnapshot; init: AskInit }) {
                        query={query} onQuery={setQuery}
                        empty={!people.length && query ? t('ggs.users.nobody') : ''}
                        items={[
-                         ...(repeat ? [] : [{ key: '', name: t('ask.anyone'), rate: '', state: '', on: opp === '', pick: () => pick('') }]),
+                         ...(repeat ? [] : [{ key: '', name: t('ask.anyone'), rate: '', state: '', on: opp === '', pick: () => setOpp('') }]),
                          ...people.map((u) => ({ key: u.name, name: u.name, rate: ratingOf(u, random), state: stateOf(u).label,
-                                                  stateColor: stateOf(u).color, on: opp === u.name, pick: () => pick(u.name) })),
+                                                  stateColor: stateOf(u).color, on: opp === u.name, pick: () => setOpp(u.name) })),
                        ]} />
             {repeat && !opp && (
               <span style={{ fontSize: 'var(--fs-6)', color: 'var(--gold)' }}>{t('ask.need_opponent')}</span>
@@ -392,11 +386,7 @@ function OppPicker({ label, rate, state, stateColor, query, onQuery, items, empt
               <OppRow key={o.key || '*'} name={o.name} rate={o.rate} state={o.state} stateColor={o.stateColor} on={o.on}
                       act={i === act} onPick={() => choose(o)} onHover={() => i !== act && setMoved({ query, at: i })} />
             ))}
-            {empty && (
-              <ListNote>
-                {empty}
-              </ListNote>
-            )}
+            {empty && <ListNote>{empty}</ListNote>}
           </div>
         </div>
       )}

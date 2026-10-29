@@ -3,7 +3,6 @@ import { LEVELS, SOLVE_MAX, clampLevels, type Levels } from '../state';
 import { t } from '../i18n';
 import { Select } from './primitives';
 
-
 const label = (l: typeof LEVELS[number], i: number) => {
   const name = t('app.level.preset', { n: i + 1 });
   return t('ui.strength.preset', { name, depth: l.depth, solve: l.solve });

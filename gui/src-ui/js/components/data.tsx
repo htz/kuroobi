@@ -3,7 +3,6 @@ import { Button } from './primitives';
 import { Col, Divider, Empty, TableHead, TableRow, picked as pickedStyle } from './layout';
 import { t } from '../i18n';
 
-
 export type StoneColor = 'b' | 'w';
 
 export type Move = {
@@ -24,7 +23,6 @@ const SRC_KEY: Record<string, string> = {
 
 export const srcLabel = (src: string): string => (SRC_KEY[src] ? t(SRC_KEY[src]) : src);
 export const srcIsBook = (src: string): boolean => src === 'book' || src === 'book_learned';
-const srcIsSolve = (src: string): boolean => src === 'solve';
 
 const moveCols = (): Col[] => [
   { head: '#', w: 22, right: true },
@@ -81,7 +79,7 @@ export function KifuTable({ moves, current, onSelect, decimals }: {
               <span style={{
                 fontSize: 'var(--fs-6)',
                 color: m.src && srcIsBook(m.src) ? 'var(--gold)'
-                  : m.src && srcIsSolve(m.src) ? 'var(--text)' : 'var(--sub)',
+                  : m.src === 'solve' ? 'var(--text)' : 'var(--sub)',
               }}>{m.src ? srcLabel(m.src) : ''}</span>
             </TableRow>
           );
@@ -687,9 +685,7 @@ export function EvalTrend({ points, plies, height = 96, title, split, names }: {
   /** Player names for the two lines (the graph never says "me": GGS screens name everyone). */
   names: { mine: string; opp: string };
 }) {
-  // The index under the pointer. Read through `at` below, which drops an index the points no longer
-  // reach: the next game of an automatic series starts with fewer points while the pointer is still
-  // over the graph, and reading past the end took the whole screen down.
+  // The next game of a series can start with fewer points while the pointer is still over the graph.
   const [hovered, setAt] = React.useState<number | null>(null);
   const at = hovered != null && hovered < points.length ? hovered : null;
   const [w, setW] = React.useState(300);
@@ -839,29 +835,29 @@ export function EvalTrend({ points, plies, height = 96, title, split, names }: {
               <circle cx={x(at)} cy={y(points[at].opp)} r={3}
                       fill="var(--bg)" stroke="var(--sub)" strokeWidth={2} />
             )}
-        {at != null && cur && (() => {
-          // A box beside the pointer's line: the move, then each side's eval and think time.
-          const row = (name: string, v: number | null, s: number | null | undefined) =>
-            `${name} ${fmt(v)}${s != null ? ` · ${fmtSecs(s)}` : ''}`;
-          const lines = [t('data.ply', { n: cur.x }), row(names.mine, cur.mine, cur.mySecs), row(names.opp, cur.opp, cur.oppSecs)];
-          const bw = Math.max(...lines.map((l, i) => textW(l, 10) + (i ? 14 : 0))) + 12;
-          const bh = 46;
-          const hx = x(at);
-          const bx = hx + 8 + bw <= w - 2 ? hx + 8 : Math.max(2, hx - 8 - bw);
-          return (
-            <g pointerEvents="none">
-              <rect x={bx} y={2} width={bw} height={bh} rx={3} fill="var(--card)" stroke="var(--border)" />
-              {lines.map((l, i) => (
-                <g key={i}>
-                  {i > 0 && <line x1={bx + 6} y1={9.5 + i * 13} x2={bx + 16} y2={9.5 + i * 13}
-                                  stroke={i === 1 ? 'var(--accent)' : 'var(--sub)'} strokeWidth={2} />}
-                  <text x={bx + 6 + (i ? 14 : 0)} y={13 + i * 13} fontSize={10}
-                        fill={i ? 'var(--text)' : 'var(--sub)'}>{l}</text>
+            {cur && (() => {
+              // A box beside the pointer's line: the move, then each side's eval and think time.
+              const row = (name: string, v: number | null, s: number | null | undefined) =>
+                `${name} ${fmt(v)}${s != null ? ` · ${fmtSecs(s)}` : ''}`;
+              const lines = [t('data.ply', { n: cur.x }), row(names.mine, cur.mine, cur.mySecs), row(names.opp, cur.opp, cur.oppSecs)];
+              const bw = Math.max(...lines.map((l, i) => textW(l, 10) + (i ? 14 : 0))) + 12;
+              const bh = 46;
+              const hx = x(at);
+              const bx = hx + 8 + bw <= w - 2 ? hx + 8 : Math.max(2, hx - 8 - bw);
+              return (
+                <g pointerEvents="none">
+                  <rect x={bx} y={2} width={bw} height={bh} rx={3} fill="var(--card)" stroke="var(--border)" />
+                  {lines.map((l, i) => (
+                    <g key={i}>
+                      {i > 0 && <line x1={bx + 6} y1={9.5 + i * 13} x2={bx + 16} y2={9.5 + i * 13}
+                                      stroke={i === 1 ? 'var(--accent)' : 'var(--sub)'} strokeWidth={2} />}
+                      <text x={bx + 6 + (i ? 14 : 0)} y={13 + i * 13} fontSize={10}
+                            fill={i ? 'var(--text)' : 'var(--sub)'}>{l}</text>
+                    </g>
+                  ))}
                 </g>
-              ))}
-            </g>
-          );
-        })()}
+              );
+            })()}
             {points[at].mine != null && (
               <circle cx={x(at)} cy={y(points[at].mine)} r={3}
                       fill="var(--bg)" stroke="var(--accent)" strokeWidth={2} />

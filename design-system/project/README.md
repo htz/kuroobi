@@ -33,8 +33,8 @@ KUROOBI is an Othello engine and the desktop app that runs it (macOS, Tauri + Re
 
 - Heights are chosen from a fixed set: toolbar `h-bar` 44, inputs and player rows `h-field` 32, buttons `h-ctrl` 28, table rows `h-row` 24, two-line rows `h-row2` 40, headings `h-head` 20, status bar `h-status` 28. Do not create any other height.
 - Widths are tokens too: left nav `w-nav` 208, right dock `w-dock` 290, list column `w-list` 268, text wrapping `w-text` 720, modals `w-modal` 340 / `w-modal-wide` 520. Callers never write px.
-- Spacing is `sp-1`–`sp-6` (4–32px), plus the finer `sp-0` (6) and row side padding `sp-2h` (10). `sp-3h` (14) is defined but currently unused. The standard inner padding of a column is `sp-3`.
-- Corner radius follows the use: thin bars `r-0`, rows and chips `r-1`, buttons `r-2`, inputs `r-3`, floating boxes `r-4`, speech bubbles `r-bubble`, round bars `r-pill` (`r-5` is defined but currently unused). Do not give every box the same radius.
+- Spacing is `sp-1`–`sp-6` (4–32px), plus the finer `sp-0` (6) and row side padding `sp-2h` (10). The standard inner padding of a column is `sp-3`.
+- Corner radius follows the use: thin bars `r-0`, rows and chips `r-1`, buttons `r-2`, inputs `r-3`, floating boxes `r-4`, speech bubbles `r-bubble`, round bars `r-pill`. Do not give every box the same radius.
 - Shadows are only for floating things: `sh-1` for small knobs, `sh-2` for modals, popovers and toasts. Never separate surfaces with shadows; use lines.
 - State changes use `dur` (120ms) and `ease`. No sinking motion on press (a 1px shift flickers in dense tables).
 

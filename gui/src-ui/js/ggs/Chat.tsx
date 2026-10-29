@@ -15,7 +15,6 @@ export const openChat = (name: string) => { wanted = name; };
 
 const trKey = (c: ChatMsg): string => c.from + '|' + c.text;
 const threadOf = (c: ChatMsg): string => c.thread || c.chan || c.from;
-/** A conversation's last message: the time today, 昨日 yesterday, the date before that. */
 
 // What each conversation was read up to, kept per account on this machine.
 const seenKey = (login: string) => `kuroobi.chat.seen.${login}`;

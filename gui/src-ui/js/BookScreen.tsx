@@ -2,16 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from './api';
 import { sqName } from './adapt';
 import type { BookNode } from './types';
-import { Board, type EvalInfo } from './components/board';
+import { Board, START_CELLS, type Cell, type EvalInfo } from './components/board';
 import { ScoreRow } from './components/data';
 import { BoardFit, Col, Empty, EmptyState, List, Section, TableHead } from './components/layout';
 import { Button } from './components/primitives';
 import { t, tErr } from './i18n';
 
-
 const keyOf = (line: number[]) => line.map(sqName).join('');
 
-export interface BookBrowse {
+interface BookBrowse {
   line: number[];
   /** The position on screen; null until the book has answered for it. */
   node: BookNode | null;
@@ -121,7 +120,7 @@ export function BookPane({ b, coords, grain, flip, onSettings }: {
   return (
     <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <BoardFit padding="var(--sp-2) var(--sp-4)">
-        <Board cells={(n?.cells ?? INITIAL) as (0 | 1 | 2)[]}
+        <Board cells={(n?.cells as Cell[] | undefined) ?? START_CELLS}
                legal={b.node?.moves.map((m) => m.pos) ?? []}
                last={b.line.length ? b.line[b.line.length - 1] : null}
                evals={evals} turn={n?.player === 'white' ? 'w' : 'b'} coords={coords} grain={grain} flip={flip}
@@ -251,7 +250,6 @@ export function BookTree({ b, decimals, onStudy }: {
   );
 }
 
-
 function BookRow({ r, open, onToggle, onGo, decimals }: {
   r: Row; open: boolean; onToggle: () => void; onGo: () => void; decimals: number;
 }) {
@@ -300,9 +298,6 @@ function BookRow({ r, open, onToggle, onGo, decimals }: {
     </div>
   );
 }
-
-const INITIAL = Array.from({ length: 64 }, (_, i) =>
-  i === 3 * 8 + 4 || i === 4 * 8 + 3 ? 1 : i === 3 * 8 + 3 || i === 4 * 8 + 4 ? 2 : 0);
 
 function parseLine(kifu: string): number[] {
   const out: number[] = [];

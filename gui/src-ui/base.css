@@ -1,16 +1,5 @@
-/* KUROOBI base — loaded after tokens.css
- *
- * Only what inline styles cannot express belongs here:
- *   1. reset and focus ring
- *   2. state layers (hover / active / selected) — defining what a pressable
- *      surface looks like is part of the design
- *   3. collapse breakpoints (media queries)
- *   4. properties the breakpoints move (inline styles are out of reach of
- *      media queries)
- *   5. window drag region, scrollbars, stone-flip animation
- * Appearance itself lives in each component's inline style. This file owns
- * only the changes.
- */
+/* KUROOBI base, loaded after tokens.css: only what inline styles cannot express (reset, state
+ * layers, breakpoints and the properties they move, drag region, scrollbars, stone flip). */
 * { box-sizing:border-box; }
 html, body, #root { height:100%; }
 body {
@@ -20,33 +9,19 @@ body {
   text-wrap:pretty;                        /* no one-character last lines in wrapped help text */
   -webkit-font-smoothing:antialiased;
   overflow:hidden;                         /* desktop app: never scroll outside the window */
-  /* **On-screen text is not selectable.** This is a desktop app; dragging
-     across the board or a table and turning the text blue is web-page
-     behaviour, and here it just looks like a missed click. **Only things you
-     copy and take elsewhere are selectable** — restored below via `.k-sel` */
+  /* A desktop app: dragging across the board must not select text; `.k-sel` restores it where copied */
   -webkit-user-select:none; user-select:none;
 }
 
-/* Applied only to selectable things. **Put it on the text itself, not the
-   container** — on a container the drag starts from the adjacent padding and
-   picks up the whole row.
-   Four places are restored today:
-     input fields (you cannot fix a typo without reselecting it)
-     player names (copied when referring to an opponent)
-     chat bodies (quoted)
-     protocol logs (pasted into bug reports) */
+/* Put it on the text itself: on a container the drag starts in the padding and takes the whole row. */
 .k-sel, input, textarea {
   -webkit-user-select:text; user-select:text;
 }
-/* Input fields are for typing, so use the text cursor */
 input, textarea { cursor:text; }
 a { color:var(--accent); text-decoration:none; }
 a:hover { color:var(--text); }
 button, input, select, textarea { font:inherit; color:inherit; }
-/* Pressable things get the pointer cursor. macOS convention is default, but
- * this screen is divided by rules and whitespace with many borderless
- * controls, and users actually reported **not being able to tell what is
- * clickable**. Non-pressable (disabled) stays default. */
+/* Not the macOS default: with so many borderless controls, people could not tell what is pressable. */
 button:not(:disabled):not([aria-disabled="true"]) { cursor:pointer; }
 button:disabled, button[aria-disabled="true"] { cursor:default; }
 
@@ -54,52 +29,23 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 :focus { outline:none; }
 :focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:var(--r-1); }
 
+/* State layers. Components write their surface with the `background:` shorthand, which resets
+ * background-image and beats any selector, so the hover overlay needs !important (only here). */
 
-/* ============================================================
- * State layers
- *
- * Inline styles cannot express :hover / :active, so the changes live in
- * classes. Components take a className and add the default class.
- * Colors always derive from --hover / --accent. Do not invent colors here.
- *
- * Principles:
- *   hover  = overlay --hover (surface color unchanged)
- *   active = --hover one step stronger (no press-down transform; a 1px shift
- *            flickers in dense tables)
- *   selected = owned by the component's inline style (.k-on only weakens
- *            how hover applies)
- *   disabled / aria-disabled = no change
- *
- * !important is used here and only here. Components write surface colors with
- * the `background:` shorthand, and the shorthand resets background-image to
- * none. Inline styles beat any selector, so without !important **hover does
- * nothing at all** (this actually happened: hovering a pressable area did
- * nothing). The exception preserves the split: components own the surface
- * color, this file owns the overlay.
- * ============================================================ */
-
-/* Base for every pressable surface: Button / Segmented items / IconButton /
- * Select. The overlay itself is not transitioned (none <-> gradient cannot be
- * interpolated, so it steps regardless). Only the border color needs to be
- * smooth. */
+/* Every pressable surface. Only the border transitions: none <-> gradient cannot be interpolated. */
 .k-press { transition:border-color var(--dur) var(--ease); }
 .k-press:hover:not(:disabled):not([aria-disabled="true"]) { background-image:linear-gradient(var(--hover), var(--hover)) !important; }
 .k-press:active:not(:disabled):not([aria-disabled="true"]) { background-image:linear-gradient(var(--hover), var(--hover)), linear-gradient(var(--hover), var(--hover)) !important; }
-/* Selected items and primary buttons are already strong, so hover stays subtle */
 .k-press.k-on:hover { background-image:linear-gradient(var(--hover-on), var(--hover-on)) !important; }
 
-/* List rows (records, matches, players, lobby, chat).
- * A selected row already has a background and a 2px bar from the component,
- * so only hover belongs here. */
+/* List rows: the chosen look comes from the component, only hover lives here. */
 .k-row { cursor:pointer; }
 /* A row sits flush in a scrolling list, so its focus ring is drawn inside it rather than clipped. */
 .k-row:focus-visible { outline-offset:-2px; }
 .k-row:hover { background-image:linear-gradient(var(--hover), var(--hover)) !important; }
 .k-row[aria-current="true"]:hover, .k-row.k-on:hover { background-image:linear-gradient(var(--hover-on), var(--hover-on)) !important; }
 
-/* Board squares. Only legal moves react (a board that reacts but cannot be
- * played on is a lie). `.k-cell` is set only when the square is a legal and
- * pressable move, so the pointer cursor is safe here */
+/* Board squares: `.k-cell` is set only on a legal, pressable move. */
 .k-cell { cursor:pointer; }
 .k-cell circle { transition:opacity var(--dur) var(--ease), r var(--dur) var(--ease); }
 .k-cell:hover .k-legal { opacity:1; }
@@ -116,53 +62,26 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 .k-fill > button { width:100%; justify-content:center; }
 .k-tile-erase { width:24px; height:24px; border-radius:50%; border:1.5px dashed var(--sub); }
 
-
-/* Selected Segmented item. In dark the surface color alone is enough (as
- * designed), but **in light --card (#fff) barely differs from the ground**,
- * so add a 1px inset. */
+/* In light, --card barely differs from the ground, so the chosen segment gets an outline. */
 :root[data-theme="light"] .k-seg-on { box-shadow:inset 0 0 0 1px var(--border); }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) .k-seg-on { box-shadow:inset 0 0 0 1px var(--border); }
 }
 
-/* Full-width button (login). Button is inline-grid, so let the caller decide
- * the width */
 .k-wide { width:100%; }
 
-/* Inputs. Brighten only the border (leave the surface — a place you type into
-   should stay quiet) */
+/* Inputs brighten only the border; a place to type into stays quiet. */
 .k-input { transition:border-color var(--dur) var(--ease); }
 .k-input:hover:not([readonly]) { border-color:var(--sub); }
 .k-input:focus-within, .k-input:focus { border-color:var(--accent); }
 
-/* Link-like text (player names, etc). Only the underline strength changes */
-
-
-
-/* ============================================================
- * Collapse breakpoints
- *
- * This is a desktop app, so very small windows are out of scope. As width
- * shrinks, things drop in an order that **keeps the board to the last** —
- * nothing works if the board is unreadable.
- *   1120px: collapse the right dock (toggled by a button)
- *   1040px: reduce the left menu to icons only
- *    940px: drop the toolbar's auxiliary info (side to move, eval display)
- * The height scale (44 / 32 / 28 / 24 / 20) never changes. Density is kept.
- * ============================================================ */
-/* Properties the breakpoints move are owned here.
- * Inline styles beat media queries, so a breakpoint cannot reach a property
- * written on the component. Components must not put these in style. */
+/* Collapse breakpoints, keeping the board to the last: 1120px folds the dock, 1040px reduces the
+ * nav to icons, 940px drops the toolbar's aux. Inline styles beat media queries, so every property
+ * a breakpoint moves is owned here and must not be written on the component. */
 .k-nav { width:var(--w-nav); }
 .k-dock { width:var(--w-dock); display:flex; }
 .k-nav-section, .k-toolbar-aux { display:flex; }
-/* Marker for env-var overrides at startup. **Show which ones are set as
-   tags** — a count alone only says "not a plain launch" and not how it
-   differs.
-   **Do not use gold.** `--gold` is the book color (rule 19); using it for a
-   diagnostic marker too would give gold two meanings. Use an outline in
-   `--sub` and let position (right end of the window bar) do the standing
-   out */
+/* Env-var override tags; not gold, which means the book. */
 .k-env { display:flex; gap:var(--sp-1); }
 .k-env-tag {
   display:flex; align-items:center; height:var(--h-chip);
@@ -171,48 +90,28 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   color:var(--sub); box-shadow:inset 0 0 0 1px var(--border);
 }
 .k-env-val { margin-left:var(--sp-1); font-weight:400; opacity:.85; }
-/* Separator shown only in the collapsed column. In a wide window the
-   "● GGS" heading is the separator, so it is unnecessary (do not double up
-   with the heading's top margin) */
+/* The separator of the icon column; a wide nav has the "GGS" heading instead. */
 .k-nav-rule { display:none; height:1px; background:var(--border); }
 .k-nav-foot { padding:var(--sp-3); }
 .k-nav-row { padding:0 10px; }
-/* Count badges and status dots. In a wide window they are pushed to the right
-   end of the row; in the 48px column they overlay the icon's corner (the
-   1040px block below). **Both placement and size are moved by the
-   breakpoints, so they must not be in the component's style** — inline beats
-   media queries */
 .k-nav-n, .k-nav-dot { margin-left:auto; }
 .k-nav-n {
   min-width:18px; height:18px; padding:0 5px;
   border-radius:9px; font-size:var(--fs-7);
 }
-/* Logo at the top of Nav. Left alone, the SVG renders at its intrinsic size,
-   so fix the width. display is moved by the breakpoints, so it lives here
-   (inline would be out of reach) */
 .k-nav-logo { display:flex; align-items:center; justify-content:center; }
 .k-nav-logo > span { display:block; width:100px; }
 .k-nav-logo > span > svg { display:block; width:100%; height:auto; }
 
-/* The Dock is opened from the right end of the Toolbar (k-dock-toggle).
- * In a wide window the Dock is always visible, so the toggle is hidden. */
 .k-dock-toggle { display:none; }
 /* The learning log's right column is no Dock: it narrows at 1120px instead of collapsing. */
 .k-learn-side { width:var(--w-dock); }
 @media (max-width: 1120px) {
   .k-dock { display:none; }
-  /* Positioned against Body (position:relative). Do not slip under the
-     full-width bars — top starts below the screen toolbar, bottom ends at
-     the bottom of Body (= above the StatusBar) */
+  /* Against Body: below the screen toolbar, above the status bar. */
   .k-dock.k-open { display:flex; position:absolute; right:0; top:var(--h-bar); bottom:0; z-index:5; box-shadow:var(--sh-2); }
   .k-dock-toggle { display:inline-flex; }
-  /* Keep the board from sliding under the overlaid Dock. The board sizes
-     itself from its container's height (rule 77), so unless the container
-     narrows by the Dock's width the right column is hidden — the collapse
-     order keeps the board to the last (rule 7).
-     The toolbar (first child) sits above the Dock's top edge, so leave it.
-     Use margin, not padding: components write padding with the shorthand,
-     and inline beats media queries so padding would not reach */
+  /* Margin, not padding (components write padding inline); the toolbar sits above the dock. */
   .k-dock-inset > :not(:first-child) { margin-right:var(--w-dock); }
   .k-learn-side { width:var(--w-list-narrow); }
 }
@@ -220,15 +119,12 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 .k-listpane { width:var(--w-list); }
 @media (max-width: 1040px) {
   .k-listpane { width:var(--w-list-narrow); }
-  /* Narrow icon-only column. 48px = 32px hit target + 8px on each side */
+  /* 32px hit target + 8px on each side */
   .k-nav { width:48px; }
   /* Drop all text, the logo included: any text left makes the 48px column wrap and grow */
   .k-nav .k-nav-label, .k-nav .k-nav-section, .k-nav .k-nav-logo { display:none; }
-  /* With the text gone, icons are stranded at the left edge, so center them */
   .k-nav .k-nav-row { justify-content:center; padding:0; position:relative; }
-  /* Badges overlay the icon's corner here. Left in the flow they sit beside
-     the icon, and icon + gap + badge does not fit 32px — the row grew past
-     the 48px column and the count landed outside it. */
+  /* In the flow, icon + gap + badge overflows the 32px row, so badges sit on the icon's corner. */
   .k-nav .k-nav-n, .k-nav .k-nav-dot {
     position:absolute; margin-left:0; top:2px; right:2px; z-index:1;
   }
@@ -236,36 +132,22 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
     min-width:14px; height:14px; padding:0 3px; border-radius:7px;
     font-size:9px; line-height:14px;
   }
-  /* Keep the bar even with the logo dropped — it holds the traffic lights
-     and the drag region */
 }
-/* The toolbar's own collapse is measured, not a breakpoint: a pixel
-   threshold would need re-tuning per language (see `Toolbar`). */
+/* The toolbar's own collapse is measured (`Toolbar`), since a pixel threshold differs per language. */
 @media (max-width: 940px) {
   .k-toolbar-aux { display:none; }
 }
 
-
-/* Title bar drag region.
- * Tauri on macOS uses WKWebView, where -webkit-app-region has no effect. The
- * window is dragged via the data-tauri-drag-region attribute, which the top
- * of Nav carries (Nav.tsx).
- * This rule is kept only for WebView2 (Windows).
- * The 78px inset for the traffic lights assumes titleBarStyle: "Overlay". */
+/* For WebView2 only: WKWebView ignores it and drags by data-tauri-drag-region. */
 .k-drag { -webkit-app-region:drag; }
-/* The window bar holds no pressable elements at all (rule 75), so there is
-   nothing to exclude from the drag region. One line brings it back when
-   needed:
-   .k-nodrag { -webkit-app-region:no-drag; } */
 
-/* Scrolling — inside the dock and tables only */
 .k-scroll { overflow-y:auto; overscroll-behavior:contain; }
 .k-scroll::-webkit-scrollbar { width:9px; height:9px; }
 .k-scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:9px; border:2px solid transparent; background-clip:content-box; }
 .k-scroll::-webkit-scrollbar-track { background:transparent; }
 .k-scroll:hover::-webkit-scrollbar-thumb { background:var(--sub); }
 
-/* Stone flip. The "stone flip" setting swaps --flip-dur to 0ms / 120ms / 240ms */
+/* Stone flip; the setting swaps --flip-dur to 0 / 120 / 240ms. */
 :root { --flip-dur:120ms; }
 @keyframes k-flip { from { transform:rotateY(180deg); } to { transform:rotateY(0); } }
 .k-flip { animation:k-flip var(--flip-dur) var(--ease); }
@@ -276,16 +158,7 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
   .k-nav-row, .k-dock { transition:none; }
 }
 
-
-/* The shortest breakpoint — collapse the eval graph strip (the design's
- * chosen answer).
- *
- * **Shrinking alone was not enough.** Sizing the graph from its container
- * brought the board back from 82 to 183px (`75d1d23`), but at 860x560 it is
- * still small. Collapsing gets the board to around 330px. **Shrinking and
- * collapsing are used together** — at medium heights it shrinks and both stay
- * visible; only at the shortest breakpoint can it be collapsed.
- * The toggle lives on the heading row (rule 7 — keep the board to the last). */
+/* The shortest windows fold the eval graph, which only shrinking cannot make room for. */
 .k-graph { display:flex; }
 .k-graph-toggle { display:none; }
 @media (max-height: 620px) {

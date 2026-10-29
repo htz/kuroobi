@@ -7,9 +7,9 @@ import type { GameView, FetchedGgf } from './types';
 import { api, ggsApi, jsLog, onApp } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
 import { connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
-import { AppFrame, BoardFit, Body, Busy, Divider, Dock, Main, Toolbar, WindowBar, useToolbarCompact } from './components/layout';
+import { AppFrame, BoardFit, Body, Busy, Confirm, Divider, Dock, Main, Toolbar, WindowBar, useToolbarCompact } from './components/layout';
 import { GgsScreen } from './GgsScreens';
-import { Confirm, PasteKifu } from './Dialogs';
+import { PasteKifu } from './Dialogs';
 import { EditBoard, EditDock, EditTools, boardText, useBoardEdit, useEditKeys } from './BoardEdit';
 import { Board, type Cell } from './components/board';
 import { EvalGraph, MoveScrub, ScoreRow, StoneDot, srcIsBook, srcLabel } from './components/data';
@@ -25,7 +25,6 @@ import { onGgsFailure } from './ggsui';
 import { markApplied, useApplied } from './applied';
 import { Icon } from './components/Icons';
 import { GlobalStatus } from './GlobalStatus';
-
 
 function RolePicker({ value, onChange }: {
   value: EngineSide;
@@ -61,7 +60,6 @@ const sides = () => [
   },
   { value: 'off' as const, label: t('app.side.off') },
 ];
-
 
 function reachable(raw: NavId, conn: ReturnType<typeof connOf>): NavId {
   if (conn === 'online') return raw === 'ggs-login' ? 'ggs-play' : raw;
@@ -126,8 +124,7 @@ export function App() {
   }, [chatOpen, markChatRead]);
 
   const setMode = g.setMode;
-  // Leaving the game for another screen pauses it, clock and all, like any game one plays alone;
-  // 「対局開始」 takes it on from the same position.
+  // Leaving the game for another screen pauses it, clock and all; "Start" takes it on from the same position.
   const { playing, stop } = g;
   const ed = useBoardEdit();
   const closeEdit = ed.close;
@@ -150,7 +147,7 @@ export function App() {
     wasLearning.current = learning;
   }, [learning, reloadBook]);
   const { items: learnLog, reload: learnLogReload } = useLearnLog(
-    isBook && bookTab === 'log', !!cpu?.learn);
+    isBook && bookTab === 'log', learning);
 
   const [viewer, setViewer] = useState<
     { title: string; kifu: string; pending?: string; archive?: string; parts?: string[] } | null
@@ -455,7 +452,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [setNav, paste, ask, viewer, asking, editing, openEdit, isBook, bookTab, isGgs, playDock, study, book, g, v, newGame]);
+  }, [setNav, paste, ask, viewer, asking, editing, openEdit, isBook, bookTab, playDock, study, book, g, v, newGame]);
 
   // Studying a record, the record's own next move just steps forward; another move drops the rest, so it asks.
   // On KUROOBI's turn the board takes no move, so it shows none under the pointer either.
@@ -474,7 +471,7 @@ export function App() {
         ok: t('app.study.branch_ok'),
       }))) return;
     }
-    // A move before 「対局開始」 starts the game and KUROOBI answers it; with no side for KUROOBI it is just a move.
+    // A move before "Start" starts the game and KUROOBI answers it; with no side for KUROOBI it is just a move.
     if (!study && v && !v.over && !g.playing && g.side !== 'off') {
       await g.play(sq);
       await startGame();
@@ -499,7 +496,6 @@ export function App() {
     return !study && anyThink ? fmtSecs(c === 'b' ? g.thinkTotal.black : g.thinkTotal.white) : undefined;
   };
 
-
   const nodes = g.stat && g.stat.nodes > 0 ? g.stat.nodes : 0;
   const nps = nodes && g.stat && g.stat.secs > 0 ? nodes / g.stat.secs : 0;
   const lv = g.level === 'custom' ? t('app.level.custom') : t('app.level.preset', { n: g.level + 1 });
@@ -507,8 +503,7 @@ export function App() {
   const playLv = prefs.clockSecs > 0 ? secsText(prefs.clockSecs) : lv;
   const screenTitle = isSettings ? t('settings.title')
     : [...navLocal(), ...ggsNav(conn)].find((i) => i.id === nav)?.label ?? 'KUROOBI';
-  const screenSub = isGgs || isSettings ? undefined
-    : isBook ? undefined
+  const screenSub = isGgs || isSettings || isBook ? undefined
     // Studying, KUROOBI plays no side; its level is the analysis strength.
     : study ? t('app.study.analysis_level', { lv })
     : `${playLv} · ${t(g.side === 'both' ? 'app.side.both'
@@ -547,7 +542,7 @@ export function App() {
       )}
       {!isGgs && !isSettings && !editing && <Toolbar
           dock={hasDock ? { open: dockOpen, onToggle: () => setDockOpen(o => !o) } : undefined}
-          graph={study && !isGgs && !isBook
+          graph={study
             ? { open: graphOpen, onToggle: () => setGraphOpen(o => !o) } : undefined}
           aux={isBook
             ? (cpu?.learn
@@ -669,12 +664,12 @@ export function App() {
         </div>
         )}
 
-        {study && !isGgs && !isBook && !editing && v && (
+        {study && !editing && v && (
           <MoveScrub plies={v.moves.length} cursor={v.cursor} blunder={blunder}
                      onSeek={(n) => void g.jumpTo(n)} />
         )}
 
-        {study && !isGgs && !isBook && !editing && (
+        {study && !editing && (
           <EvalGraph points={graph.values ?? []} plies={v?.moves.length} cursor={v?.cursor}
                      blunder={blunder} busy={graph.busy} onJump={(n) => void g.jumpTo(n)}
                      open={graphOpen}
@@ -716,8 +711,6 @@ export function App() {
 
         <GlobalStatus snap={ggs.snap} cpu={cpu} analyzing={graph.busy ? graph.prog : null} thinking={g.thinking}
                       thinkSecs={g.thinkSecs} nodes={nodes} nps={nps} servers={servers} />
-
-
 
       {viewer && (
         <KifuViewer title={viewer.title} kifu={viewer.kifu}
@@ -794,4 +787,3 @@ function ggfNames(side: 'black' | 'white' | 'both' | 'off'): [string, string] {
   if (side === 'white') return [me, 'KUROOBI'];
   return [me, me];
 }
-
