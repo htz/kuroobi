@@ -35,6 +35,31 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <x-import component-from-global-scope="KuroobiUI.Segmented" value="{{poolVal}}" options="{{pools}}"></x-import>
 <x-import component-from-global-scope="KuroobiUI.Divider"></x-import>
 <x-import component-from-global-scope="KuroobiUI.Select" value="all" options="{{periods}}" width="{{periodW}}"></x-import>
+<!-- Opponent filter: Combobox. Closed it looks like a Select; open, a search field (part of the name, case ignored) and the list below it (at most 6 rows, ↑↓ Enter, Esc or a click outside closes).
+     "All opponents" first, then everyone in the records by number of games, each with that count. Narrows the graph, the strip of numbers and the list together -->
+<div style="position: relative">
+<x-import component-from-global-scope="KuroobiUI.Select" value="{{opp}}" options="{{oppOptions}}" width="{{oppW}}" title="相手"></x-import>
+<sc-if value="{{pickerOpen}}" hint-placeholder-val="{{false}}">
+<div role="listbox" style="position: absolute; z-index: 5; left: 0; width: 240px; top: calc(100% + 4px); display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-4); background: var(--bg); box-shadow: var(--sh-2); overflow: hidden">
+<div style="padding: var(--sp-1); border-bottom: 1px solid var(--border-weak); display: flex"><x-import component-from-global-scope="KuroobiUI.TextField" value="{{query}}" placeholder="名前で探す"></x-import></div>
+<div class="k-scroll" style="max-height: calc(var(--h-field) * 6); display: flex; flex-direction: column">
+<sc-for list="{{pickRows}}" as="o" hint-placeholder-count="3">
+<div class="k-row" role="option" aria-selected="{{o.act}}" style="display: flex; align-items: center; gap: var(--sp-2); height: var(--h-field); padding: 0 var(--sp-3); font-size: var(--fs-5); white-space: nowrap; background: {{o.ground}}; box-shadow: {{o.mark}}">
+<span class="k-sel" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: {{o.weight}}">{{o.name}}</span>
+<span style="text-align: right; font-size: var(--fs-6); color: var(--sub); font-variant-numeric: tabular-nums">{{o.count}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+</div>
+<!-- Pages (same as Players): the list shows one page; the graph and the numbers count every game the filters leave -->
+<div style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<x-import component-from-global-scope="KuroobiUI.Button" disabled="{{yes}}">前へ</x-import>
+<span style="color: var(--text)">{{pageText}}</span>
+<x-import component-from-global-scope="KuroobiUI.Button" disabled="{{lastPage}}">次へ</x-import>
+<x-import component-from-global-scope="KuroobiUI.Select" size="ctrl" value="50" options="{{perPage}}" title="表示件数"></x-import>
+</div>
 </x-import>
 <sc-if value="{{hasRows}}" hint-placeholder-val="{{true}}">
 <div style="flex: 1; min-height: 0; padding: var(--sp-4) var(--sp-1) 0; display: flex; flex-direction: column; gap: var(--sp-2)">
@@ -192,8 +217,11 @@ class Component extends DCLogic {
       { opp: 'scorpion', d: 64, bd: [[12, 'to+']], t: ['4:01', '7:00'], loss: ['', '2:00'], when: '10/25', r: 2608.0, kind: '1局・ランダム14手' },
       { opp: 'viper', d: null, end: 'adj', bd: [], t: ['1:20', '1:31'], loss: ['', ''], when: '10/25', r: null, kind: '同期・ランダム14手' },
     ];
-    const opps = ['ymatioun', 'saio', 'Rhapsody', 'scorpion', 'viper', 'ant', 'edgar', 'Thor'];
-    for (let i = 0; i < 40; i++) {
+    const view = this.props.view ?? 'random';
+    // Filtered by "morgoth": only that opponent's games, so the sample is all morgoth.
+    const opps = view === 'opp' ? ['morgoth'] : ['ymatioun', 'saio', 'Rhapsody', 'scorpion', 'viper', 'ant', 'edgar', 'Thor'];
+    if (view === 'opp') games.forEach((g) => { g.opp = 'morgoth'; });
+    for (let i = 0; i < 41; i++) {
       const a = [6, -4, 8, -2, 2, 10, -8, 4, 6, -10][i % 10], b = [2, -2, 6, 0, -2, 10, -4, 0, 4, -6][i % 10];
       games.push({ opp: opps[i % opps.length], d: a + b, bd: [[a], [b]], t: ['4:' + String(10 + i % 40).padStart(2, '0'), '4:' + String(30 + i % 25).padStart(2, '0')], loss: ['', ''],
         when: '10/' + String(24 - Math.floor(i / 3)).padStart(2, '0'), r: +(2600 - i * 0.6 + (i % 4) * 1.3).toFixed(1), kind: i % 6 === 4 ? '1局・ランダム14手' : i % 3 ? '同期・ランダム14手' : '同期・ランダム16手' });
@@ -204,7 +232,6 @@ class Component extends DCLogic {
       'ov+': ['時間超過勝ち', 'var(--gold)'], 'ov-': ['時間超過負け', 'var(--bad)'],
       'rs+': ['相手の投了', 'var(--gold)'], 'rs-': ['投了', 'var(--bad)'], adj: ['中断', 'var(--sub)'],
     };
-    const view = this.props.view ?? 'random';
     const open = this.props.detail === 'open' && view !== 'empty';
     const PICK = open ? 0 : -1;
     const cellOf = ([d, k]) => ({ d: sgn(d), tag: k ? TAGS[k][0] : '', tagColor: k ? TAGS[k][1] : 'var(--sub)' });
@@ -237,7 +264,24 @@ class Component extends DCLogic {
     }
     return {
       poolVal: view === 'all' ? 'all' : '8r',
-      isAll: view === 'all', isPool: view !== 'all', isEmpty: view === 'empty', hasRows: view !== 'empty',
+      isAll: view === 'all', isPool: view !== 'all', isEmpty: view === 'empty',
+      hasRows: view !== 'empty',
+      opp: view === 'opp' ? 'morgoth' : '',
+      oppW: 160,
+      oppOptions: [['', 'すべての相手'], ['morgoth', 'morgoth']],
+      pickerOpen: view === 'pick',
+      // Typing "rh": the names holding it, still by number of games. "All opponents" stays on top.
+      query: 'rh',
+      pickRows: [
+        // The chosen value has the accent bar and weight 600; the row the keys point at, the card ground (Combobox in the DS).
+        { name: 'すべての相手', count: '932 局', weight: 600, act: false, ground: 'transparent', mark: 'inset 2px 0 0 var(--accent)' },
+        { name: 'Rhapsody', count: '437 局', weight: 400, act: true, ground: 'var(--card)', mark: 'none' },
+        { name: 'rho', count: '23 局', weight: 400, act: false, ground: 'transparent', mark: 'none' },
+      ],
+      perPage: [['50', '50 件'], ['100', '100 件'], ['200', '200 件']],
+      // 932 games in all; filtered by morgoth, 72.
+      pageText: view === 'opp' ? '1 / 2' : '1 / 19',
+      lastPage: false,
       trendNames: { mine: 'alice', opp: 'morgoth' },
       myRates: [
         { label: 'ランダム開局', rate: { value: 1704.3, dev: 49, rank: 37, w: 54, l: 49, d: 3 } },
@@ -256,7 +300,15 @@ class Component extends DCLogic {
       // Hover reads date and time, opponent, discs, the rating after the game (rateLabel in the app).
       rateLabels: rated.map((g) => (g.when.includes(':') ? '10/26 ' + g.when : g.when + ' 20:00') + ' · ' + g.opp + ' · ' + sign(g.d) + ' · ' + g.r.toFixed(1)),
       pickedRate: rated.findIndex((g) => g.i === PICK),
-      stats: [
+      // With an opponent filter the change is the sum of what each of those games moved the rating.
+      stats: view === 'opp' ? [
+        { label: 'レート', value: '2596.0' },
+        { label: '期間の増減', value: '−12.4' },
+        { label: '勝 / 負 / 分', value: '14 / 22 / 36' },
+        { label: '勝率', value: '19%' },
+        { label: '平均石差', value: '−0.1' },
+        { label: '最高', value: '2626.6' },
+      ] : [
         { label: 'レート', value: '1704.3' },
         { label: '期間の増減', value: '+4.2' },
         { label: '勝 / 負 / 分', value: '7 / 5 / 1' },
@@ -265,7 +317,7 @@ class Component extends DCLogic {
         { label: '最高', value: '1711.6' },
       ],
       rows,
-      rowCount: rows.length + ' 局',
+      rowCount: view === 'opp' ? '72 局' : '932 局',
       detailOpen: open,
       detail: [
         { label: '相手のレート', value: '2629.3' },

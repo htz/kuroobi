@@ -152,10 +152,9 @@ fn capture_who(ctx: &mut Ctx, kind: &str, buf: &[String], login: &str) {
     }
     if let Some(r) = my_rating {
         s.my_rating = Some(r);
-        if let Some(latest) = s.results.first_mut() {
-            if latest.my_rating.is_none() {
-                latest.my_rating = Some(r);
-            }
+        if s.results.first().is_some_and(|l| l.my_rating.is_none()) {
+            Arc::make_mut(&mut s.results)[0].my_rating = Some(r);
+            s.results_rev += 1;
         }
     }
     drop(s);

@@ -257,7 +257,8 @@ export interface GgsSnapshot {
   history: Record<string, HistoryRow[]>;
   chat: ChatMsg[];
   chat_seen: number;
-  results: GameResult[];
+  /** Moves whenever the recorded games change; the games themselves come from `ggsApi.results()`. */
+  results_rev: number;
   standby: StandbyCfg;
   standby_stats: StandbyStats;
   engine: EngineCfgView;

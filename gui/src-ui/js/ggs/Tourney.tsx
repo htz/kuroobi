@@ -3,8 +3,8 @@ import { ggsApi } from '../api';
 import type { GgsSnapshot, TourneyView } from '../types';
 import { gtypeLabel, onlineRows } from '../ggs';
 import { t } from '../i18n';
-import { captionStyle, ListRow, Toolbar, TwoLines } from '../components/layout';
-import { Button, Dot, Progress, Segmented, Select, TextField } from '../components/primitives';
+import { captionStyle, Combobox, ListRow, Toolbar, TwoLines } from '../components/layout';
+import { Button, Dot, Progress, Segmented, TextField } from '../components/primitives';
 import { Tag, type NavId } from '../components/ggs';
 import { askSheet } from '../AskSheet';
 import { focusGame } from './Lobby';
@@ -297,9 +297,9 @@ function TourneyDetail({ snap, x, now, errText }: {
             {view === 'games' && (
               <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
                 <span style={sub}>{t('tourney.game_players')}</span>
-                <Select value={pick[0]} onChange={(v) => setPick([v, pick[1]])} options={pickOptions(pick[1])} width={124} title={t('tourney.game_players')} />
+                <Combobox value={pick[0]} onChange={(v) => setPick([v, pick[1]])} options={pickOptions(pick[1])} width={124} title={t('tourney.game_players')} />
                 <span style={{ color: 'var(--sub)' }}>−</span>
-                <Select value={pick[1]} onChange={(v) => setPick([pick[0], v])} options={pickOptions(pick[0])} width={124} title={t('tourney.game_players')} />
+                <Combobox value={pick[1]} onChange={(v) => setPick([pick[0], v])} options={pickOptions(pick[0])} width={124} title={t('tourney.game_players')} />
                 {picked.length > 0 && <Button size="row" variant="ghost" onClick={() => setPick(['', ''])}>{t('tourney.clear')}</Button>}
               </span>
             )}

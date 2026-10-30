@@ -1,0 +1,44 @@
+<!-- @dsCard group="Forms" height=420 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+  // The top row is the real Combobox (press it); the open states below are drawn so they show without a press.
+  KuroobiUI.setLang('ja');
+  const h = React.createElement;
+  const { Combobox, Select, TextField } = KuroobiUI;
+  const Case = ({ label, children }) => h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' } },
+    h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), children);
+  const opps = [['', 'すべての相手', '932 局'], ['Rhapsody', 'Rhapsody', '437 局'], ['iEdax', 'iEdax', '112 局'], ['piglet', 'piglet', '103 局'],
+                ['htz', 'htz', '88 局'], ['morgoth', 'morgoth', '72 局'], ['rho', 'rho', '23 局'], ['scorpion', 'scorpion', '21 局']];
+  const Row = ({ o, act, on }) => h('div', { className: 'k-row', role: 'option', 'aria-selected': act, style: {
+      display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-field)', padding: '0 var(--sp-3)', flex: 'none',
+      fontSize: 'var(--fs-5)', whiteSpace: 'nowrap', background: act ? 'var(--card)' : 'transparent',
+      boxShadow: on ? 'inset 2px 0 0 var(--accent)' : 'none', fontWeight: on ? 600 : 400 } },
+    h('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, o[1]),
+    h('span', { style: { fontSize: 'var(--fs-6)', color: 'var(--sub)', fontWeight: 400, fontVariantNumeric: 'tabular-nums' } }, o[2]));
+  const Open = ({ value, query, rows, act, note }) => h('div', { style: { position: 'relative', width: 240, height: 290 } },
+    h(Select, { value, options: opps.map((o) => [o[0], o[1]]), width: 160, title: '相手' }),
+    h('div', { role: 'listbox', style: { position: 'absolute', left: 0, top: 'calc(var(--h-field) + 4px)', width: 240, display: 'flex',
+        flexDirection: 'column', border: '1px solid var(--border)', borderRadius: 'var(--r-4)', background: 'var(--bg)',
+        boxShadow: 'var(--sh-2)', overflow: 'hidden' } },
+      h('div', { style: { padding: 'var(--sp-1)', borderBottom: '1px solid var(--border-weak)', display: 'flex' } },
+        h(TextField, { value: query, onChange: () => {}, placeholder: '名前で探す' })),
+      h('div', { className: 'k-scroll', style: { maxHeight: 'calc(var(--h-field) * 6)', display: 'flex', flexDirection: 'column' } },
+        rows.map((o, i) => h(Row, { key: o[0] || '*', o, act: i === act, on: o[0] === value })),
+        note && h('div', { style: { padding: 'var(--sp-2) var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' } }, note))));
+  function Demo({ init }) {
+    const [v, setV] = React.useState(init);
+    return h(Combobox, { value: v, options: opps, onChange: setV, width: 160, title: '相手' });
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } },
+      h(Case, { label: 'Closed (the same look as Select); press to open' },
+        h('div', { style: { display: 'flex', gap: 'var(--sp-2)' } },
+          h(Demo, { init: '' }), h(Demo, { init: 'morgoth' }))),
+      h('div', { style: { display: 'flex', gap: 'var(--sp-5)', flexWrap: 'wrap' } },
+        h(Case, { label: 'Open: the chosen value marked, keys on it' },
+          h(Open, { value: '', query: '', rows: opps, act: 0 })),
+        h(Case, { label: 'Typing "rh": matches in order, "all" kept on top' },
+          h(Open, { value: '', query: 'rh', rows: opps.filter((o) => !o[0] || o[1].toLowerCase().includes('rh')), act: 1 })),
+        h(Case, { label: 'Nothing matches' },
+          h(Open, { value: 'morgoth', query: 'zzz', rows: opps.filter((o) => !o[0]), act: -1, note: '見つかりません' })))));
+</script>

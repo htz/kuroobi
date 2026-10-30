@@ -1,5 +1,5 @@
 import type { Account } from './components/accounts';
-import type { BookNode, ClockView, EvalPoint, GameView, GgsSnapshot, HintView, LearnEntry, StandbyCfg, ThinkView } from './types';
+import type { BookNode, ClockView, EvalPoint, GameResult, GameView, GgsSnapshot, HintView, LearnEntry, StandbyCfg, ThinkView } from './types';
 
 const core = () => window.__TAURI__?.core;
 
@@ -128,6 +128,7 @@ export const ggsApi = {
   setAutoAccount: (server: string, login: string) => call<void>('ggs_set_auto_account', { server, login }),
   switchAccount: (server: string, login: string) => call<void>('ggs_switch_account', { server, login }),
   snapshot: () => call<GgsSnapshot>('ggs_snapshot'),
+  results: () => call<GameResult[]>('ggs_results'),
   raw: (cmd: string) => call('ggs_raw', { cmd }),
   ask: (gtype: string, time: string, opponent: string, rated: boolean) =>
     call('ggs_ask', { gtype, time, opponent, rated }),

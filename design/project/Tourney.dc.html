@@ -123,6 +123,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <sc-if value="{{isGames}}" hint-placeholder-val="{{false}}">
 <div style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-2)">
 <span style="font-size: var(--fs-6); color: var(--sub)">対局者</span>
+<!-- Both player fields are Combobox (closed it looks like a Select; open, a search field and the players by rank): a 100-player tournament is found by typing -->
 <x-import component-from-global-scope="KuroobiUI.Select" value="{{pickA}}" options="{{optsA}}" width="{{124}}" title="対局者"></x-import>
 <span style="color: var(--sub)">−</span>
 <x-import component-from-global-scope="KuroobiUI.Select" value="{{pickB}}" options="{{optsB}}" width="{{124}}" title="対局者"></x-import>

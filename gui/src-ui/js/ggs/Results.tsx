@@ -3,7 +3,7 @@ import { ggsApi } from '../api';
 import type { BoardRecord, GameResult, GgsSnapshot } from '../types';
 import { discDiff, fmtSecs, gtypeLabel } from '../ggs';
 import { t } from '../i18n';
-import { captionStyle, Divider, Drawer, KeyValue, Section, Toolbar } from '../components/layout';
+import { captionStyle, Combobox, Divider, Drawer, KeyValue, Section, Toolbar, useToolbarCompact } from '../components/layout';
 import { Button, Segmented, Select } from '../components/primitives';
 import { EvalTrend, RateChart, ResultHead, ResultRow, StoneDot, type ResultBoard, type ResultEnding } from '../components/data';
 import { askSheet } from '../AskSheet';
@@ -73,6 +73,16 @@ function ggfTrend(ggf: string, me: string): TrendPoint[] {
   return out;
 }
 
+/** The format filter: a Segmented, or a Select when the toolbar runs out of room. */
+function PoolPicker({ value, onChange }: { value: Pool; onChange: (p: Pool) => void }) {
+  const options: { value: Pool; label: string }[] = [{ value: '8r', label: t('ggs.pool.random') }, { value: '8', label: t('ggs.pool.normal') },
+                                                     { value: 'all', label: t('ggs.filter.all') }];
+  if (useToolbarCompact()) {
+    return <Select value={value} onChange={(v) => onChange(v as Pool)} options={options.map((o): [string, string] => [o.value, o.label])} />;
+  }
+  return <Segmented value={value} onChange={onChange} options={options} />;
+}
+
 /** My finished games: the rating trend or both ratings on top, the games below, the chosen one in a drawer. */
 export function Results({ snap, onKifu }: {
   snap: GgsSnapshot; onKifu: (title: string, kifu: string, archive?: string) => void;
@@ -80,15 +90,20 @@ export function Results({ snap, onKifu }: {
   const [pool, setPool] = useState<Pool>('8r');
   const [period, setPeriod] = useState<Period>('all');
   const [since, setSince] = useState(0);
+  const [opp, setOpp] = useState('');
+  const [page, setPage] = useState(0);
+  const [perPage, setPerPage] = useState(50);
   const [pick, setPick] = useState('');
   const [hover, setHover] = useState<number | null>(null);
+  const [results, setResults] = useState<GameResult[]>([]);
   const [chartRef, chartW] = useWidth();
   // In a short window the chart gives its height to the list of games.
   const short = useWindowHeight() < 700;
   const login = snap.login;
   useEffect(() => { if (login) void ggsApi.history('').catch(() => {}); }, [login]);
+  useEffect(() => { void ggsApi.results().then(setResults).catch(() => {}); }, [login, snap.results_rev]);
 
-  const known = new Set(snap.results.flatMap((r) => [r.archive, r.id].filter(Boolean)));
+  const known = new Set(results.flatMap((r) => [r.archive, r.id].filter(Boolean)));
   const fromServer: GameResult[] = (snap.history[login] ?? [])
     .filter((h) => !known.has(h.id))
     .map((h) => {
@@ -101,11 +116,23 @@ export function Results({ snap, onKifu }: {
         kifu: '', ggf: '', archive: h.id,
       } as GameResult;
     });
-  const ever = snap.results.length + fromServer.length;
-  const all = [...snap.results, ...fromServer]
-    .filter((r) => (r.at ?? 0) >= since)
+  const ever = results.length + fromServer.length;
+  const inPool = [...results, ...fromServer]
+    .filter((r) => pool === 'all' || poolOf(r.base, r.raw) === pool)
     .sort((x, y) => (y.at ?? 0) - (x.at ?? 0));
-  const rows = all.filter((r) => pool === 'all' || poolOf(r.base, r.raw) === pool);
+  const all = inPool.filter((r) => (r.at ?? 0) >= since);
+  // The opponents to pick from, by number of games within the format and the period.
+  const counts = new Map<string, number>();
+  for (const r of all) counts.set(r.opp, (counts.get(r.opp) ?? 0) + 1);
+  const oppOptions: [string, string, string][] = [
+    ['', t('results.opp_all'), t('ggs.lobby.game_count', { n: all.length })],
+    ...[...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, n]): [string, string, string] => [name, name, t('ggs.lobby.game_count', { n })]),
+  ];
+  const rows = opp ? all.filter((r) => r.opp === opp) : all;
+  const pages = Math.max(1, Math.ceil(rows.length / perPage));
+  const cur = Math.min(page, pages - 1);
+  const shown = rows.slice(cur * perPage, (cur + 1) * perPage);
   const hasRating = rows.some((r) => r.my_rating != null);
   const rated = rows.filter((r) => r.my_rating != null).reverse();
   const sel = rows.find((r) => rowKey(r) === pick) ?? null;
@@ -117,7 +144,17 @@ export function Results({ snap, onKifu }: {
   const d = decided.length - w - l;
   const avg = decided.length ? decided.reduce((a, r) => a + (r.my_diff ?? 0), 0) / decided.length : null;
   const rates = rated.map((r) => r.my_rating as number);
-  const delta = rates.length >= 2 ? rates[rates.length - 1] - rates[0] : null;
+  // Against one opponent the first-to-last difference counts everyone else's games too, so add up what each of theirs moved.
+  const moves = new Map<string, number>();
+  let prev: number | null = null;
+  for (const r of [...inPool].reverse()) {
+    if (r.my_rating == null) continue;
+    if (prev != null) moves.set(rowKey(r), r.my_rating - prev);
+    prev = r.my_rating;
+  }
+  const delta = opp
+    ? (rated.length ? rated.reduce((a, r) => a + (moves.get(rowKey(r)) ?? 0), 0) : null)
+    : rates.length >= 2 ? rates[rates.length - 1] - rates[0] : null;
   const stats: [string, string][] = [
     [t('results.rating'), rates.length ? rates[rates.length - 1].toFixed(1) : '—'],
     [t('results.change'), delta != null ? (delta > 0 ? '+' : '') + delta.toFixed(1) : '—'],
@@ -149,19 +186,29 @@ export function Results({ snap, onKifu }: {
 
   return (
     <>
-      <Toolbar>
-        <Segmented value={pool} onChange={(p) => { setPool(p); setHover(null); }}
-                   options={[{ value: '8r', label: t('ggs.pool.random') }, { value: '8', label: t('ggs.pool.normal') },
-                             { value: 'all', label: t('ggs.filter.all') }]} />
+      <Toolbar end={<>
+                 <Button disabled={cur === 0} onClick={() => setPage(cur - 1)}>{t('ggs.prev')}</Button>
+                 <span style={{ fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>
+                   {rows.length ? `${cur + 1} / ${pages}` : '0 / 0'}
+                 </span>
+                 <Button disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>{t('ggs.next')}</Button>
+                 <Select size="ctrl" value={String(perPage)} title={t('ggs.users.per_page')}
+                         options={[50, 100, 200].map((n): [string, string] => [String(n), t('players.per', { n })])}
+                         onChange={(v) => { setPerPage(+v); setPage(0); }} />
+               </>}>
+        <PoolPicker value={pool} onChange={(p) => { setPool(p); setHover(null); setPage(0); }} />
         <Divider />
         <Select value={period} width={128}
-                onChange={(v) => { setPeriod(v as Period); setSince(v === 'all' ? 0 : Date.now() / 1000 - Number(v) * 86400); }}
+                onChange={(v) => { setPeriod(v as Period); setSince(v === 'all' ? 0 : Date.now() / 1000 - Number(v) * 86400); setPage(0); }}
                 options={[['all', t('results.period_all')], ['7', t('results.period_days', { n: 7 })],
                           ['30', t('results.period_days', { n: 30 })], ['90', t('results.period_days', { n: 90 })]]} />
+        <Combobox value={opp} options={oppOptions} width={160} title={t('results.opp')}
+                  onChange={(v) => { setOpp(v); setPage(0); setHover(null); }} />
       </Toolbar>
       <Page row>
         {!ever ? <Blank title={t('ggs.no_records')} body={t('results.empty_help')} />
-          : !all.length ? <Blank title={t('results.none_in_period')} /> : (
+          : !all.length ? <Blank title={t('results.none_in_period')} />
+          : !rows.length ? <Blank title={t('results.none_matching')} /> : (
           <Sections>
             {pool === 'all' ? (
               <Section title={t('results.ratings')}>
@@ -177,7 +224,7 @@ export function Results({ snap, onKifu }: {
                 {/* Six numbers in a row; on a narrow window they wrap to a second row instead of being cut. */}
                 <div style={{ display: 'flex', flexWrap: 'wrap', marginTop: 'var(--sp-2)', borderTop: '1px solid var(--border-weak)' }}>
                   {stats.map(([label, value]) => (
-                    <div key={label} style={{ flex: '1 0 150px', minWidth: 0, height: 'var(--h-field)', display: 'flex', alignItems: 'center',
+                    <div key={label} style={{ flex: '1 0 auto', minWidth: 150, height: 'var(--h-field)', display: 'flex', alignItems: 'center',
                                               padding: '0 var(--sp-3)', borderRight: '1px solid var(--border-weak)',
                                               borderBottom: '1px solid var(--border-weak)', whiteSpace: 'nowrap' }}>
                       <span style={{ flex: 1, minWidth: 0 }}><KeyValue label={label} value={value} /></span>
@@ -189,8 +236,9 @@ export function Results({ snap, onKifu }: {
             <Section title={t('ggs.results.finished')} aside={t('ggs.lobby.game_count', { n: rows.length })} grow>
               <Table>
                 <ResultHead note rating={hasRating} boards />
-                <Rows>
-                  {rows.map((r) => (
+                {/* A new page or filter starts at the top of the list. */}
+                <Rows key={`${pool}|${period}|${opp}|${perPage}|${cur}`}>
+                  {shown.map((r) => (
                     <ResultRow key={rowKey(r)} opponent={r.opp}
                                picked={rowKey(r) === pick}
                                onHover={(on) => {

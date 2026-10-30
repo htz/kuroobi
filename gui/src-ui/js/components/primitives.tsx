@@ -98,6 +98,15 @@ export function Toggle({ checked, onChange, label, disabled }: {
   );
 }
 
+/** The closed look shared by `Select` and `Combobox`. */
+export const selectBox = (size: Size, width?: number | string): React.CSSProperties => ({
+  height: H[size], minWidth: width, maxWidth: '100%',
+  padding: PAD[size], borderRadius: R[size],
+  background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)',
+  display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: FS[size],
+  opacity: 1,
+});
+
 export function Select({ value, options, onChange, size = 'field', width, title }: {
   value: string;
   options: [string, string][];        // [value, label]
@@ -109,12 +118,8 @@ export function Select({ value, options, onChange, size = 'field', width, title 
   const label = options.find(([v]) => v === value)?.[1] ?? value;
   return (
     <span className="k-press k-input" style={{
+      ...selectBox(size, width),
       position: 'relative',            // anchors the invisible <select> laid over it
-      height: H[size], minWidth: width, maxWidth: '100%',
-      padding: PAD[size], borderRadius: R[size],
-      background: 'var(--bg)', border: '1px solid var(--border)',
-      display: 'inline-flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: FS[size],
-      opacity: 1,
     }}>
       <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
                      whiteSpace: 'nowrap' }}>{label}</span>

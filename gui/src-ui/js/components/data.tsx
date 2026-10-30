@@ -466,6 +466,9 @@ export function RateChart({ points, height, width, dates, labels, hover, onHover
 }
 
 const W_OUTCOME = 28, W_DISCS = 44, W_RATING = 60, W_WHEN = 64, W_ENDING = 72, W_BOARD = 170;
+// The board columns give way first, so the opponent column survives the narrowest window.
+const W_OPP_MIN = 80;
+const BOARD_COL: React.CSSProperties = { flex: `0 1 ${W_BOARD}px`, minWidth: 100 };
 // Table cells never wrap: a narrow column turns a label into a vertical stack of characters.
 const ONE_LINE: React.CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
 
@@ -485,13 +488,13 @@ export function ResultHead({ note, rating, boards }: {
   return (
     <TableHead pad="var(--sp-2)">
       <span style={{ width: W_OUTCOME, flex: 'none', ...ONE_LINE }}>{t('data.result.head_outcome')}</span>
-      <span style={{ flex: 1, minWidth: 0, ...ONE_LINE }}>{t('data.result.head_opponent')}</span>
+      <span style={{ flex: 1, minWidth: W_OPP_MIN, ...ONE_LINE }}>{t('data.result.head_opponent')}</span>
       {note && <span style={{ width: 'var(--w-gtype)', flex: 'none', ...ONE_LINE }}>{t('data.result.head_kind')}</span>}
       <span style={cell(W_DISCS)}>{t('data.result.head_discs')}</span>
       {boards && <>
         <span style={{ width: W_ENDING, flex: 'none', ...ONE_LINE }}>{t('data.result.head_ending')}</span>
-        <span style={{ width: W_BOARD, flex: 'none', ...ONE_LINE }}>{t('data.result.head_board', { n: 1 })}</span>
-        <span style={{ width: W_BOARD, flex: 'none', ...ONE_LINE }}>{t('data.result.head_board', { n: 2 })}</span>
+        <span style={{ ...BOARD_COL, ...ONE_LINE }}>{t('data.result.head_board', { n: 1 })}</span>
+        <span style={{ ...BOARD_COL, ...ONE_LINE }}>{t('data.result.head_board', { n: 2 })}</span>
       </>}
       {rating && <span style={cell(W_RATING)}>{t('data.result.head_rating')}</span>}
       <span style={cell(W_WHEN)}>{t('data.result.head_date')}</span>
@@ -501,7 +504,7 @@ export function ResultHead({ note, rating, boards }: {
 
 export function ResultBoardCell({ b }: { b?: ResultBoard | null }) {
   return (
-    <span style={{ width: W_BOARD, flex: 'none', display: 'flex', alignItems: 'baseline', gap: 6, ...ONE_LINE }}>
+    <span style={{ ...BOARD_COL, display: 'flex', alignItems: 'baseline', gap: 6, ...ONE_LINE }}>
       {b && b.diff != null && <>
         <span style={{ width: 28, flex: 'none', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{signedDiff(b.diff)}</span>
         {b.tag && <span style={{ color: `var(--${b.tone})`, fontSize: 'var(--fs-6)' }}>{b.tag}</span>}
@@ -536,7 +539,7 @@ export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, r
       {t(adjourned ? 'data.result.adjourned'
          : draw ? 'data.result.draw' : win ? 'data.result.win' : 'data.result.loss')}
     </span>
-    <span className="k-sel" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+    <span className="k-sel" style={{ flex: 1, minWidth: W_OPP_MIN, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
       {opponent}
     </span>
     {note && (

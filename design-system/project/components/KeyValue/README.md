@@ -9,7 +9,7 @@ Shows a label and a value on one line, with the label on the left and the value 
 - `big`: makes the value large (`fs-3`, bold, tabular numerals). For making a count stand out.
 
 ## Rules
-- Text `fs-5`, label in `sub`, value right-aligned. A normal value that does not fit on one line is truncated with `…`.
+- Text `fs-5`, label in `sub`, value right-aligned, at least `sp-2` apart. A normal value that does not fit on one line is truncated with `…`.
 
 ## Similar components
 - `TableHead` / `TableRow`: when many rows of items with the same shape are listed.

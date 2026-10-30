@@ -2006,6 +2006,16 @@ fn ggs_snapshot(app: State<App>) -> Result<ggs::Snapshot, String> {
 }
 
 #[tauri::command]
+fn ggs_results(app: State<App>) -> Result<Vec<ggs::GameResult>, String> {
+    if std::env::var("KUROOBI_GGS_DEMO").is_ok() {
+        return Ok(ggs::demo_snapshot().results.to_vec());
+    }
+    let snap = ggs_snap_arc(&app).ok_or_else(|| "err.ggs_session_not_started".to_string())?;
+    let results = snap.lock().unwrap().results.clone();
+    Ok(results.to_vec())
+}
+
+#[tauri::command]
 fn env_overrides() -> Vec<(String, String)> {
     const NAMES: &[&str] = &[
         "KUROOBI_NO_RATED",
@@ -2220,6 +2230,7 @@ fn main() {
             ggs_set_learn,
             ggs_set_standby,
             ggs_snapshot,
+            ggs_results,
             ggs_unfit,
             ggs_autoview,
             env_overrides,

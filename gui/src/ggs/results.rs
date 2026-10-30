@@ -108,7 +108,6 @@ pub(super) fn load_history() -> Vec<GameResult> {
         }
     }
     out.reverse();
-    out.truncate(500);
     out
 }
 

@@ -802,6 +802,24 @@
    "x": 2720,
    "y": 920,
    "page": "play"
+  },
+  "ResultsOpponent.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Results · Filtered by opponent",
+   "w": 1280,
+   "x": 5440,
+   "y": 0,
+   "page": "results"
+  },
+  "ResultsPick.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Results · Picking an opponent (combobox open)",
+   "w": 1280,
+   "x": 6800,
+   "y": 0,
+   "page": "results"
   }
  },
  "createdOnFiles": {
@@ -859,7 +877,7 @@
    "y": 0,
    "w": 520,
    "size": "s",
-   "text": "Results use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Results-1 See the record and rating history\n• GGS-Results-2 Open a game record\n• GGS-Results-3 Rematch on the same conditions",
+   "text": "Results use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Results-1 See the record and rating history\n• GGS-Results-2 Open a game record\n• GGS-Results-3 Rematch on the same conditions\n• ※ GGS-Results-4 Go back through every recorded game (pages; the period and an opponent combobox narrow them)",
    "page": "results"
   },
   "uc-chat-0": {
@@ -1027,7 +1045,7 @@
    "y": -260,
    "w": 240,
    "page": "results",
-   "maxW": 5360,
+   "maxW": 8160,
    "text": "Results"
   },
   "title-chat": {
@@ -1132,6 +1150,8 @@
   "ResultsDetail.dc.html",
   "ResultsAll.dc.html",
   "ResultsEmpty.dc.html",
+  "ResultsPick.dc.html",
+  "ResultsOpponent.dc.html",
   "Kifu.dc.html",
   "KifuSingle.dc.html",
   "KifuLoading.dc.html",

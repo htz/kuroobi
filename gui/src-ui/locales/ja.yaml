@@ -237,6 +237,9 @@ chat:
   empty_thread: "{name} とのやりとりはまだありません"
   find_online: "接続中の人を名前で探す"
   yesterday: "昨日"
+combobox:
+  none: "見つかりません"
+  search: "名前で探す"
 console:
   cmd:
     ask: "対局を申し込む (同期・ランダム14手・5 分)"
@@ -933,7 +936,10 @@ results:
   change: "期間の増減"
   empty_help: "終わった対局がここに残ります"
   none_in_period: "この期間の対局はありません"
+  none_matching: "条件に合う対局はありません"
   open_kifu: "棋譜を開く"
+  opp: "相手"
+  opp_all: "すべての相手"
   opp_rating: "相手のレート"
   period_all: "すべての期間"
   period_days: "直近 {n} 日"

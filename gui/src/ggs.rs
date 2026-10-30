@@ -26,6 +26,7 @@ mod td;
 mod unfit;
 
 pub use demo::demo_snapshot;
+pub use results::GameResult;
 pub use store::{
     account_password, auto_account, auto_key, clear_auto, forget_account, forget_server,
     save_server, saved_accounts, saved_servers, session_locked_by_other, set_auto, SavedAccount,
@@ -332,7 +333,11 @@ pub struct Snapshot {
     pub history: HashMap<String, Vec<HistoryRow>>,
     pub chat: VecDeque<ChatMsg>,
     pub chat_seen: u64,
-    pub results: Vec<GameResult>,
+    /// Every recorded game, newest first. Too big to send with each snapshot: the results screen
+    /// asks for it (`ggs_results`) whenever `results_rev` moves.
+    #[serde(skip)]
+    pub results: Arc<Vec<GameResult>>,
+    pub results_rev: u64,
     pub standby: StandbyCfg,
     pub standby_stats: StandbyStats,
     pub engine: EngineCfgView,
@@ -402,7 +407,7 @@ pub fn spawn(
         auto_play: true,
         open: true,
         watch_analysis: true,
-        results: load_history(),
+        results: Arc::new(load_history()),
         ..Default::default()
     }));
     let snap2 = snapshot.clone();
@@ -1352,7 +1357,8 @@ fn session(ctx: &mut Ctx, rx: &Receiver<Cmd>, login: &str, pw: &str) {
             drop(s);
             set_user(&server(), login);
             let mut s = ctx.snap.lock().unwrap();
-            s.results = load_history();
+            s.results = Arc::new(load_history());
+            s.results_rev += 1;
             // The account's folder is known only from here on.
             s.chat = keep_latest_per_thread(load_chat(login), CHAT_IN_MEMORY).into();
             s.chat_seen = load_chat_seen(login);
@@ -3333,9 +3339,10 @@ fn rating_after(ln: &str, login: &str) -> Option<f32> {
 fn record_post_rating(ctx: &mut Ctx, id: &str, after: f32) {
     let now = now_secs();
     let mut s = ctx.snap.lock().unwrap();
-    match s.results.first_mut() {
+    match Arc::make_mut(&mut s.results).first_mut() {
         Some(r) if base_id(&r.id) == id && now.saturating_sub(r.at) < 60 => {
             r.my_rating = Some(after);
+            s.results_rev += 1;
             drop(s);
             ctx.dirty = true;
         }
@@ -3421,8 +3428,8 @@ fn handle_match_end(
     };
     append_history(&result);
     let mut s = ctx.snap.lock().unwrap();
-    s.results.insert(0, result);
-    s.results.truncate(200);
+    Arc::make_mut(&mut s.results).insert(0, result);
+    s.results_rev += 1;
     s.thinking = None;
     s.standby_stats.games += 1;
     if let Some(d) = my_diff {

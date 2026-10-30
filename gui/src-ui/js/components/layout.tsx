@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { Board, BoardDefs, START_CELLS } from './board';
-import { Button, Dot, Segmented } from './primitives';
+import { Button, Dot, Segmented, selectBox, TextField } from './primitives';
 import { IconButton } from './Icons';
 import { t, useLang } from '../i18n';
 import icon from '../../assets/icon.svg?raw';
@@ -333,7 +333,7 @@ export function KeyValue({ label, value, big }: {
   const shown = typeof value === 'number' ? value.toLocaleString()
     : value === undefined ? '—' : value;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', fontSize: 'var(--fs-5)' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-5)' }}>
       <span style={{ color: 'var(--sub)' }}>{label}</span>
       <span style={{
         marginLeft: 'auto',
@@ -726,5 +726,116 @@ export function Confirm({ title, body, ok, danger, onOk, onCancel }: {
         <Button size="field" variant={danger ? 'danger' : 'primary'} onClick={onOk}>{ok}</Button>
       </>} />
     </Overlay>
+  );
+}
+
+/** A dropdown whose options are searched by typing: for name lists that keep growing. Closed it looks like `Select`. */
+export function Combobox({ value, options, onChange, size = 'field', width, title, placeholder }: {
+  value: string;
+  /** [value, label, aside]; the aside is a short note at the row's right end. A `''` value stays on top while searching. */
+  options: [string, string, string?][];
+  onChange: (v: string) => void;
+  size?: 'ctrl' | 'field';
+  width?: number;
+  title?: string;
+  placeholder?: string;
+}) {
+  const [box, setBox] = useState<{ left: number; width: number; top?: number; bottom?: number } | null>(null);
+  const [query, setQuery] = useState('');
+  const [moved, setMoved] = useState<{ query: string; at: number } | null>(null);
+  const q = query.toLowerCase();
+  const rows = options.filter(([v, l]) => v === '' || !q || l.toLowerCase().includes(q));
+  // On open the keys point at the chosen value; while searching, at the first match (none when nothing matched).
+  const start = q ? rows.findIndex(([v]) => v !== '') : Math.max(0, rows.findIndex(([v]) => v === value));
+  const act = moved && moved.query === query ? Math.min(moved.at, rows.length - 1) : start;
+  const field = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const shut = () => { setBox(null); setMoved(null); setQuery(''); };
+  const choose = (v: string | undefined) => { if (v === undefined) return; onChange(v); shut(); field.current?.focus(); };
+  const open = () => {
+    const r = field.current?.getBoundingClientRect();
+    if (!r) return;
+    const w = Math.max(r.width, 240);
+    const below = window.innerHeight - r.bottom;
+    setBox(below >= 300 || below >= r.top
+      ? { left: r.left, width: w, top: r.bottom + 4 }
+      : { left: r.left, width: w, bottom: window.innerHeight - r.top + 4 });
+  };
+  const keys = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const n = rows.length;
+      const down = e.key === 'ArrowDown';
+      const from = act < 0 ? (down ? -1 : 0) : act;
+      if (n) setMoved({ query, at: (from + (down ? 1 : -1) + n) % n });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      choose(rows[act]?.[0]);
+    }
+  };
+  // Placed on the window, so it also closes when anything around it scrolls or the window is resized.
+  useDismiss(!!box, shut, pop, field);
+  useEffect(() => {
+    if (!box) return;
+    pop.current?.querySelector('input')?.focus();
+    const away = (e: Event) => { if (!pop.current?.contains(e.target as Node)) shut(); };
+    window.addEventListener('scroll', away, true);
+    window.addEventListener('resize', shut);
+    return () => {
+      window.removeEventListener('scroll', away, true);
+      window.removeEventListener('resize', shut);
+    };
+  });
+  const label = options.find(([v]) => v === value)?.[1] ?? value;
+  return (
+    <>
+      <button ref={field} type="button" className="k-press k-input" title={title} aria-label={title}
+              aria-haspopup="listbox" aria-expanded={!!box}
+              onClick={() => (box ? shut() : open())}
+              onKeyDown={(e) => { if (!box && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); open(); } }}
+              style={{ ...selectBox(size, width), font: 'inherit', fontSize: selectBox(size).fontSize, textAlign: 'left',
+                       ...(box ? { borderColor: 'var(--accent)' } : {}) }}>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        <span style={{ marginLeft: 'auto', color: 'var(--sub)', flex: 'none' }}>▾</span>
+      </button>
+      {box && (
+        <div ref={pop} role="listbox" aria-label={title} onKeyDown={keys} style={{
+          position: 'fixed', zIndex: 60, left: box.left, width: box.width, top: box.top, bottom: box.bottom, ...popoverStyle,
+        }}>
+          <div style={{ padding: 'var(--sp-1)', borderBottom: '1px solid var(--border-weak)', display: 'flex' }}>
+            <TextField value={query} onChange={setQuery} placeholder={placeholder ?? t('combobox.search')} />
+          </div>
+          <div className="k-scroll" style={{ maxHeight: 'calc(var(--h-field) * 6)', display: 'flex', flexDirection: 'column' }}>
+            {rows.map(([v, l, aside], i) => (
+              <ComboRow key={v || '*'} label={l} aside={aside} on={v === value} act={i === act}
+                        onPick={() => choose(v)} onHover={() => i !== act && setMoved({ query, at: i })} />
+            ))}
+            {!rows.some(([v]) => v !== '') && (
+              <span style={{ padding: 'var(--sp-2) var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('combobox.none')}</span>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function ComboRow({ label, aside, on, act, onPick, onHover }: {
+  label: string; aside?: string; on: boolean; act: boolean; onPick: () => void; onHover: () => void;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (act) ref.current?.scrollIntoView({ block: 'nearest' }); }, [act]);
+  return (
+    <button ref={ref} type="button" tabIndex={-1} onClick={onPick} onMouseMove={onHover} role="option" aria-selected={on}
+            className="k-row"
+            style={{
+              width: '100%', height: 'var(--h-field)', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+              padding: '0 var(--sp-3)', border: 0, textAlign: 'left', fontSize: 'var(--fs-5)', whiteSpace: 'nowrap',
+              background: act ? 'var(--card)' : 'transparent', color: 'var(--text)', ...marked(on), fontWeight: on ? 600 : 400,
+            }}>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+      {aside && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)', fontWeight: 400, fontVariantNumeric: 'tabular-nums' }}>{aside}</span>}
+    </button>
   );
 }

@@ -186,7 +186,8 @@ pub fn demo_snapshot() -> Snapshot {
         my_rating: Some(rate),
         ..Default::default()
     })
-    .collect();
+    .collect::<Vec<_>>()
+    .into();
     s.log = vec![
         LogLine {
             seq: 0,

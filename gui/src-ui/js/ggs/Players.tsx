@@ -94,7 +94,7 @@ export function Players({ snap, onNav, onKifu }: {
               {!slice.length
                 ? <Blank title={query ? t('players.no_hit', { q: query }) : mode === 'who' ? t('ggs.users.none_online') : t('ggs.users.no_ranking')}
                          body={query && mode === 'who' ? t('players.no_hit_help') : undefined} />
-                : <Rows>
+                : <Rows key={`${mode}|${pool}|${query}|${perPage}|${cur}`}>
                     {slice.map((u, i) => (
                       <PlayerLine key={u.name} snap={snap} u={u} mode={mode} rank={cur * perPage + i + 1}
                                   picked={u.name === sel} onPick={() => setSel(u.name)} />

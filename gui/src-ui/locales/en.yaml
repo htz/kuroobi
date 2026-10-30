@@ -244,6 +244,9 @@ chat:
   empty_thread: "No messages with {name} yet"
   find_online: "Search online players"
   yesterday: "Yesterday"
+combobox:
+  none: "No match"
+  search: "Find by name"
 console:
   cmd:
     ask: "Ask for a game (synchro random 14, 5 min)"
@@ -955,7 +958,10 @@ results:
   change: "Change"
   empty_help: "Your results build up here as you play on GGS."
   none_in_period: "No games in this period"
+  none_matching: "No games match"
   open_kifu: "Open kifu"
+  opp: "Opponent"
+  opp_all: "All opponents"
   opp_rating: "Opponent rating"
   period_all: "All time"
   period_days: "{n} days"
