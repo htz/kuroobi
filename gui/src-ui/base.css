@@ -142,6 +142,8 @@ button:disabled, button[aria-disabled="true"] { cursor:default; }
 .k-drag { -webkit-app-region:drag; }
 
 .k-scroll { overflow-y:auto; overscroll-behavior:contain; }
+/* A flex-column scroller otherwise squeezes fixed-height rows to fit instead of scrolling. */
+.k-scroll > * { flex-shrink:0; }
 .k-scroll::-webkit-scrollbar { width:9px; height:9px; }
 .k-scroll::-webkit-scrollbar-thumb { background:var(--border); border-radius:9px; border:2px solid transparent; background-clip:content-box; }
 .k-scroll::-webkit-scrollbar-track { background:transparent; }
