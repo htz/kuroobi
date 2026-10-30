@@ -819,7 +819,14 @@ impl NnueSearch {
         deadline: Option<std::time::Instant>,
     ) -> (Option<Position>, f32, u32) {
         if b.movable() == 0 {
-            return (None, f32::NAN, 0);
+            // The side to move passes; the game goes on unless the opponent cannot move either.
+            let mut passed = *b;
+            passed.pass();
+            if passed.movable() == 0 {
+                return (None, final_value(b), 0);
+            }
+            let (_, v, reached) = self.best_move_deadline(&passed, depth, deadline);
+            return (None, -v, reached);
         }
         let watcher = deadline.and_then(|dl| Some(watch_deadline(dl, self.stop.clone()?)));
         let r = self.iterate(b, depth, deadline);

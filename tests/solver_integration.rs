@@ -124,3 +124,47 @@ fn solver_modes_are_consistent() {
         );
     }
 }
+
+/// White to move with b1, c1 and h8 empty; after h8 black cannot move and white plays on.
+fn black_must_pass() -> Board {
+    let rows = [
+        "O--OOOOO", "XXXXXOXX", "XXOXOXXX", "XOXOXXOX", "OOOXOXOX", "OXXXXOXX", "OXXXXXXX",
+        "XXXXXXX-",
+    ];
+    let mut b = Board::from_string(&(rows.concat() + " O")).unwrap();
+    b.make_move(Position::from_kifu("h8").unwrap()).unwrap();
+    b
+}
+
+#[test]
+fn solver_passes_for_a_side_without_moves() {
+    let board = black_must_pass();
+    assert_eq!(board.movable(), 0);
+    let expected = negamax(&board, false);
+    assert_eq!(expected, -2);
+    let mut solver = Solver::new(16);
+    assert_eq!(solver.solve(EndSolverMode::Perfect, &board).value, expected);
+    assert!(solver.solve(EndSolverMode::WinLossDraw, &board).value < 0);
+    assert!(solver.solve(EndSolverMode::DrawLoss, &board).value < 0);
+    assert!(solver.solve(EndSolverMode::WinDraw, &board).value <= 0);
+
+    let mut over = board;
+    over.pass();
+    for p in ["b1", "c1"] {
+        if over.check(Position::from_kifu(p).unwrap()) {
+            over.make_move(Position::from_kifu(p).unwrap()).unwrap();
+        }
+    }
+    while !over.is_game_over() {
+        let m = over.movable();
+        if m == 0 {
+            over.pass();
+            continue;
+        }
+        over.make_move_bits(Position::from_index(m.trailing_zeros()).unwrap());
+    }
+    assert_eq!(
+        solver.solve(EndSolverMode::Perfect, &over).value,
+        over.score()
+    );
+}

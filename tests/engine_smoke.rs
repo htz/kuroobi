@@ -221,3 +221,40 @@ fn the_deadline_cuts_the_endgame_solver() {
         took.as_secs_f32()
     );
 }
+
+/// h8 leaves black without a move: both the midgame pass (depth 1) and the solved one must value it, not report 0.
+#[test]
+#[ignore = "requires real files in weights/ (not in git)"]
+fn a_move_that_makes_the_opponent_pass_is_valued() {
+    let rows = [
+        "O--OOOOO", "XXXXXOXX", "XXOXOXXX", "XOXOXXOX", "OOOXOXOX", "OXXXXOXX", "OXXXXXXX",
+        "XXXXXXX-",
+    ];
+    let board = Board::from_string(&(rows.concat() + " O")).unwrap();
+    let h8 = Position::from_kifu("h8").unwrap();
+    let mut engine = Engine::new(EngineConfig {
+        threads: 1,
+        use_book: false,
+        ..Default::default()
+    })
+    .expect("engine init");
+    let mut by_depth = Vec::new();
+    engine.analyze_deepening(&board, 1, |d, pass, _| {
+        let h = pass.iter().find(|(p, _)| *p == h8).expect("h8 is legal").1;
+        by_depth.push((d, h.value, h.exact));
+        d < 3
+    });
+    let (_, midgame, exact) = by_depth[0];
+    assert!(!exact);
+    assert!(
+        midgame > 0.0,
+        "depth 1 must see white playing on after the pass, got {midgame}"
+    );
+    let (_, solved, exact) = *by_depth.last().unwrap();
+    assert!(exact);
+    assert_eq!(solved, 2.0);
+
+    let mut after = board;
+    after.make_move(h8).unwrap();
+    assert_eq!(engine.eval_position(&after, 12).value, -2.0);
+}

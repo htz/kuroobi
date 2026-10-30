@@ -1219,10 +1219,26 @@ impl Solver {
     ) -> EndSolverResult {
         self.warm_rung = None;
         if !board.check_all() {
+            // The side to move passes; the game goes on unless the opponent cannot move either.
+            let mut passed = *board;
+            passed.pass();
+            if !passed.check_all() {
+                return EndSolverResult {
+                    best_move: None,
+                    value: final_score(board),
+                    nodes: 0,
+                };
+            }
+            let mirrored = match mode {
+                EndSolverMode::WinDraw => EndSolverMode::DrawLoss,
+                EndSolverMode::DrawLoss => EndSolverMode::WinDraw,
+                m => m,
+            };
+            let r = self.solve_with_eval(mirrored, &passed, ev);
             return EndSolverResult {
                 best_move: None,
-                value: 0,
-                nodes: 0,
+                value: -r.value,
+                nodes: r.nodes,
             };
         }
 
