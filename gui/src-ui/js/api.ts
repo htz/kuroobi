@@ -60,12 +60,13 @@ export const api = {
   analyzeLive: () => call<void>('analyze_live'),
   evalAt: (n: number, depth: number) =>
     call<EvalPoint>('eval_at', { n, depth }),
-  saveKifu: (black: string, white: string) =>
-    call<string | null>('save_kifu', { black, white }),
-  loadKifu: () => call<GameView | null>('load_kifu'),
+  exportKifu: (format: ExportFormat, black: string, white: string) =>
+    call<string>('export_kifu', { format, black, white }),
+  saveKifuText: (text: string, ggf: boolean) => call<string | null>('save_kifu_text', { text, ggf }),
+  readKifuFile: () => call<{ name: string; text: string } | null>('read_kifu_file'),
   loadKifuText: (text: string) => call<GameView>('load_kifu_text', { text }),
   loadBoard: (board: string) => call<GameView>('load_board', { board }),
-  previewKifu: (text: string) => call<KifuFrame[]>('preview_kifu', { text }),
+  previewKifu: (text: string) => call<KifuPreview>('preview_kifu', { text }),
   localThreads: () => call<ThreadsView>('local_threads', {}),
   setLocalThreads: (n: number | null) => call('set_local_threads', { n }),
   hashSizes: () => call<HashView>('hash_sizes', {}),
@@ -74,6 +75,14 @@ export const api = {
   setBackendStrings: (strings: Record<string, string>) =>
     call('set_backend_strings', { strings }),
 };
+
+export type ExportFormat = 'moves' | 'ggf' | 'board_moves' | 'board';
+
+/** What a pasted or opened text was read as, and the board after every move of it. */
+export interface KifuPreview {
+  format: 'moves' | 'board' | 'board_moves' | 'ggf' | 'quest';
+  frames: KifuFrame[];
+}
 
 export interface KifuFrame {
   cells: number[];

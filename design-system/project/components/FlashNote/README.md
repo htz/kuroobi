@@ -15,4 +15,4 @@ A short word that appears briefly right beside an action ("Copied", "Could not s
 ## Similar components
 - `Toasts`: notices shown for 5 seconds at the bottom right of the screen.
 
-Used in: `gui/src-ui/js/KifuViewer.tsx`, `ggs/Console.tsx`.
+Used in: `gui/src-ui/js/KifuViewer.tsx`, `ggs/Console.tsx`, `Dialogs.tsx` (game record export).

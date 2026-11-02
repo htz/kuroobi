@@ -56,7 +56,7 @@ export function LearnLog({ items: all, onOpen, onUndo, onBook }: {
     if (!text) return;
     let alive = true;
     void api.previewKifu(text)
-      .then((f) => { if (alive) setFrames({ text, f }); })
+      .then(({ frames: f }) => { if (alive) setFrames({ text, f }); })
       .catch(() => { if (alive) setFrames({ text, f: [] }); });
     return () => { alive = false; };
   }, [text]);

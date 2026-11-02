@@ -227,11 +227,11 @@ body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--
 <x-import component-from-global-scope="KuroobiUI.KifuTable" moves="{{kifu}}" current="{{cursor}}" decimals="{{one}}"></x-import>
 </div>
 <div style="flex: none; display: flex; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--border-weak)">
-<!-- Same layout for game and study. Edit board (⌘E): rebuild the position from the current board and start a game or study from it (→ the Edit board artboard). Disabled during a game, analysis or thinking -->
-<x-import component-from-global-scope="KuroobiUI.Button" title="⌘O">貼り付け</x-import>
-<x-import component-from-global-scope="KuroobiUI.Button">読込</x-import>
+<!-- Same layout for game and study. "Load…" (⌘O) opens the load dialog (paste or a file, previewed before it replaces the record). "Export…" (⌘S) opens the export dialog (the record as text in a chosen format, to copy or save).
+     Edit board (⌘E): rebuild the position from the current board and start a game or study from it (→ the Edit board artboard). Disabled during a game, analysis or thinking -->
+<x-import component-from-global-scope="KuroobiUI.Button" title="⌘O">読み込む…</x-import>
 <x-import component-from-global-scope="KuroobiUI.Button" title="⌘E" disabled="{{editOff}}">盤面編集</x-import>
-<x-import component-from-global-scope="KuroobiUI.Button" title="⌘S">保存</x-import>
+<x-import component-from-global-scope="KuroobiUI.Button" title="⌘S">書き出す…</x-import>
 </div>
 </x-import>
 </sc-if>
@@ -266,17 +266,17 @@ body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--
 
 <!-- New game confirmation: shown only when the board has at least one move (the record is shared with study, so it is cleared from both) -->
 <sc-if value="{{confirmNew}}" hint-placeholder-val="{{false}}">
-<x-import component-from-global-scope="KuroobiUI.Confirm" title="新規対局にしますか？" body="今の棋譜は消えます (検討の棋譜も同じものです)。残すときは先に「保存」してください。" ok="新規対局" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Confirm" title="新規対局にしますか？" body="今の棋譜は消えます (検討の棋譜も同じものです)。残すときは先に「書き出す…」で書き出してください。" ok="新規対局" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
 </sc-if>
 
 <!-- Open in study confirmation: shown only when the current board has a record (game and study share one record, so it is cleared from both). Same for "Open in study" from the book, learning log and record viewer -->
 <sc-if value="{{confirmOpen}}" hint-placeholder-val="{{false}}">
-<x-import component-from-global-scope="KuroobiUI.Confirm" title="棋譜を置き換えますか？" body="今の棋譜 (38 手) は消えます (対局の棋譜も同じものです)。残すときは先に「保存」してください。" ok="置き換える" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Confirm" title="棋譜を置き換えますか？" body="今の棋譜 (38 手) は消えます (対局の棋譜も同じものです)。残すときは先に「書き出す…」で書き出してください。" ok="置き換える" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
 </sc-if>
 
 <!-- Branch confirmation: shown only when playing a move that differs from the record mid-game. The record's own move just advances one move without asking -->
 <sc-if value="{{confirmBranch}}" hint-placeholder-val="{{false}}">
-<x-import component-from-global-scope="KuroobiUI.Confirm" title="別の手を打ちますか？" body="32 手目から先の棋譜 (8 手) と分析は消えます。残すときは先に「保存」してください。" ok="打つ" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Confirm" title="別の手を打ちますか？" body="32 手目から先の棋譜 (8 手) と分析は消えます。残すときは先に「書き出す…」で書き出してください。" ok="打つ" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
 </sc-if>
 
 <!-- Learning log "Undo": restores the book values that game wrote back to their pre-import state (destructive, so OK is danger) -->
@@ -284,18 +284,25 @@ body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--
 <x-import component-from-global-scope="KuroobiUI.Confirm" title="この対局の取り込みを取り消します" body="この対局で書き戻した定石の値を、取り込む前に戻します。ほかの対局で書き戻したぶんは残ります。" ok="取り消す" danger="{{yes}}" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
 </sc-if>
 
-<!-- Load a game record: preview below the paste field (mini board and disc counts). Before pasting, a dashed frame marks the mini board's place -->
+<!-- Load a game record: one dialog for pasting and for files. "From a file…" puts the file's text into the field (it does not load it), so both are previewed the same way before "Load".
+     No subtitle: the formats it reads are the field's placeholder, seen while the field is empty.
+     Preview: the format it was read as (Tag) and, from a file, the file name; a board at the move picked with MoveScrub (starts at the last move), its disc counts, side to move and "move n of m".
+     "Load" replaces the record (a board with a record asks first) and opens it at the previewed move. Before anything is pasted, a dashed frame marks the board's place -->
 <sc-if value="{{pasteOpen}}" hint-placeholder-val="{{false}}">
 <x-import component-from-global-scope="KuroobiUI.Overlay" on-close="{{noop}}">
-<x-import component-from-global-scope="KuroobiUI.Modal" title="棋譜を読み込む" sub="棋譜 (f5d6…)・盤面・盤面＋棋譜・GGF・オセロクエストのどれでも、形式を見分けて読みます。" width="var(--w-modal-wide)" on-close="{{noop}}" actions="{{pasteActions}}">
+<x-import component-from-global-scope="KuroobiUI.Modal" title="棋譜を読み込む" width="var(--w-modal-wide)" on-close="{{noop}}" actions="{{pasteActions}}">
 <div style="display: flex; flex-direction: column; gap: var(--sp-4)">
-<x-import component-from-global-scope="KuroobiUI.TextArea" mono="{{yes}}" rows="{{n5}}" value="{{pasteText}}"></x-import>
-<div style="display: flex; gap: var(--sp-4); align-items: center; min-height: 96px">
-<div style="width: 96px; height: 96px; flex: none; border-radius: var(--r-2); overflow: hidden; border: {{peekBorder}}">
+<x-import component-from-global-scope="KuroobiUI.TextArea" mono="{{yes}}" rows="{{n5}}" value="{{pasteText}}" placeholder="棋譜 (f5d6…)・盤面・盤面＋棋譜・GGF・オセロクエストを見分けて読みます"></x-import>
+<div style="display: flex; gap: var(--sp-4); align-items: center; min-height: 160px">
+<div style="width: 160px; height: 160px; flex: none; border-radius: var(--r-2); overflow: hidden; border: {{peekBorder}}">
 <sc-if value="{{pasted}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Board" cells="{{peek.cells}}" last="{{peek.last}}" coords="{{no}}" grain="{{no}}"></x-import></sc-if>
 </div>
-<div style="display: flex; flex-direction: column; gap: var(--sp-0); font-size: var(--fs-5)">
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-5)">
+<div style="display: flex; align-items: center; gap: var(--sp-2)">
 <x-import component-from-global-scope="KuroobiUI.Caption">下読み</x-import>
+<sc-if value="{{pasted}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Tag">{{peek.format}}</x-import></sc-if>
+<sc-if value="{{fromFile}}" hint-placeholder-val="{{false}}"><span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-6); color: var(--sub)">{{fileName}}</span></sc-if>
+</div>
 <sc-if value="{{pasted}}" hint-placeholder-val="{{false}}">
 <div style="display: flex; align-items: center; gap: var(--sp-2h)">
 <span style="display: flex; align-items: center; gap: var(--sp-0)"><x-import component-from-global-scope="KuroobiUI.StoneDot" color="b" size="{{n13}}"></x-import><b style="font-weight: 600">{{peek.black}}</b></span>
@@ -304,16 +311,33 @@ body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--
 </div>
 <span style="color: var(--sub)">{{peek.summary}}</span>
 </sc-if>
-<sc-if value="{{notPasted}}" hint-placeholder-val="{{true}}"><span style="color: var(--sub)">貼り付けると、ここに読み取り結果が出ます。</span></sc-if>
+<sc-if value="{{notPasted}}" hint-placeholder-val="{{true}}"><span style="color: var(--sub)">貼り付けるかファイルを選ぶと、ここに読み取り結果が出ます。</span></sc-if>
 </div>
 </div>
+<sc-if value="{{pasted}}" hint-placeholder-val="{{false}}">
+<div style="margin: 0 calc(-1 * var(--sp-4))"><x-import component-from-global-scope="KuroobiUI.MoveScrub" plies="{{peekPlies}}" cursor="{{peekAt}}" on-seek="{{noop}}"></x-import></div>
+</sc-if>
+</div>
+</x-import>
+</x-import>
+</sc-if>
+
+<!-- Export a game record: pick a format and the record appears as text, ready to copy (most records are pasted somewhere, not kept as files). "Save to a file…" opens the save dialog with a name for that format (.ggf for GGF, .txt otherwise).
+     Formats: "Moves" (f5d6…), "GGF" (with players, date and result), "Board + moves" (the starting position then the moves; for records that start from an edited position), "Board" (the position on the board now, 64 squares and the side to move).
+     The field is read-only. "Copy" shows "Copied" beside the buttons -->
+<sc-if value="{{exportOpen}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Overlay" on-close="{{noop}}">
+<x-import component-from-global-scope="KuroobiUI.Modal" title="棋譜を書き出す" width="var(--w-modal-wide)" on-close="{{noop}}" actions="{{exportActions}}">
+<div style="display: flex; flex-direction: column; gap: var(--sp-3)">
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="{{exportFmt}}" options="{{exportOpts}}" fill="{{yes}}"></x-import>
+<x-import component-from-global-scope="KuroobiUI.TextArea" mono="{{yes}}" rows="{{n5}}" value="{{exportText}}"></x-import>
 </div>
 </x-import>
 </x-import>
 </sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"screen":{"editor":"select","options":["play","study","book","log"],"default":"play"},"state":{"editor":"select","options":["normal","empty","playing","confirm-new","clock","clock-custom","clock-playing","confirm-open","confirm-branch","paste","paste-filled","settings-custom","analyzing","nobook","confirm-undo"],"default":"normal"},"$preview":{"width":1280,"height":800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"screen":{"editor":"select","options":["play","study","book","log"],"default":"play"},"state":{"editor":"select","options":["normal","empty","playing","confirm-new","clock","clock-custom","clock-playing","confirm-open","confirm-branch","paste","paste-filled","paste-file","export","export-ggf","settings-custom","analyzing","nobook","confirm-undo"],"default":"normal"},"$preview":{"width":1280,"height":800}}'>
 class Component extends DCLogic {
   renderVals() {
     const ui = window.KuroobiUI;
@@ -351,7 +375,7 @@ class Component extends DCLogic {
     const screen = this.props.screen ?? 'play';
     const state = this.props.state ?? 'normal';
     const h = window.React ? window.React.createElement : null;
-    const empty = state === 'empty' || (screen === 'study' && (state === 'paste' || state === 'paste-filled'))
+    const empty = state === 'empty' || (screen === 'study' && (state === 'paste' || state === 'paste-filled' || state === 'paste-file'))
       || (screen === 'play' && (state === 'clock' || state === 'clock-custom'));
     const byClock = state === 'clock' || state === 'clock-custom' || state === 'clock-playing';
     const plies = empty ? 0 : (screen === 'play' ? 24 : 39);
@@ -386,7 +410,15 @@ class Component extends DCLogic {
       ['c5', '-1.4', '233', false, 0], ['e3', '-2.0', '58', false, 0],
     ];
     const peekPlies = LINE.length / 2;
-    const peekPos = play(LINE);
+    const fromFile = state === 'paste-file';
+    const pasted = state === 'paste-filled' || fromFile;
+    // From a file the slider has been moved back to move 24; pasted text opens at the last move
+    const peekAt = fromFile ? 24 : peekPlies;
+    const peekPos = play(LINE.slice(0, peekAt * 2));
+    const GGF = '(;GM[Othello]PC[KUROOBI]DT[2026-11-02 06:12:40 GMT]PB[自分]PW[KUROOBI]RE[?]TI[0]TY[8]BO[8 ---------------------------O*------*O--------------------------- *]'
+      + LINE.match(/../g).map((m, i) => (i % 2 ? 'W[' : 'B[') + m.toUpperCase() + ']').join('') + ';)';
+    const exportFmt = state === 'export-ggf' ? 'ggf' : 'moves';
+    const h2 = h && ui ? h : null;
     return {
       yes: true, no: false, one: 1, n5: 5, n13: 13, n200: 200,
       noop: () => {},
@@ -439,17 +471,29 @@ class Component extends DCLogic {
       confirmOpen: state === 'confirm-open',
       confirmBranch: screen === 'study' && state === 'confirm-branch',
       confirmUndo: screen === 'log' && state === 'confirm-undo',
-      pasteOpen: state === 'paste' || state === 'paste-filled',
+      pasteOpen: state === 'paste' || state === 'paste-filled' || state === 'paste-file',
       // DS Modal actions: "From a file…" on the left, "Cancel" and "Load" on the right (disabled until parseable)
-      pasteActions: ui && window.React ? window.React.createElement(window.React.Fragment, null,
-        window.React.createElement(ui.Button, { size: 'field' }, 'ファイルから…'),
-        window.React.createElement('span', { style: { marginLeft: 'auto' } }),
-        window.React.createElement(ui.Button, { size: 'field' }, 'キャンセル'),
-        window.React.createElement(ui.Button, { size: 'field', variant: 'primary', disabled: state !== 'paste-filled' }, '読み込む')) : null,
-      pasted: state === 'paste-filled', notPasted: state !== 'paste-filled',
-      pasteText: state === 'paste-filled' ? LINE : '',
-      peekBorder: state === 'paste-filled' ? 'none' : '1px dashed var(--border)',
-      peek: { ...peekPos, summary: peekPlies + ' 手 ・ ' + (peekPos.black + peekPos.white === 64 ? '終局図' : '最後の局面') },
+      pasteActions: h2 ? h2(window.React.Fragment, null,
+        h2(ui.Button, { size: 'field' }, 'ファイルから…'),
+        h2('span', { style: { marginLeft: 'auto' } }),
+        h2(ui.Button, { size: 'field' }, 'キャンセル'),
+        h2(ui.Button, { size: 'field', variant: 'primary', disabled: !pasted }, '読み込む')) : null,
+      pasted, notPasted: !pasted, fromFile, fileName: 'kuroobi_game.ggf',
+      pasteText: fromFile ? GGF : pasted ? LINE : '',
+      peekBorder: pasted ? 'none' : '1px dashed var(--border)',
+      peekPlies, peekAt,
+      peek: { ...peekPos, format: fromFile ? 'GGF' : '棋譜',
+              summary: peekPlies + ' 手中 ' + peekAt + ' 手目 ・ ' + (peekAt === peekPlies && peekPos.black + peekPos.white === 64 ? '終局' : (peekPos.turn === 'b' ? '黒番' : '白番')) },
+      exportOpen: state === 'export' || state === 'export-ggf',
+      exportFmt,
+      exportOpts: [{ value: 'moves', label: '棋譜' }, { value: 'ggf', label: 'GGF' }, { value: 'board_moves', label: '盤面＋棋譜' }, { value: 'board', label: '盤面' }],
+      exportText: exportFmt === 'ggf' ? GGF : LINE,
+      // "Save to a file…" on the left with the copy note beside it, "Close" and "Copy" (primary) on the right
+      exportActions: h2 ? h2(window.React.Fragment, null,
+        h2(ui.Button, { size: 'field' }, 'ファイルに保存…'),
+        h2('span', { style: { flex: 1, paddingLeft: 'var(--sp-3)', fontSize: 'var(--fs-6)', color: 'var(--sub)' } }, state === 'export' ? 'コピーしました' : ''),
+        h2(ui.Button, { size: 'field' }, '閉じる'),
+        h2(ui.Button, { size: 'field', variant: 'primary' }, 'コピー')) : null,
       bookTabs: [{ value: 'book', label: '定石' }, { value: 'log', label: '学習ログ' }],
       bookTab: screen === 'log' ? 'log' : 'book',
       treeCols: [{ head: '手順' }, { head: '評価', w: 44, right: true }, { head: '出現', w: 58, right: true }],

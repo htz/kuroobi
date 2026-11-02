@@ -1,18 +1,28 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { api, emitApp, onApp, type HashView, type KifuFrame, type ThreadsView } from './api';
+import { api, emitApp, onApp, type ExportFormat, type HashView, type KifuPreview, type ThreadsView } from './api';
 import { TATAMI, type Prefs, type Theme } from './prefs';
 import { t, useLang, tErr } from './i18n';
-import { Caption, Confirm, Modal, Overlay, Section } from './components/layout';
+import { Caption, Confirm, FlashNote, Modal, Overlay, Section, useFlash } from './components/layout';
 import { Button, Segmented, Select, TextArea, TextField, Toggle } from './components/primitives';
 import { Board } from './components/board';
 import { markApplied } from './applied';
-import { StoneDot } from './components/data';
+import { MoveScrub, StoneDot } from './components/data';
+import { Tag } from './components/ggs';
 
-export function PasteKifu({ onLoad, onFile, onCancel }: {
-  onLoad: (text: string) => void; onFile: () => void; onCancel: () => void;
+const FORMAT_KEY: Record<KifuPreview['format'], string> = {
+  moves: 'dialog.kifu.format.moves', board: 'dialog.kifu.format.board', board_moves: 'dialog.kifu.format.board_moves',
+  ggf: 'dialog.kifu.format.ggf', quest: 'dialog.kifu.format.quest',
+};
+
+/** Pasted text or a file's text, previewed (format, board at a move picked with the slider) before it loads. */
+export function LoadKifu({ onLoad, onCancel }: {
+  onLoad: (text: string, ply: number) => void; onCancel: () => void;
 }) {
   const [text, setText] = useState('');
-  const [peek, setPeek] = useState<{ frames: KifuFrame[]; err: string } | null>(null);
+  const [file, setFile] = useState('');
+  const [peek, setPeek] = useState<{ prev: KifuPreview | null; err: string } | null>(null);
+  const [at, setAt] = useState<number | null>(null);
+  const [fileErr, setFileErr] = useState('');
   useEffect(() => {
     const src = text.trim();
     let alive = true;
@@ -22,63 +32,132 @@ export function PasteKifu({ onLoad, onFile, onCancel }: {
     }
     const id = setTimeout(() => {
       void api.previewKifu(src)
-        .then((frames) => { if (alive) setPeek({ frames, err: '' }); })
-        .catch((e) => { if (alive) setPeek({ frames: [], err: tErr(e) }); });
+        .then((prev) => { if (alive) { setPeek({ prev, err: '' }); setAt(null); } })
+        .catch((e) => { if (alive) setPeek({ prev: null, err: tErr(e) }); });
     }, 250);
     return () => { alive = false; clearTimeout(id); };
   }, [text]);
 
+  const pick = async () => {
+    try {
+      const got = await api.readKifuFile();
+      if (!got) return;   // closed without choosing
+      setText(got.text);
+      setFile(got.name);
+      setFileErr('');
+    } catch (e) { setFileErr(tErr(e)); }
+  };
+
   // A board alone (one frame) loads too: text with neither board nor moves comes back as an error.
-  const ok = !!peek && !peek.err && peek.frames.length > 0;
-  const last = ok ? peek!.frames[peek!.frames.length - 1] : null;
+  const frames = peek?.prev?.frames ?? [];
+  const ok = !peek?.err && frames.length > 0;
+  const plies = Math.max(0, frames.length - 1);
+  const ply = at ?? plies;
+  const cur = ok ? frames[ply] : null;
+  const err = fileErr || peek?.err;
+  const summary = !cur ? '' : frames.length === 1
+    ? t('dialog.kifu.summary_board', { side: t(`app.color.${cur.turn}`) })
+    : t('dialog.kifu.summary_at', { n: ply, m: plies }) + ' · ' + (ply === plies && cur.black + cur.white === 64
+      ? t('dialog.kifu.game_over') : t('dialog.kifu.to_move', { side: t(`app.color.${cur.turn}`) }));
   return (
     <Overlay onClose={onCancel}>
       <Modal title={t('dialog.kifu.title')} width="var(--w-modal-wide)" onClose={onCancel}
-             sub={t('dialog.kifu.sub')}
              actions={<>
-               <Button size="field" onClick={onFile}>{t('dialog.kifu.from_file')}</Button>
+               <Button size="field" onClick={() => void pick()}>{t('dialog.kifu.from_file')}</Button>
                <span style={{ marginLeft: 'auto' }} />
                <Button size="field" onClick={onCancel}>{t('dialog.cancel')}</Button>
                <Button size="field" variant="primary" disabled={!ok}
-                       onClick={() => onLoad(text)}>{t('dialog.kifu.load')}</Button>
+                       onClick={() => onLoad(text, ply)}>{t('dialog.kifu.load')}</Button>
              </>}>
-        <TextArea mono rows={5} value={text} onChange={setText} />
-        <div style={{ display: 'flex', gap: 'var(--sp-4)', alignItems: 'center', minHeight: 96 }}>
+        <TextArea mono rows={5} value={text} placeholder={t('dialog.kifu.placeholder')}
+                  onChange={(v) => { setText(v); setFile(''); setFileErr(''); }} />
+        <div style={{ display: 'flex', gap: 'var(--sp-4)', alignItems: 'center', minHeight: 160 }}>
           <div style={{
-            width: 96, height: 96, flex: 'none',
+            width: 160, height: 160, flex: 'none',
             borderRadius: 'var(--r-2)', overflow: 'hidden',
             // Until something is pasted the slot shows as a slot, not as a hole in the layout.
-            border: last ? 'none' : '1px dashed var(--border)',
+            border: cur ? 'none' : '1px dashed var(--border)',
           }}>
-            {last && <Board cells={last.cells as (0 | 1 | 2)[]} last={last.last} coords={false} grain={false} />}
+            {cur && <Board cells={cur.cells as (0 | 1 | 2)[]} last={cur.last} coords={false} grain={false} />}
           </div>
           <div style={{
-            display: 'flex', flexDirection: 'column', gap: 'var(--sp-0)',
-            fontSize: 'var(--fs-5)', color: peek?.err ? 'var(--bad)' : 'var(--text)',
+            flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)',
+            fontSize: 'var(--fs-5)', color: err ? 'var(--bad)' : 'var(--text)',
           }}>
-            <Caption>{t('dialog.kifu.preview')}</Caption>
-            {!peek && <span style={{ color: 'var(--sub)' }}>{t('dialog.kifu.preview_hint')}</span>}
-            {peek?.err && <span>{peek.err}</span>}
-            {last && <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+              <Caption>{t('dialog.kifu.preview')}</Caption>
+              {ok && peek?.prev && <Tag>{t(FORMAT_KEY[peek.prev.format])}</Tag>}
+              {file && <span style={{
+                minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                fontSize: 'var(--fs-6)', color: 'var(--sub)',
+              }}>{file}</span>}
+            </div>
+            {!peek && !err && <span style={{ color: 'var(--sub)' }}>{t('dialog.kifu.preview_hint')}</span>}
+            {err && <span>{err}</span>}
+            {cur && <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2h)' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)' }}>
-                  <StoneDot color="b" size={13} /><b style={{ fontWeight: 600 }}>{last.black}</b>
+                  <StoneDot color="b" size={13} /><b style={{ fontWeight: 600 }}>{cur.black}</b>
                 </span>
                 <span style={{ color: 'var(--sub)' }}>—</span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)' }}>
-                  <b style={{ fontWeight: 600 }}>{last.white}</b><StoneDot color="w" size={13} />
+                  <b style={{ fontWeight: 600 }}>{cur.white}</b><StoneDot color="w" size={13} />
                 </span>
               </div>
-              <span style={{ color: 'var(--sub)' }}>
-                {peek!.frames.length === 1
-                  ? t('dialog.kifu.summary_board', { side: t(`app.color.${last.turn}`) })
-                  : t(last.black + last.white === 64
-                    ? 'dialog.kifu.summary_final' : 'dialog.kifu.summary_last',
-                     { n: peek!.frames.length - 1 })}
-              </span>
+              <span style={{ color: 'var(--sub)' }}>{summary}</span>
             </>}
           </div>
         </div>
+        {ok && plies > 0 && (
+          <div style={{ margin: '0 calc(-1 * var(--sp-4))' }}>
+            <MoveScrub plies={plies} cursor={ply} onSeek={setAt} />
+          </div>
+        )}
+      </Modal>
+    </Overlay>
+  );
+}
+
+/** The record as text in a chosen format, to copy or save to a file. */
+export function ExportKifu({ format, onFormat, names, onClose }: {
+  format: ExportFormat; onFormat: (f: ExportFormat) => void; names: [string, string]; onClose: () => void;
+}) {
+  const [text, setText] = useState('');
+  const [note, say] = useFlash();
+  const [black, white] = names;
+  useEffect(() => {
+    let alive = true;
+    void api.exportKifu(format, black, white)
+      .then((s) => { if (alive) setText(s); })
+      .catch((e) => { if (alive) { setText(''); say(tErr(e), true); } });
+    return () => { alive = false; };
+  }, [format, black, white, say]);
+  const opts: { value: ExportFormat; label: string }[] = [
+    { value: 'moves', label: t('dialog.export.moves') },
+    { value: 'ggf', label: t('dialog.export.ggf') },
+    { value: 'board_moves', label: t('dialog.export.board_moves') },
+    { value: 'board', label: t('dialog.export.board') },
+  ];
+  return (
+    <Overlay onClose={onClose}>
+      <Modal title={t('dialog.export.title')} width="var(--w-modal-wide)" onClose={onClose}
+             actions={<>
+               <Button size="field" disabled={!text} onClick={() => {
+                 void api.saveKifuText(text, format === 'ggf')
+                   .then((path) => { if (path) say(t('dialog.export.saved', { path })); })
+                   .catch((e) => say(tErr(e), true));
+               }}>{t('dialog.export.save')}</Button>
+               <span style={{ flex: 1, minWidth: 0, display: 'flex', paddingLeft: 'var(--sp-3)' }}><FlashNote note={note} /></span>
+               <Button size="field" onClick={onClose}>{t('dialog.close')}</Button>
+               <Button size="field" variant="primary" disabled={!text} onClick={() => {
+                 void navigator.clipboard.writeText(text)
+                   .then(() => say(t('dialog.export.copied')))
+                   .catch(() => say(t('dialog.export.copy_failed'), true));
+               }}>{t('dialog.export.copy')}</Button>
+             </>}>
+        <Segmented value={format} options={opts} fill onChange={(v) => onFormat(v as ExportFormat)} />
+        {/* Read-only: the text is what the format makes of the record, so typing into it is dropped. */}
+        <TextArea mono rows={5} value={text} onChange={() => {}} />
       </Modal>
     </Overlay>
   );

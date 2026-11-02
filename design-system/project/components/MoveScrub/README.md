@@ -18,4 +18,4 @@ Picks which move of a game record to view, with a slider knob with tick marks an
 ## Similar components
 - `EvalGraph` can also jump to a move by clicking, but its main purpose is showing evals. MoveScrub only moves through move numbers.
 
-Used in: `gui/src-ui/js/App.tsx`, `KifuViewer.tsx`.
+Used in: `gui/src-ui/js/App.tsx`, `KifuViewer.tsx`, `Dialogs.tsx` (the game record loading preview).

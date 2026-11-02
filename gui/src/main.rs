@@ -1208,44 +1208,86 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     })
 }
 
+/// The record in one of the export formats: `moves`, `ggf`, `board_moves` (the starting board on one
+/// line, the moves on the next) or `board` (the board shown now). The whole line is written, moves
+/// ahead of the shown position included.
 #[tauri::command]
-async fn save_kifu(
-    app: State<'_, App>,
-    handle: tauri::AppHandle,
+fn export_kifu(
+    app: State<App>,
+    format: String,
     black: String,
     white: String,
+) -> Result<String, String> {
+    let game = app.game.lock().unwrap();
+    let line = game.line();
+    let moves: String = line.iter().flatten().map(|p| p.to_kifu()).collect();
+    Ok(match format.as_str() {
+        "moves" => moves,
+        "ggf" => to_ggf(&game, &black, &white),
+        "board_moves" => format!("{}\n{moves}", board_line(&start_board(&game))),
+        "board" => board_line(&game.board),
+        _ => return Err("err.record_format_unknown".into()),
+    })
+}
+
+/// 64 squares a1, b1 … h8 in `X` `O` `-`, a space and the side to move: the form `find_board` reads.
+fn board_line(b: &Board) -> String {
+    let side = if b.player == Color::Black { 'X' } else { 'O' };
+    format!("{} {side}", ggf_squares(b).replace('*', "X"))
+}
+
+/// Writes an exported record where the person picks; `None` when the dialog is closed.
+#[tauri::command]
+async fn save_kifu_text(
+    handle: tauri::AppHandle,
+    text: String,
+    ggf: bool,
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let (kifu, ggf) = {
-        let game = app.game.lock().unwrap();
-        (game.to_kifu(), to_ggf(&game, &black, &white))
-    };
-    if kifu.is_empty() {
+    if text.trim().is_empty() {
         return Err("err.record_empty".into());
     }
+    let (ext, name) = if ggf {
+        ("ggf", "kuroobi_game.ggf")
+    } else {
+        ("txt", "kuroobi_game.txt")
+    };
     let Some(path) = handle
         .dialog()
         .file()
-        .add_filter(i18n::t("backend.filter.record"), &["ggf", "txt", "kifu"])
-        .set_file_name("kuroobi_game.ggf")
+        .add_filter(i18n::t("backend.filter.record"), &[ext])
+        .set_file_name(name)
         .blocking_save_file()
     else {
         return Ok(None);
     };
     let p = path.into_path().map_err(|e| e.to_string())?;
-    let ggf_out = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ggf"));
-    let body = if ggf_out { ggf } else { format!("{kifu}\n") };
+    let body = if text.ends_with('\n') {
+        text
+    } else {
+        format!("{text}\n")
+    };
     std::fs::write(&p, body).map_err(|e| e.to_string())?;
     Ok(Some(p.display().to_string()))
 }
 
 fn to_ggf(game: &Reversi, black: &str, white: &str) -> String {
     let start = start_board(game);
+    let line = game.line();
+    let mut end = start;
+    for p in &line {
+        match p {
+            Some(p) => {
+                let _ = end.make_move(*p);
+            }
+            None => end.pass(),
+        }
+    }
     let mut out = String::from("(;GM[Othello]PC[KUROOBI]");
     out.push_str(&format!("DT[{}]", ggf_now()));
     out.push_str(&format!("PB[{}]PW[{}]", ggf_text(black), ggf_text(white)));
-    if game.is_game_over() {
-        let d = game.board.black.count_ones() as i32 - game.board.white.count_ones() as i32;
+    if end.is_game_over() {
+        let d = end.black.count_ones() as i32 - end.white.count_ones() as i32;
         out.push_str(&format!("RE[{d:+}]"));
     } else {
         out.push_str("RE[?]");
@@ -1261,9 +1303,9 @@ fn to_ggf(game: &Reversi, black: &str, white: &str) -> String {
         }
     ));
     let mut color = start.player;
-    for r in &game.history {
+    for p in &line {
         let tag = if color == Color::Black { "B" } else { "W" };
-        match r.pos {
+        match p {
             None => out.push_str(&format!("{tag}[PA]")),
             Some(p) => out.push_str(&format!("{}[{}]", tag, p.to_kifu().to_uppercase())),
         }
@@ -1501,23 +1543,40 @@ fn clock_loaded(app: &State<App>, game: &Reversi) {
     c.seek(game.move_count());
 }
 
+#[derive(Serialize)]
+struct KifuFile {
+    name: String,
+    text: String,
+}
+
+/// A record file's text for the load dialog to preview; nothing is loaded. `None` when the dialog is closed.
 #[tauri::command]
-async fn load_kifu(
-    app: State<'_, App>,
-    handle: tauri::AppHandle,
-) -> Result<Option<GameView>, String> {
+async fn read_kifu_file(handle: tauri::AppHandle) -> Result<Option<KifuFile>, String> {
     use tauri_plugin_dialog::DialogExt;
     let Some(path) = handle
         .dialog()
         .file()
-        .add_filter(i18n::t("backend.filter.record"), &["ggf", "txt", "kifu"])
+        .add_filter(
+            i18n::t("backend.filter.record"),
+            &["ggf", "txt", "kifu", "json"],
+        )
         .blocking_pick_file()
     else {
         return Ok(None);
     };
     let p = path.into_path().map_err(|e| e.to_string())?;
-    let s = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
-    load_kifu_into(&app, &s).map(Some)
+    // A record is a few kilobytes; anything near a megabyte is not one and would choke the text field.
+    if std::fs::metadata(&p).map_err(|e| e.to_string())?.len() > 1 << 20 {
+        return Err("err.record_file_too_big".into());
+    }
+    let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
+    Ok(Some(KifuFile {
+        name: p
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        text: String::from_utf8_lossy(&bytes).into_owned(),
+    }))
 }
 
 #[tauri::command]
@@ -1613,9 +1672,16 @@ async fn book_node(app: State<'_, App>, kifu: String) -> Result<BookNodeView, St
     .map_err(|e| e.to_string())?
 }
 
+#[derive(Serialize)]
+struct KifuPreview {
+    /// What the text was read as: `moves`, `board`, `board_moves`, `ggf` or `quest`.
+    format: &'static str,
+    frames: Vec<KifuFrame>,
+}
+
 #[tauri::command]
-fn preview_kifu(text: String) -> Result<Vec<KifuFrame>, String> {
-    let mut game = game_from_text(&text).ok_or("err.record_parse_failed")?;
+fn preview_kifu(text: String) -> Result<KifuPreview, String> {
+    let (mut game, format) = read_record(&text).ok_or("err.record_parse_failed")?;
     let line = game.line();
     while game.move_count() > 0 {
         game.undo().map_err(|e| format!("{e:?}"))?;
@@ -1643,7 +1709,10 @@ fn preview_kifu(text: String) -> Result<Vec<KifuFrame>, String> {
             }
         }
     }
-    Ok(out)
+    Ok(KifuPreview {
+        format,
+        frames: out,
+    })
 }
 
 fn take_handoff_kifu() -> Option<String> {
@@ -1654,20 +1723,35 @@ fn take_handoff_kifu() -> Option<String> {
 }
 
 fn game_from_text(text: &str) -> Option<Reversi> {
+    read_record(text).map(|(game, _)| game)
+}
+
+/// The game in `text` and the format it was read as (the names `KifuPreview::format` uses).
+fn read_record(text: &str) -> Option<(Reversi, &'static str)> {
     if let Some((start, kifu)) = parse_ggf(text) {
-        return match &start {
+        let game = match &start {
             Some(b) => Reversi::from_kifu_with_start(b, &kifu).ok(),
             None => Reversi::from_kifu(&kifu).ok(),
         };
+        return game.map(|g| (g, "ggf"));
     }
     if let Some(kifu) = quest_moves(text) {
-        return Reversi::from_kifu(&kifu).ok();
+        return Reversi::from_kifu(&kifu).ok().map(|g| (g, "quest"));
     }
     let (start, kifu) = plain_record(text);
     match &start {
-        Some(b) => Reversi::from_kifu_with_start(b, &kifu).ok(),
+        Some(b) => Reversi::from_kifu_with_start(b, &kifu).ok().map(|g| {
+            (
+                g,
+                if kifu.is_empty() {
+                    "board"
+                } else {
+                    "board_moves"
+                },
+            )
+        }),
         None if kifu.is_empty() => None,
-        None => Reversi::from_kifu(&kifu).ok(),
+        None => Reversi::from_kifu(&kifu).ok().map(|g| (g, "moves")),
     }
 }
 
@@ -2185,8 +2269,9 @@ fn main() {
             apply_move,
             analyze_live,
             eval_at,
-            save_kifu,
-            load_kifu,
+            export_kifu,
+            save_kifu_text,
+            read_kifu_file,
             load_kifu_text,
             load_board,
             preview_kifu,
@@ -2549,6 +2634,49 @@ mod tests {
         let back = game_from_text(&ggf).expect("parses");
         assert_eq!(back.board.black, g.board.black);
         assert_eq!(back.board.white, g.board.white);
+    }
+
+    #[test]
+    fn tells_the_format_it_read() {
+        let fmt = |t: &str| read_record(t).map(|(_, f)| f);
+        assert_eq!(fmt("f5d6c3"), Some("moves"));
+        assert_eq!(fmt("(;GM[Othello]B[F5]W[D6];)"), Some("ggf"));
+        assert_eq!(fmt(r#"{"moves":[{"m":"f5"},{"m":"d6"}]}"#), Some("quest"));
+        let board = board_line(&Board::new());
+        assert_eq!(fmt(&board), Some("board"));
+        assert_eq!(fmt(&format!("{board}\nf5d6")), Some("board_moves"));
+    }
+
+    #[test]
+    fn board_and_moves_read_back_from_an_edited_start() {
+        let mut start = Reversi::from_kifu("f5d6c3d3").unwrap();
+        let p = start.board.movable_iter().next().unwrap();
+        let mut g = Reversi::from_string(&start.board.to_string()).unwrap();
+        g.make_move(p).unwrap();
+        start.make_move(p).unwrap();
+        let text = format!("{}\n{}", board_line(&start_board(&g)), p.to_kifu());
+        let (back, fmt) = read_record(&text).expect("parses");
+        assert_eq!(fmt, "board_moves");
+        assert_eq!(back.move_count(), 1);
+        assert_eq!(
+            (back.board.black, back.board.white),
+            (g.board.black, g.board.white)
+        );
+        let (shown, fmt) = read_record(&board_line(&g.board)).expect("parses");
+        assert_eq!(fmt, "board");
+        assert_eq!(
+            shown.board.player, g.board.player,
+            "the side to move survives"
+        );
+    }
+
+    #[test]
+    fn ggf_keeps_the_moves_ahead_of_the_shown_one() {
+        let mut g = Reversi::from_kifu("e6f4c3d6f6e7").unwrap();
+        g.undo().unwrap();
+        g.undo().unwrap();
+        let ggf = to_ggf(&g, "a", "b");
+        assert!(ggf.contains("B[F6]W[E7]"), "{ggf}");
     }
 
     #[test]

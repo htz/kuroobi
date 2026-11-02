@@ -19,4 +19,4 @@ A switch that lays out a few mutually exclusive options side by side and lets th
 - `Select`: collapses the options and shows only one.
 - `Toggle`: a single switch with a label.
 
-Used in: App.tsx (the toolbar's KUROOBI side, book/learning log), Dialogs.tsx (the Display tab in settings), PlayDock.tsx (use book), GgsScreens.tsx (switches on the lobby, results and user list), LearnLog.tsx.
+Used in: App.tsx (the toolbar's KUROOBI side, book/learning log), Dialogs.tsx (the Display tab in settings, the game record export format), PlayDock.tsx (use book), GgsScreens.tsx (switches on the lobby, results and user list), LearnLog.tsx.

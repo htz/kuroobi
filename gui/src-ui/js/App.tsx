@@ -9,7 +9,7 @@ import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useL
 import { connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
 import { AppFrame, BoardFit, Body, Busy, Confirm, Divider, Dock, Main, Toolbar, WindowBar, useToolbarCompact } from './components/layout';
 import { GgsScreen } from './GgsScreens';
-import { PasteKifu } from './Dialogs';
+import { ExportKifu, LoadKifu } from './Dialogs';
 import { EditBoard, EditDock, EditTools, boardText, useBoardEdit, useEditKeys } from './BoardEdit';
 import { Board, type Cell } from './components/board';
 import { EvalGraph, MoveScrub, ScoreRow, StoneDot, srcIsBook, srcLabel } from './components/data';
@@ -160,6 +160,7 @@ export function App() {
   };
 
   const [paste, setPaste] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [settingsCat, setSettingsCat] = useState<SettingsCat>('engine');
   const isSettings = nav === 'settings';
   // The right panel exists on the play/study screens and on the book tab when there is a book;
@@ -302,13 +303,6 @@ export function App() {
       title: t('app.study.replace_title'), body: t('app.study.replace_body', { n }), ok: t('app.study.replace_ok'),
     });
   };
-  const loadFromFile = async () => {
-    if (!await replaceOk()) return;
-    try {
-      const loaded = await api.loadKifu();
-      if (loaded) { applyLoaded(loaded); setPaste(false); }   // null = closed without choosing
-    } catch (e) { g.say(tErr(e)); }
-  };
   const loadFromText = async (text: string, ply?: number) => {
     try {
       applyLoaded(await api.loadKifuText(text));
@@ -405,7 +399,7 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
-      if (paste || ask || viewer || asking) return;
+      if (paste || exporting || ask || viewer || asking) return;
       // Any dialog a screen opened itself (a delete question, the server editor) holds the keys too.
       if (document.querySelector('[data-k-overlay]')) return;
       const cmd = e.metaKey || e.ctrlKey;
@@ -417,13 +411,7 @@ export function App() {
       // The game shortcuts act on the local board, so only where it is on screen (play and study);
       // elsewhere ⌘Z stays the text fields' own undo.
       if (cmd && key === 'n' && playDock) { e.preventDefault(); if (!g.thinking) void newGame(); return; }
-      if (cmd && key === 's' && playDock) {
-        e.preventDefault();
-        if (v && v.moves.length > 0) {
-          void api.saveKifu(...ggfNames(g.side)).catch((err) => g.say(tErr(err)));
-        }
-        return;
-      }
+      if (cmd && key === 's' && playDock) { e.preventDefault(); setExporting(true); return; }
       if (cmd && key === 'o' && playDock) { e.preventDefault(); setPaste(true); return; }
       if (cmd && key === 'e' && playDock) { e.preventDefault(); openEdit(); return; }
       if (cmd && key === 'z' && playDock) {
@@ -452,7 +440,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [setNav, paste, ask, viewer, asking, editing, openEdit, isBook, bookTab, playDock, study, book, g, v, newGame]);
+  }, [setNav, paste, exporting, ask, viewer, asking, editing, openEdit, isBook, bookTab, playDock, study, book, g, v, newGame]);
 
   // Studying a record, the record's own next move just steps forward; another move drops the rest, so it asks.
   // On KUROOBI's turn the board takes no move, so it shows none under the pointer either.
@@ -703,8 +691,8 @@ export function App() {
       {playDock && !editing && (
         <PlayDock g={g} prefs={prefs} setClockSecs={(secs) => { setPref('clockSecs', secs); void g.resetClock(secs); }}
                   open={dockOpen}
-                  onPaste={() => setPaste(true)} onLoadFile={loadFromFile} onEdit={openEdit} editOff={!canEdit}
-                  study={study} moves={moves} ggfNames={() => ggfNames(g.side)} />
+                  onLoad={() => setPaste(true)} onExport={() => setExporting(true)} onEdit={openEdit} editOff={!canEdit}
+                  study={study} moves={moves} />
       )}
 
       </Body>
@@ -727,9 +715,12 @@ export function App() {
       )}
 
       {paste && (
-        <PasteKifu onCancel={() => setPaste(false)}
-                   onFile={() => void loadFromFile()}
-                   onLoad={(text) => void (async () => { if (await replaceOk()) await loadFromText(text); })()} />
+        <LoadKifu onCancel={() => setPaste(false)}
+                  onLoad={(text, ply) => void (async () => { if (await replaceOk()) await loadFromText(text, ply); })()} />
+      )}
+      {exporting && (
+        <ExportKifu format={prefs.exportFormat} onFormat={(f) => setPref('exportFormat', f)}
+                    names={ggfNames(g.side)} onClose={() => setExporting(false)} />
       )}
 
       {asking && ggs.snap?.conn === 'online' && <AskSheet snap={ggs.snap} init={asking} />}

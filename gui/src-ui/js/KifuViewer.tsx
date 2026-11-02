@@ -42,7 +42,7 @@ export function KifuViewer({ title, kifu, onClose, onStudy, onRefetch, parts }: 
     if (!shown.trim()) return;
     let alive = true;
     void api.previewKifu(shown)
-      .then((frames) => { if (alive) { setGot({ kifu: shown, frames }); setAt(null); } })
+      .then(({ frames }) => { if (alive) { setGot({ kifu: shown, frames }); setAt(null); } })
       .catch((e) => {
         if (!alive) return;
         if (refetch()) return;

@@ -1,3 +1,4 @@
+import type { ExportFormat } from './api';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import { backendStrings, resolveLang, setLang, type LangPref } from './i18n';
@@ -20,12 +21,14 @@ export interface Prefs {
   /** Finished games go into the book (local and GGS). */
   learnOn: boolean;
   lang: LangPref;
+  /** The last format picked in the export dialog. */
+  exportFormat: ExportFormat;
 }
 
 const DEFAULTS: Prefs = {
   theme: 'os', tatami: 0, decimals: 1,
   coords: true, grain: true, flipMs: 120, facing: 'black',
-  clockSecs: 0, learnOn: true, lang: 'auto',
+  clockSecs: 0, learnOn: true, lang: 'auto', exportFormat: 'moves',
 };
 
 export const TATAMI: { labelKey: string; board: string; dark: string; line: string; grain: string }[] = [
