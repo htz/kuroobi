@@ -257,7 +257,7 @@ fn main() -> ExitCode {
             "usage: nnue_mpccalib [--threads N] [--stride N] [--max N] [--max-depth 12] \
              [--depths a,b,c] [--min-empties 20] [--max-empties 58] \
              [--min-cell 20] [--empties-bin 3] [--csv out.csv] [--cells] [--write] \
-             <nnue.bin> <data-file>..."
+             <nnue.bin> <file.rec>..."
         );
         return ExitCode::FAILURE;
     }

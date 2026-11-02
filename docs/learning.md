@@ -6,13 +6,15 @@ options are listed in [CLI tools](cli.md#training).
 
 ## Training data
 
-The record format is `kuroobi::record` (27 bytes): mover's discs,
-opponent's discs, search value, final disc difference, ply, random-move
-flag, move played, side to move, game id. On disk the bitboards are
-rank-major and are `transpose`d on read and write. The teacher value is
-derived on load by the record's rule: the first two plies teach 0, a
-random-move position (or one without a game result) teaches its search
-value, every other position teaches the game's final disc difference.
+The record format is `kuroobi::record`, 24 bytes in a `.rec` file:
+mover's discs, opponent's discs, search value, what the search value is
+(solved, midgame search and its depth, or unknown), final disc
+difference and where it comes from, move played, random-move flag, side
+to move, and whether the record starts a game. Ply is `60 - empties`.
+The teacher value is derived on load by the record's rule: the first two
+plies teach 0, a random-move position (or one without a game result)
+teaches its search value, every other position teaches the game's final
+disc difference.
 `--search-value-to-ply n` makes every position up to ply n teach its
 search value instead. In memory an example is the mover's discs as Black
 with the teacher value from the mover's view.

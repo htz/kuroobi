@@ -27,7 +27,7 @@ repository root or pass the paths.
 
 ## Training
 
-The trainers read `.data` files in the training record format (see
+The trainers read `.rec` files in the training record format (see
 [learning.md](learning.md)). The target and the filters below are
 shared by `linear_train`, `nnue_train` and `linear_stage_merge`;
 held-out numbers only compare when they match.
@@ -47,7 +47,7 @@ not fit is trained in shards** -- whole files are grouped up to
 `--max-examples`, and every epoch loads and drops one shard at a time.
 
 ```sh
-linear_train [OPTIONS] <data-file>...
+linear_train [OPTIONS] <file.rec>...
 ```
 
 **The default optimizer, SGD, trains one stage per run** and refuses a
@@ -58,13 +58,13 @@ CPU or with `--gpu`.
 ```sh
 # One stage with SGD
 linear_train --stage 40 --epochs 20 --weights weights/linear.bin \
-      --val data/val/val_v0002-d4.data \
-      data/records/egaroucid_v0002/train/*.data
+      --val data/val/val_v0002-d4.rec \
+      data/records/egaroucid_v0002/train-d4/*.rec
 
 # Every stage with Adam on the GPU (build with --features gpu)
 linear_train --optimizer adam --gpu --cosine --epochs 20 \
-      --weights weights/linear.bin --val data/val/val_v0002-d4.data \
-      data/records/egaroucid_v0002/train/*.data
+      --weights weights/linear.bin --val data/val/val_v0002-d4.rec \
+      data/records/egaroucid_v0002/train-d4/*.rec
 ```
 
 **Data, optimizer and saving**
@@ -114,15 +114,15 @@ epoch it freezes the weights, measures the held-out set and prints it**
 linear evaluator. `--adam` and `--minibatch` are required.
 
 ```sh
-nnue_train [OPTIONS] <data-file>...
+nnue_train [OPTIONS] <file.rec>...
 ```
 
 ```sh
 nnue_train --adam --minibatch 65536 --lr 0.0001 --cosine --epochs 30 \
   --sym-train --threads 8 \
-  --val data/val/val_v0002.data --val data/val/val_openings.data --val-cap 250000 \
+  --val data/val/val_v0002-d4.rec --val data/val/val_openings.rec --val-cap 250000 \
   --out weights/nnue.new.bin \
-  data/records/egaroucid_v0002/train/*.data data/records/selfplay/dedup_*.data
+  data/records/egaroucid_v0002/train-d4/*.rec data/records/selfplay/dedup_*.rec
 ```
 
 **Data and filters**
@@ -193,7 +193,7 @@ the choice is made on a target nothing was aiming at.
 
 ```sh
 linear_stage_merge --out weights/linear.bin --select-by mae \
-  --val data/val/val_v0002-d4.data --val data/val/val_openings.data \
+  --val data/val/val_v0002-d4.rec --val data/val/val_openings.rec \
   --search-value-to-ply 32 --drop-random --keep-above-ply 50 \
   weights/linear.bin out/stage_*.bin
 ```
@@ -215,10 +215,10 @@ off** -- the search is correct but much slower. Sigma belongs to the
 evaluator, so every new model needs its own.
 
 ```sh
-nnue_mpccalib [OPTIONS] <nnue.bin> <data-file>...
+nnue_mpccalib [OPTIONS] <nnue.bin> <file.rec>...
 
 nnue_mpccalib --threads 10 --max 6000 --write \
-  weights/nnue.bin data/records/egaroucid_v0002/train-d4/rand8.data
+  weights/nnue.bin data/records/egaroucid_v0002/train-d4/rand8.rec
 ```
 
 The source file has to span the empty counts the midgame searches; one
@@ -249,7 +249,7 @@ the options above it takes `--threads`, `--stride` and `--write`.
 
 ```sh
 nnue_mpccalib --alpha --threads 8 --stride 7 --write \
-  weights/nnue.bin data/records/selfplay/dedup_00*.data
+  weights/nnue.bin data/records/selfplay/dedup_00*.rec
 ```
 
 ## Data and the book

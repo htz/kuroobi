@@ -6,7 +6,7 @@ use kuroobi::trainer::{load_examples_filtered_into, SelectBy, ValError};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: linear_stage_merge --val <file.data> [--val ...] --out <path>
+const USAGE: &str = "usage: linear_stage_merge --val <file.rec> [--val ...] --out <path>
   [--select-by mae|mse|spread] [--search-value-to-ply <n>]
   [--drop-random] [--max-score-diff <d>] [--keep-above-ply <n>] [--min-ply <n>]
   <weights.bin>...";

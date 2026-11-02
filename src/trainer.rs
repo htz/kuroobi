@@ -360,17 +360,18 @@ mod tests {
         dir.join(name)
     }
 
+    /// On disk ply is `60 - empties`, so the board decides it.
     fn searched(mover: u64, opponent: u64, result: i8) -> Record {
         Record {
             mover,
             opponent,
             score: f32::from(result),
             game_score: result,
-            ply: 20,
+            ply: 60u8.saturating_sub((!(mover | opponent)).count_ones() as u8),
             random: false,
             sq: record::NO_SQUARE,
             black_to_move: true,
-            game_id: 0,
+            ..Record::default()
         }
     }
 
@@ -380,15 +381,20 @@ mod tests {
 
     #[test]
     fn test_example_is_the_record_in_this_crates_layout() {
-        let bin_path = temp_path("layout.data");
-        let mut raw = searched(0, 0, 5).to_bytes();
-        raw[0..8].copy_from_slice(&(1u64 << 1).to_le_bytes());
+        let bin_path = temp_path("layout.rec");
+        let opponent = 0x0000_00FF_FFFF_0000;
+        let mut raw = searched(0, opponent, 5).to_bytes();
+        raw[0..8].copy_from_slice(&(1u64 << 8).to_le_bytes());
         std::fs::write(&bin_path, raw).unwrap();
 
         let ex = load_examples_binary(&bin_path).unwrap();
         assert_eq!(ex.len(), 1);
-        assert_eq!(ex[0].black, 1u64 << 8, "B1 on disk is bit 8 in memory");
-        assert_eq!(ex[0].white, 0);
+        assert_eq!(
+            ex[0].black,
+            1u64 << 8,
+            "bitboards are stored as they are in memory"
+        );
+        assert_eq!(ex[0].white, opponent);
         assert_eq!(ex[0].score, 5.0);
         assert_eq!(ex[0].board().player, Color::Black);
 
@@ -397,18 +403,15 @@ mod tests {
 
     #[test]
     fn test_binary_load_applies_teacher_rule_and_filter() {
-        let bin_path = temp_path("rule.data");
+        let bin_path = temp_path("rule.rec");
+        // 24 discs: ply 20.
         let base = Record {
-            mover: 0x0000_0008_1000_0000,
-            opponent: 0x0000_0010_0800_0000,
             score: 3.0,
-            game_score: 10,
-            ply: 20,
-            random: false,
-            sq: record::NO_SQUARE,
-            black_to_move: true,
-            game_id: 1,
+            ..searched(0x0000_0000_00FF_FFFF, 0, 10)
         };
+        // 9 discs: ply 5.
+        let early = searched(0x0000_0000_0000_01FF, 0, 10);
+        assert_eq!((base.ply, early.ply), (20, 5));
         write_records(
             &bin_path,
             &[
@@ -421,7 +424,10 @@ mod tests {
                     game_score: 30,
                     ..base
                 }, // disagrees with the search by 27: dropped
-                Record { ply: 5, ..base }, // before min ply: dropped
+                Record {
+                    score: 3.0,
+                    ..early
+                }, // before min ply: dropped
             ],
         );
 
@@ -447,7 +453,7 @@ mod tests {
 
     #[test]
     fn test_binary_load_spans_blocks_and_appends() {
-        let bin_path = temp_path("multiblock.data");
+        let bin_path = temp_path("multiblock.rec");
         let records: Vec<Record> = (0..10_000u64)
             .map(|i| {
                 searched(

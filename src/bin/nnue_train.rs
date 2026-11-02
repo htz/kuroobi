@@ -481,7 +481,7 @@ fn main() -> ExitCode {
     };
     if data_files.is_empty() {
         eprintln!(
-            "usage: nnue_train [--epochs n] [--lr f] [--plateau n] [--limit n] [--val f]... [--out p] <data>..."
+            "usage: nnue_train [--epochs n] [--lr f] [--plateau n] [--limit n] [--val f]... [--out p] <file.rec>..."
         );
         return ExitCode::FAILURE;
     }

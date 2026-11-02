@@ -57,10 +57,9 @@ enum OptimizerKind {
 }
 
 const USAGE: &str = "\
-Usage: linear_train [OPTIONS] <data-file>...
+Usage: linear_train [OPTIONS] <file.rec>...
 
-Train the pattern linear on `kuroobi::record` files (27 bytes per
-position).
+Train the pattern linear on `kuroobi::record` files (`.rec`).
 
 Options:
   --epochs <n>      Passes over all examples (default 10)
