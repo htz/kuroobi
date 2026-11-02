@@ -85,6 +85,17 @@ const ACT_SCALE: f32 = {act_scale};
 const SO_SCORE: f32 = {so_score};
 const SO_MAX_W: f32 = {so_max_w};
 const CLIP_NORM: f32 = {clip_norm};
+const SZ0: u32 = L1 * L1IN;
+const SZ1: u32 = L1;
+const SZ2: u32 = L2 * L1 * 2u;
+const SZ3: u32 = L2;
+const SZ4: u32 = OUTIN;
+const F1: u32 = SZ0;
+const F2: u32 = F1 + SZ1;
+const F3: u32 = F2 + SZ2;
+const F4: u32 = F3 + SZ3;
+const F5: u32 = F4 + SZ4;
+const SH: u32 = F5 + 1u;
 
 struct Params {{
     n_ex: u32,
@@ -199,15 +210,41 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     let rb = ex * REC;
 
     var s = dense[D_FTB + h];
-    for (var m = 0u; m < P.n_masks; m++) {
+    var m = 0u;
+    for (; m + 8u <= P.n_masks; m += 8u) {
+        let r0 = ft[inp[ib + m + 0u] * ACC + h];
+        let r1 = ft[inp[ib + m + 1u] * ACC + h];
+        let r2 = ft[inp[ib + m + 2u] * ACC + h];
+        let r3 = ft[inp[ib + m + 3u] * ACC + h];
+        let r4 = ft[inp[ib + m + 4u] * ACC + h];
+        let r5 = ft[inp[ib + m + 5u] * ACC + h];
+        let r6 = ft[inp[ib + m + 6u] * ACC + h];
+        let r7 = ft[inp[ib + m + 7u] * ACC + h];
+        s += r0; s += r1; s += r2; s += r3; s += r4; s += r5; s += r6; s += r7;
+    }
+    for (; m < P.n_masks; m++) {
         s += ft[inp[ib + m] * ACC + h];
     }
     raw[h] = s;
     if (h < PAD) {
         var z = dense[D_PAB + bucket * PAD + h];
         let base = bucket * P.nfb;
-        for (var m = 0u; m < P.n_masks; m++) {
-            z += pa[(base + inp[ib + m]) * PAD + h];
+        {
+            var m = 0u;
+            for (; m + 8u <= P.n_masks; m += 8u) {
+                let r0 = pa[(base + inp[ib + m + 0u]) * PAD + h];
+                let r1 = pa[(base + inp[ib + m + 1u]) * PAD + h];
+                let r2 = pa[(base + inp[ib + m + 2u]) * PAD + h];
+                let r3 = pa[(base + inp[ib + m + 3u]) * PAD + h];
+                let r4 = pa[(base + inp[ib + m + 4u]) * PAD + h];
+                let r5 = pa[(base + inp[ib + m + 5u]) * PAD + h];
+                let r6 = pa[(base + inp[ib + m + 6u]) * PAD + h];
+                let r7 = pa[(base + inp[ib + m + 7u]) * PAD + h];
+                z += r0; z += r1; z += r2; z += r3; z += r4; z += r5; z += r6; z += r7;
+            }
+            for (; m < P.n_masks; m++) {
+                z += pa[(base + inp[ib + m]) * PAD + h];
+            }
         }
         paz[h] = z;
     }
@@ -422,12 +459,39 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         let lo_half = h < half;
         var s = 0.0;
         if (W == ACC) {
-            for (var e = lo; e < hi; e++) {
+            var e = lo;
+            for (; e + 4u <= hi; e += 4u) {
+                let x0 = exids[e];
+                let x1 = exids[e + 1u];
+                let x2 = exids[e + 2u];
+                let x3 = exids[e + 3u];
+                let v0 = unpack2x16float(bitcast<u32>(rec[x0 * REC + P.rec_off + slot]));
+                let v1 = unpack2x16float(bitcast<u32>(rec[x1 * REC + P.rec_off + slot]));
+                let v2 = unpack2x16float(bitcast<u32>(rec[x2 * REC + P.rec_off + slot]));
+                let v3 = unpack2x16float(bitcast<u32>(rec[x3 * REC + P.rec_off + slot]));
+                s += select(v0.y, v0.x, lo_half);
+                s += select(v1.y, v1.x, lo_half);
+                s += select(v2.y, v2.x, lo_half);
+                s += select(v3.y, v3.x, lo_half);
+            }
+            for (; e < hi; e++) {
                 let v = unpack2x16float(bitcast<u32>(rec[exids[e] * REC + P.rec_off + slot]));
                 s += select(v.y, v.x, lo_half);
             }
         } else {
-            for (var e = lo; e < hi; e++) {
+            var e = lo;
+            for (; e + 4u <= hi; e += 4u) {
+                let x0 = exids[e];
+                let x1 = exids[e + 1u];
+                let x2 = exids[e + 2u];
+                let x3 = exids[e + 3u];
+                let v0 = rec[x0 * REC + P.rec_off + h];
+                let v1 = rec[x1 * REC + P.rec_off + h];
+                let v2 = rec[x2 * REC + P.rec_off + h];
+                let v3 = rec[x3 * REC + P.rec_off + h];
+                s += v0; s += v1; s += v2; s += v3;
+            }
+            for (; e < hi; e++) {
                 s += rec[exids[e] * REC + P.rec_off + h];
             }
         }
@@ -845,6 +909,44 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
+/// Adam over the read-out factor every stage shares; writes the step each stage's head then adds.
+const K_FACTOR: &str = r#"
+@group(0) @binding(0) var<storage, read> grad: array<f32>;
+@group(0) @binding(1) var<storage, read> step: array<f32>;
+@group(0) @binding(2) var<storage, read_write> fm: array<f32>;
+@group(0) @binding(3) var<storage, read_write> fv: array<f32>;
+@group(0) @binding(4) var<storage, read_write> fd: array<f32>;
+@group(0) @binding(5) var<uniform> P: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wg: vec3<u32>,
+        @builtin(num_workgroups) nwg: vec3<u32>) {
+    let j = linear_wg(wg, nwg) * 256u + lid.x;
+    if (j >= SH) {
+        return;
+    }
+    var base = D_OB;
+    var sz = 1u;
+    var off = 0u;
+    if (j < F1) { base = D_L1W; sz = SZ0; off = j; }
+    else if (j < F2) { base = D_L1B; sz = SZ1; off = j - F1; }
+    else if (j < F3) { base = D_L2W; sz = SZ2; off = j - F2; }
+    else if (j < F4) { base = D_L2B; sz = SZ3; off = j - F3; }
+    else if (j < F5) { base = D_OW; sz = SZ4; off = j - F4; }
+    var g = 0.0;
+    for (var st = 0u; st < NST; st++) {
+        g += grad[base + st * sz + off];
+    }
+    g *= step[0];
+    let mm = P.b1 * fm[j] + (1.0 - P.b1) * g;
+    let vv = P.b2 * fv[j] + (1.0 - P.b2) * g * g;
+    fm[j] = mm;
+    fv[j] = vv;
+    fd[j] = -(P.lr / P.bc1) * mm / (sqrt(vv) / P.bc2s + P.eps);
+}
+"#;
+
 /// AdamW over the dense vector.
 const K_STEP_DENSE: &str = r#"
 @group(0) @binding(0) var<storage, read_write> w: array<f32>;
@@ -854,6 +956,16 @@ const K_STEP_DENSE: &str = r#"
 @group(0) @binding(4) var<storage, read> step: array<f32>;
 @group(0) @binding(5) var<storage, read_write> slow: array<f32>;
 @group(0) @binding(6) var<uniform> P: Params;
+@group(0) @binding(7) var<storage, read> fd: array<f32>;
+
+fn factor_index(i: u32) -> u32 {
+    if (i < D_L1B) { return (i - D_L1W) % SZ0; }
+    if (i < D_L2W) { return F1 + (i - D_L1B) % SZ1; }
+    if (i < D_L2B) { return F2 + (i - D_L2W) % SZ2; }
+    if (i < D_OW) { return F3 + (i - D_L2B) % SZ3; }
+    if (i < D_OB) { return F4 + (i - D_OW) % SZ4; }
+    return F5;
+}
 
 @compute @workgroup_size(256)
 fn main(@builtin(local_invocation_id) lid: vec3<u32>,
@@ -878,6 +990,9 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         d = P.wd;
     }
     var nw = w[i] * (1.0 - d * P.lr) - (P.lr / P.bc1) * mm / (sqrt(vv) / P.bc2s + P.eps);
+    if (i < D_FTB) {
+        nw += fd[factor_index(i)];
+    }
     if (hidden) {
         nw = clamp(nw, -SO_MAX_W, SO_MAX_W);
     }
@@ -889,6 +1004,19 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     w[i] = nw;
 }
 "#;
+
+/// Training-only factor folded into the stored weights: one read-out every stage head adds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Factors {
+    pub heads: bool,
+}
+
+const FACTOR_LEN: usize = SO_SIZES.0 / SO_STAGES
+    + SO_SIZES.1 / SO_STAGES
+    + SO_SIZES.2 / SO_STAGES
+    + SO_SIZES.3 / SO_STAGES
+    + SO_SIZES.4 / SO_STAGES
+    + 1;
 
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
@@ -1071,6 +1199,7 @@ struct Batch {
 }
 
 struct Binds {
+    factor: wgpu::BindGroup,
     fwd: wgpu::BindGroup,
     row_ft: wgpu::BindGroup,
     fin_ft: wgpu::BindGroup,
@@ -1159,6 +1288,10 @@ pub struct GpuTrainer {
     k_stamp_rows: Kernel,
     k_la_fold: Kernel,
     k_step_dense: Kernel,
+    k_factor: Kernel,
+    factors: Factors,
+    /// Adam moments and the latest step of the shared read-out; zero and unused without `factors.heads`.
+    b_factor: [wgpu::Buffer; 3],
     /// Force the dense step (measurement; see the dispatch).
     dense_step: bool,
     /// Seconds spent building the CSRs (measurement).
@@ -1264,7 +1397,13 @@ fn u32s(v: &[u32]) -> &[u8] {
 }
 
 impl GpuTrainer {
-    pub fn new(nn: &Nnue, batch: usize, adam: &AdamState, lookahead: (u32, f32)) -> GpuTrainer {
+    pub fn new(
+        nn: &Nnue,
+        batch: usize,
+        adam: &AdamState,
+        lookahead: (u32, f32),
+        factors: Factors,
+    ) -> GpuTrainer {
         const {
             assert!(
                 SO_SKIP <= WG && ACC_DIMS == WG,
@@ -1354,6 +1493,7 @@ impl GpuTrainer {
         let k_stamp_rows = make(K_STAMP_ROWS, "stamp_rows");
         let k_la_fold = make(K_LA_FOLD, "la_fold");
         let k_step_dense = make(K_STEP_DENSE, "step_dense");
+        let k_factor = make(K_FACTOR, "factor");
 
         let n_masks = nn.n_masks;
         let nfb = nn.n_features;
@@ -1507,6 +1647,11 @@ impl GpuTrainer {
         };
         let rb_ft = rb("rb_ft", nn.ft.len());
         let rb_pa = rb("rb_pa", nn.pa.len());
+        let b_factor = [
+            zeros("factor_m", FACTOR_LEN, st),
+            zeros("factor_v", FACTOR_LEN, st),
+            zeros("factor_step", FACTOR_LEN, st),
+        ];
         let rb_dense = rb("rb_dense", N_DENSE);
 
         let mk_batch = || Batch {
@@ -1561,6 +1706,9 @@ impl GpuTrainer {
             k_stamp_rows,
             k_la_fold,
             k_step_dense,
+            k_factor,
+            factors,
+            b_factor,
             dense_step: std::env::var_os("KUROOBI_GPU_DENSE_STEP").is_some(),
             t_csr: 0.0,
             n_masks,
@@ -2101,6 +2249,18 @@ impl GpuTrainer {
                     &self.b_step,
                     &self.la_slow[2],
                     &self.u_step_dense,
+                    &self.b_factor[2],
+                ],
+            ),
+            factor: self.bind(
+                &self.k_factor,
+                &[
+                    &self.b_dense_grad,
+                    &self.b_step,
+                    &self.b_factor[0],
+                    &self.b_factor[1],
+                    &self.b_factor[2],
+                    &self.u_step_dense,
                 ],
             ),
         }
@@ -2138,7 +2298,21 @@ impl GpuTrainer {
                 })
         };
         {
+            let mut shared = (!sampled).then(|| {
+                enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("step"),
+                    timestamp_writes: None,
+                })
+                .forget_lifetime()
+            });
             let mut run = |i: usize, k: &Kernel, bg: &wgpu::BindGroup, n_wg: usize| {
+                if let Some(p) = shared.as_mut() {
+                    let (x, y) = dispatch_dims(n_wg);
+                    p.set_pipeline(&k.pipeline);
+                    p.set_bind_group(0, bg, &[]);
+                    p.dispatch_workgroups(x, y, 1);
+                    return;
+                }
                 let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: PROF_NAMES.get(i).copied(),
                     timestamp_writes: PROF_NAMES.get(i).and_then(|_| timestamps(i)),
@@ -2202,6 +2376,9 @@ impl GpuTrainer {
                 }
                 let n_wg = b.pa.n_touched().div_ceil(WG);
                 run(UNTIMED, &self.k_stamp_rows, &bg.stamp_pa, n_wg);
+            }
+            if self.factors.heads {
+                run(UNTIMED, &self.k_factor, &bg.factor, FACTOR_LEN.div_ceil(WG));
             }
             run(st + 2, &self.k_step_dense, &bg.step_dense, n_dense_wg);
             if la_fold {
@@ -2568,7 +2745,7 @@ mod tests {
         }
 
         let batch = chunks.iter().map(|c| c.len()).max().unwrap_or(1);
-        let mut g = GpuTrainer::new(&b, batch, &ad_b, la);
+        let mut g = GpuTrainer::new(&b, batch, &ad_b, la, Factors::default());
         let mut lr_fn = || lr;
         let plain = SymPlan {
             seed: 0,
@@ -2634,6 +2811,42 @@ mod tests {
         );
     }
 
+    /// After training with the shared read-out, the folded weights must evaluate on the CPU to what the GPU computes.
+    #[test]
+    #[ignore = "requires a GPU"]
+    fn folded_factors_evaluate_as_trained() {
+        let _gpu = gpu_lock();
+        let pats = crate::nnue::test_patterns();
+        let exs = batch(4096);
+        let mut nn = Nnue::new(pats);
+        nn.init_weights();
+        let ad = AdamState::new(&nn);
+        let factors = Factors { heads: true };
+        let mut g = GpuTrainer::new(&nn, 2048, &ad, (0, 0.0), factors);
+        let plain = SymPlan {
+            seed: 0,
+            fixed: None,
+        };
+        let mut lr_fn = || 0.001f32;
+        for _ in 0..3 {
+            g.train_shard(&nn, &exs, 1, &mut lr_fn, 0.0, plain);
+        }
+        g.download(&mut nn);
+        let mut zero = || 0.0f32;
+        let gpu_sq = g.train_shard(&nn, &exs[..2048], 1, &mut zero, 0.0, plain);
+        let cpu_sq: f64 = exs[..2048]
+            .iter()
+            .map(|ex| {
+                let board = ex.board();
+                let ix = nn.indices(ex.black, ex.white);
+                let e = nn.eval_indices(&board, &ix) - ex.score;
+                f64::from(e * e)
+            })
+            .sum();
+        let rel = (gpu_sq - cpu_sq).abs() / cpu_sq;
+        assert!(rel < 1e-3, "gpu {gpu_sq} cpu {cpu_sq}");
+    }
+
     #[test]
     #[ignore = "requires a GPU"]
     fn gpu_and_cpu_take_the_same_step() {
@@ -2653,7 +2866,7 @@ mod tests {
 
         cpu_step(&mut a, &mut ad_a, &exs, lr, wd);
 
-        let mut g = GpuTrainer::new(&b, exs.len(), &ad_b, (0, 0.0));
+        let mut g = GpuTrainer::new(&b, exs.len(), &ad_b, (0, 0.0), Factors::default());
         let mut lr_fn = || lr;
         g.train_shard(
             &b,

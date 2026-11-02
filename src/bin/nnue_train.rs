@@ -340,6 +340,7 @@ struct Args {
     resume: Option<PathBuf>,
     start_epoch: usize,
     train_stages: Option<(usize, usize)>,
+    factor_heads: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -375,6 +376,7 @@ fn parse_args() -> Result<Args, String> {
         resume: None,
         start_epoch: 1,
         train_stages: None,
+        factor_heads: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -421,6 +423,7 @@ fn parse_args() -> Result<Args, String> {
             "--sym-all" => a.sym_all = true,
             "--lookahead" => a.lookahead = true,
             "--gpu" => a.gpu = true,
+            "--factor-heads" => a.factor_heads = true,
             "--threads" => a.threads = num(&flag, value()?)?,
             "--limit" => a.limit = Some(num(&flag, value()?)?),
             "--out" => a.out = PathBuf::from(value()?),
@@ -472,6 +475,7 @@ fn main() -> ExitCode {
         resume,
         start_epoch,
         train_stages,
+        factor_heads,
     } = match parse_args() {
         Ok(a) => a,
         Err(e) => {
@@ -487,6 +491,10 @@ fn main() -> ExitCode {
     }
     if minibatch == 0 || !adam {
         eprintln!("nnue_train needs --adam --minibatch n");
+        return ExitCode::FAILURE;
+    }
+    if factor_heads && (!gpu || train_stages.is_some()) {
+        eprintln!("--factor-heads needs --gpu and move every stage, so not with --train-stages");
         return ExitCode::FAILURE;
     }
     // Weight decay and the lookahead pull touch every weight, gradient or not.
@@ -639,7 +647,10 @@ fn main() -> ExitCode {
         } else {
             (0, 0.0)
         };
-        let mut g = kuroobi::nnue::gpu::GpuTrainer::new(&nn, minibatch, &adam_state, la);
+        let factors = kuroobi::nnue::gpu::Factors {
+            heads: factor_heads,
+        };
+        let mut g = kuroobi::nnue::gpu::GpuTrainer::new(&nn, minibatch, &adam_state, la, factors);
         g.set_heads_only(train_stages.is_some());
         g
     });
