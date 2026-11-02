@@ -168,3 +168,26 @@ fn solver_passes_for_a_side_without_moves() {
         over.score()
     );
 }
+
+/// A wiped-out position solved right after two others: the last narrowing window used to be (-64, -64),
+/// which read whatever the earlier solves had left in the table (-54 here instead of -64).
+#[test]
+fn solver_needs_no_window_below_minus_64() {
+    let earlier = [
+        "OOOOOOOO-OXXXXOXXOOXXOXXXOXOOOXXXXXOOOXXXXOXXOXX--XXXX-X-XXXXXX- X",
+        "XXXXXXXXOOOOOOXOOOXOOXOOOXOXXXOOOOOXXXOOOOXOOXOO--OOOO-O-OOOOOO- X",
+    ];
+    let target =
+        Board::from_string("O-XXXXX--OXOOOOO-XOOOOOOXOOOOOOOXOOOOOOOXOOOOOOOXOOOOOOOOOOOOOOO X")
+            .unwrap();
+    let expected = negamax(&target, false);
+    assert_eq!(expected, -64);
+    let mut solver = Solver::new(12);
+    for b in earlier {
+        solver.solve(EndSolverMode::Perfect, &Board::from_string(b).unwrap());
+    }
+    assert_eq!(
+        solver.solve(EndSolverMode::Perfect, &target).value,
+        expected
+    );
+}

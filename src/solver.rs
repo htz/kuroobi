@@ -1476,7 +1476,8 @@ impl Worker<'_> {
             if val == ABORTED {
                 return ABORTED;
             }
-            if val <= bound {
+            // At -64 the value is already exact, and (-64, -64) is an empty window that reads whatever the table holds.
+            if val <= bound && val > -64 {
                 val = self.pvs_root(board, -64, val, ev);
             }
         }
