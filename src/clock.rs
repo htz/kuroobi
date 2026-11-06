@@ -65,6 +65,17 @@ const FIRST_MOVE_EXTRA: f64 = 1.2;
 const FIRST_MOVE_EXTRA_DISCS: i32 = 40;
 /// Past this share of the budget no new pass starts unless the best move just changed or failed low.
 const SETTLED_SHARE: f64 = 0.5;
+/// A move is played at once when every other move fails low at its score minus this many discs.
+const SEP_THRESHOLD: i32 = 5;
+const SEP_MIN_DEPTH: i32 = 20;
+/// Passes in a row that must keep the best move before the separation test runs.
+const SEP_STABLE_PASSES: u32 = 2;
+/// A move within this many discs of the best makes the position hard, once per move from this many empties.
+const EXT_CLOSE: i32 = 1;
+const EXT_MIN_EMPTIES: i32 = 38;
+/// A hard position adds this many average move shares to its budget, up to half the clock.
+const EXT_SHARE: f64 = 1.8;
+const EXT_MAX_SHARE_OF_CLOCK: f64 = 0.5;
 
 /// Two-way buckets of (key ^ data, data), so a torn write fails the key check.
 struct Table {
@@ -195,6 +206,9 @@ struct Worker<'a> {
     nodes: u64,
     history: [[i32; 64]; 2],
     margin: i32,
+    /// Moves searched at the root (all when 0); a narrowed root is not stored, its bound is not the position's.
+    root_mask: u64,
+    root_depth: i32,
 }
 
 impl Worker<'_> {
@@ -271,7 +285,7 @@ impl Worker<'_> {
             let v = self.exact(b.player_bb(), b.opponent_bb(), alpha, beta, false);
             return Some((v, NO_MOVE));
         }
-        let moves = b.movable();
+        let mut moves = b.movable();
         if moves == 0 {
             let mut nb = *b;
             nb.pass();
@@ -285,6 +299,11 @@ impl Worker<'_> {
             return Some((self.eval(b, acc), NO_MOVE));
         }
 
+        // Each move takes a ply off the depth, so only the root is searched at the root depth.
+        let narrowed = self.root_mask != 0 && depth == self.root_depth;
+        if narrowed {
+            moves &= self.root_mask;
+        }
         let h = zobrist::board_hash(b.player_bb(), b.opponent_bb());
         let mut tt_move = NO_MOVE;
         let mut tt_depth = -1;
@@ -449,6 +468,9 @@ impl Worker<'_> {
     }
 
     fn store(&self, h: u64, alpha0: i32, beta: i32, score: i32, mv: u8, depth: i32) {
+        if self.root_mask != 0 && depth == self.root_depth {
+            return;
+        }
         let (lower, upper) = if score >= beta {
             (score, 64)
         } else if score > alpha0 {
@@ -615,7 +637,15 @@ impl ClockSearch {
     }
 
     /// One pass at `depth` over [alpha, beta] on all threads; `None` if it was stopped.
-    fn pass(&mut self, b: &Board, depth: i32, alpha: i32, beta: i32) -> (Option<(i32, u8)>, u64) {
+    /// `root_mask` narrows the root moves (0: all of them).
+    fn pass(
+        &mut self,
+        b: &Board,
+        depth: i32,
+        alpha: i32,
+        beta: i32,
+        root_mask: u64,
+    ) -> (Option<(i32, u8)>, u64) {
         let sh = &*self.sh;
         sh.done.store(false, Relaxed);
         let acc = sh.nn.indices(b.black, b.white);
@@ -636,6 +666,8 @@ impl ClockSearch {
                             nodes: 0,
                             history,
                             margin,
+                            root_mask,
+                            root_depth: depth,
                         };
                         let _ = w.search(b, &acc, depth, alpha, beta, true);
                         w.nodes
@@ -648,6 +680,8 @@ impl ClockSearch {
                 nodes: 0,
                 history,
                 margin,
+                root_mask,
+                root_depth: depth,
             };
             let r = w.search(b, &acc, depth, alpha, beta, true);
             sh.done.store(true, Relaxed);
@@ -671,9 +705,9 @@ impl ClockSearch {
         };
         self.first_move = false;
         let moves_left = (PACE_DISCS - discs as f64).max(MOVES_LEFT_FLOOR);
-        let budget =
+        let mut budget =
             (BUDGET_SHARE * remaining.as_secs_f64() / moves_left).max(MIN_BUDGET_SECS) * extra;
-        let deadline = t0 + Duration::from_secs_f64(budget);
+        let mut deadline = t0 + Duration::from_secs_f64(budget);
         let mut out = Choice {
             mv: None,
             score: 0,
@@ -705,6 +739,8 @@ impl ClockSearch {
         }
         let (mut alpha, mut beta) = (MIN, MAX);
         let mut best = NO_MOVE;
+        let mut stable = 0u32;
+        let mut hard_checked = false;
         loop {
             if self.step == MARGINS.len() {
                 out.solve = true;
@@ -713,7 +749,7 @@ impl ClockSearch {
             let mut fail_low = false;
             let mut result = None;
             loop {
-                let (r, nodes) = self.pass(b, depth, alpha, beta);
+                let (r, nodes) = self.pass(b, depth, alpha, beta, 0);
                 out.nodes += nodes;
                 let Some((s, mv)) = r else { break };
                 result = Some((s, mv));
@@ -734,6 +770,7 @@ impl ClockSearch {
             if let Some((s, mv)) = result {
                 if !fail_low && !timeout && mv < NO_MOVE && moves >> mv & 1 == 1 {
                     changed = best < NO_MOVE && best != mv;
+                    stable = if best == mv { stable + 1 } else { 0 };
                     best = mv;
                     out.score = s;
                     out.depth = depth;
@@ -752,7 +789,36 @@ impl ClockSearch {
             if timeout || elapsed >= budget || (forced && best < NO_MOVE) {
                 break;
             }
-            if !changed && !fail_low && elapsed > budget * SETTLED_SHARE {
+            if !fail_low && depth >= SEP_MIN_DEPTH && depth < full && moves.count_ones() > 1 {
+                let others = moves & !(1u64 << best);
+                if stable >= SEP_STABLE_PASSES {
+                    let a = out.score - SEP_THRESHOLD;
+                    let (r, nodes) = self.pass(b, depth, a, a + 1, others);
+                    out.nodes += nodes;
+                    if r.is_some_and(|(v, _)| v <= a) {
+                        break;
+                    }
+                }
+                if !hard_checked && full >= EXT_MIN_EMPTIES && !sh.timeout.load(Relaxed) {
+                    hard_checked = true;
+                    let a = out.score - EXT_CLOSE - 1;
+                    let (r, nodes) = self.pass(b, depth, a, a + 1, others);
+                    out.nodes += nodes;
+                    if r.is_some_and(|(v, _)| v > a) {
+                        let cap = remaining.as_secs_f64() * EXT_MAX_SHARE_OF_CLOCK;
+                        let extra = EXT_SHARE * remaining.as_secs_f64() / moves_left;
+                        budget = (budget + extra).min(cap).max(budget);
+                        deadline = t0 + Duration::from_secs_f64(budget);
+                        out.deadline = deadline;
+                        sh.deadline_ns
+                            .store((deadline - sh.epoch).as_nanos() as u64, Relaxed);
+                    }
+                }
+                if sh.timeout.load(Relaxed) {
+                    break;
+                }
+            }
+            if !changed && !fail_low && t0.elapsed().as_secs_f64() > budget * SETTLED_SHARE {
                 break;
             }
             if depth + 2 < full - 5 {
@@ -844,6 +910,8 @@ mod tests {
             nodes: 0,
             history: [[0; 64]; 2],
             margin: 0,
+            root_mask: 0,
+            root_depth: 0,
         };
         let (v, _) = w.search(&b, &acc, full, MIN, MAX, true).unwrap();
         let exact = w.exact(b.player_bb(), b.opponent_bb(), MIN, MAX, false);
