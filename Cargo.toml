@@ -7,6 +7,7 @@ description = "Ultra-fast Reversi bitboard library using 2x uint64"
 
 [dependencies]
 libc = "0.2"
+socket2 = "0.6"
 # GPU training path (`gpu` feature): one code base for Metal and Vulkan.
 wgpu = { version = "29", optional = true, default-features = false, features = ["metal", "vulkan", "wgsl", "std"] }
 bytemuck = { version = "1", optional = true }

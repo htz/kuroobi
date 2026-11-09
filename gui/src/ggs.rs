@@ -1334,6 +1334,9 @@ fn dial(ctx: &mut Ctx) -> Option<(TcpStream, TcpStream)> {
             stream
                 .set_read_timeout(Some(Duration::from_millis(250)))
                 .ok();
+            if let Err(e) = kuroobi::net::keep_alive(&stream) {
+                ctx.log("info", &format!("TCP keep-alive not set: {e}"));
+            }
             let writer = stream.try_clone().expect("clone");
             Some((stream, writer))
         }

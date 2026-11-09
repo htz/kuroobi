@@ -377,6 +377,9 @@ fn dial(server: &str) -> std::net::TcpStream {
     stream
         .set_read_timeout(Some(Duration::from_millis(300)))
         .ok();
+    if let Err(e) = kuroobi::net::keep_alive(&stream) {
+        eprintln!("### TCP keep-alive not set: {e}");
+    }
     stream
 }
 
