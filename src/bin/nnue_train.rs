@@ -580,7 +580,7 @@ fn main() -> ExitCode {
 
     #[cfg(not(feature = "gpu"))]
     if gpu {
-        eprintln!("--gpu needs a build with `--features gpu`");
+        eprintln!("--gpu needs a build with the gpu feature (on by default)");
         return ExitCode::FAILURE;
     }
 

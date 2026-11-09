@@ -61,7 +61,7 @@ linear_train --stage 40 --epochs 20 --weights weights/linear.bin \
       --val data/val/val_v0002-d4.rec \
       data/records/egaroucid_v0002/train-d4/*.rec
 
-# Every stage with Adam on the GPU (build with --features gpu)
+# Every stage with Adam on the GPU
 linear_train --optimizer adam --gpu --cosine --epochs 20 \
       --weights weights/linear.bin --val data/val/val_v0002-d4.rec \
       data/records/egaroucid_v0002/train-d4/*.rec

@@ -72,8 +72,7 @@ Options:
   --decay <f>       SGD per-epoch lr decay factor (default 0.95)
   --cosine          Anneal the rate from --lr to ~0 over the run, stepped
                     once per shard
-  --gpu             Minibatch Adam on the GPU (needs --features gpu and
-                    --optimizer adam). A run aimed at one stage carries only
+  --gpu             Minibatch Adam on the GPU (needs --optimizer adam). A run aimed at one stage carries only
                     that stage's tables
   --minibatch <n>   Positions per GPU step (default 8192)
   --threads <n>     Workers for scoring the val set and for adam's pass
@@ -783,7 +782,7 @@ fn run_epochs<O: Optimizer>(
     let gpu: Option<()> = None;
     #[cfg(not(feature = "gpu"))]
     if args.gpu {
-        eprintln!("--gpu needs a build with `--features gpu`");
+        eprintln!("--gpu needs a build with the gpu feature (on by default)");
         return ExitCode::FAILURE;
     }
     let mut examples: Vec<Example> = Vec::new();

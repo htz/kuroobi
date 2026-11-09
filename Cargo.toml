@@ -16,8 +16,8 @@ rand = "0.8"
 criterion = "0.5"
 
 [features]
-default = []
-# Train the stacked-read-out model on the GPU (`nnue_train --gpu`).
+default = ["gpu"]
+# GPU training (`nnue_train --gpu`, `linear_train --gpu`).
 gpu = ["dep:wgpu", "dep:bytemuck"]
 # Read the solver's tuning knobs from environment variables at first use
 # instead of compiling their defaults in. Sweeps need this; the default
