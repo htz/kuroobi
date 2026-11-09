@@ -162,6 +162,7 @@ Plus the shared target and filter options above.
 | `--start-epoch <n>` | 1 | Enter the cosine schedule at epoch n, for continuing trained weights |
 | `--train-stages <lo-hi>` | all | Train only the per-stage heads of that stage range, which has to cover whole 10-stage buckets (e.g. `50-59`). Needs `--wd 0` and no `--lookahead` |
 | `--out <path>` | `weights/nnue.bin` | Where the best epoch's weights go. The latest epoch is always written beside it with the extension replaced by `.last.bin` (`nnue.bin` → `nnue.last.bin`) |
+| `--keep-every <n>` | 0 | Also keep every n-th epoch's weights beside `--out` as `.epNN.bin` (`nnue.bin` → `nnue.ep08.bin`), so an epoch that did not beat the start can still be picked later. One file is the size of the weights |
 | `--init <path>` | — | Initial weights. Restores weights only -- Adam starts cold |
 | `--checkpoint <path>` | — | Write weights, moments and loop state every epoch. The best epoch is copied beside it with the extension replaced by `.best.ckpt` |
 | `--resume <path>` | — | Pick a checkpoint up. Indistinguishable from an uninterrupted run |

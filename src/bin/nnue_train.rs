@@ -339,6 +339,7 @@ struct Args {
     checkpoint: Option<PathBuf>,
     resume: Option<PathBuf>,
     start_epoch: usize,
+    keep_every: usize,
     train_stages: Option<(usize, usize)>,
     factor_heads: bool,
 }
@@ -375,6 +376,7 @@ fn parse_args() -> Result<Args, String> {
         checkpoint: None,
         resume: None,
         start_epoch: 1,
+        keep_every: 0,
         train_stages: None,
         factor_heads: false,
     };
@@ -435,6 +437,7 @@ fn parse_args() -> Result<Args, String> {
             "--checkpoint" => a.checkpoint = Some(PathBuf::from(value()?)),
             "--resume" => a.resume = Some(PathBuf::from(value()?)),
             "--start-epoch" => a.start_epoch = num(&flag, value()?)?,
+            "--keep-every" => a.keep_every = num(&flag, value()?)?,
             other if other.starts_with('-') => return Err(format!("unknown option {other}")),
             file => a.data_files.push(PathBuf::from(file)),
         }
@@ -474,6 +477,7 @@ fn main() -> ExitCode {
         mut checkpoint,
         resume,
         start_epoch,
+        keep_every,
         train_stages,
         factor_heads,
     } = match parse_args() {
@@ -817,6 +821,13 @@ fn main() -> ExitCode {
         };
         if save_epoch(&nn, &out, checkpoint.as_deref(), &adam_state, &h, is_best).is_err() {
             return ExitCode::FAILURE;
+        }
+        if keep_every > 0 && epoch.is_multiple_of(keep_every) {
+            let kept = out.with_extension(format!("ep{epoch:02}.bin"));
+            if let Err(e) = nn.save(&kept) {
+                eprintln!("save {} failed: {e}", kept.display());
+                return ExitCode::FAILURE;
+            }
         }
         if is_best {
             best = vm;
