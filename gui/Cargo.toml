@@ -10,7 +10,7 @@ license = "MIT"
 description = "Kuroobi GUI (Tauri)"
 
 [dependencies]
-kuroobi = { path = ".." }
+kuroobi = { path = "..", default-features = false }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
