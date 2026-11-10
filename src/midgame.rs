@@ -30,6 +30,33 @@ fn order_key(x: f32) -> i32 {
 }
 
 const MAX_KIDS: usize = 34;
+
+/// Up to `MAX_KIDS` kids, never initialised past the last one pushed: zeroing all of them would cost more than scoring.
+struct KidStack<T: Copy> {
+    items: [std::mem::MaybeUninit<T>; MAX_KIDS],
+    len: usize,
+}
+
+impl<T: Copy> KidStack<T> {
+    #[inline(always)]
+    fn new() -> Self {
+        KidStack {
+            items: [const { std::mem::MaybeUninit::uninit() }; MAX_KIDS],
+            len: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn push(&mut self, t: T) {
+        self.items[self.len].write(t);
+        self.len += 1;
+    }
+
+    #[inline(always)]
+    fn as_slice(&self) -> &[T] {
+        unsafe { std::slice::from_raw_parts(self.items.as_ptr() as *const T, self.len) }
+    }
+}
 const NO_SLOT: u8 = u8::MAX;
 
 const EVAL_ORDER_DEPTH: u32 = 3;
@@ -353,17 +380,8 @@ struct Fan {
     board: Board,
     depth: u32,
     alpha: f32,
-    nn: std::sync::Arc<Nnue>,
-    tt: std::sync::Arc<SharedTt>,
-    mpc: bool,
-    mpc_relax: u32,
-    split_min: u32,
-    ext_stop: Option<StopHandle>,
-    gen: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
-    my_gen: u32,
-    dev: u32,
-    kids_all: bool,
-    pool: &'static Pool,
+    /// The search each kid starts from: the owner's settings, one deviation deeper.
+    proto: NnueSearch,
 }
 
 impl crate::fan::Fan for Fan {
@@ -383,18 +401,9 @@ impl Fan {
         let search = |stop: &std::sync::Arc<AbortChain>| {
             let mut child = self.board;
             child.apply_flips(pos, flipped);
-            let mut w = NnueSearch::new(self.nn.clone(), self.tt.clone());
-            w.mpc = self.mpc;
-            w.mpc_relax = self.mpc_relax;
-            w.split_min = self.split_min;
-            w.pool = Some(self.pool);
+            let mut w = self.proto.clone();
             w.abort = Some(stop.clone());
-            w.stop = self.ext_stop.clone();
             w.abort_countdown = 1;
-            w.done = self.gen.clone();
-            w.my_gen = self.my_gen;
-            w.dev = self.dev;
-            w.expect_all = self.kids_all;
             let mut acc = w.nn.indices(child.black, child.white);
             let (lo, hi) = (-(self.alpha + PVS_EPS), -self.alpha);
             let v = w.negamax(&child, &mut acc, self.depth, lo, hi);
@@ -586,6 +595,7 @@ fn out_of_time(
     })
 }
 
+#[derive(Clone)]
 pub struct NnueSearch {
     pub nn: std::sync::Arc<Nnue>,
     pub tt: std::sync::Arc<SharedTt>,
@@ -979,9 +989,7 @@ impl NnueSearch {
             (35.0 / 269.0, 17.0 / 269.0, 1.0)
         };
         let eval_order = depth >= EVAL_ORDER_DEPTH;
-        let mut pend: [std::mem::MaybeUninit<(usize, Board, PatternIndices)>; MAX_KIDS] =
-            [const { std::mem::MaybeUninit::uninit() }; MAX_KIDS];
-        let mut np = 0usize;
+        let mut pend = KidStack::<(usize, Board, PatternIndices)>::new();
         let mut keys = [0f32; MAX_KIDS];
         let mut n = 0usize;
         let mut m = moves;
@@ -1006,8 +1014,7 @@ impl NnueSearch {
                     self.nn.prefetch_eval(&nb);
                     let mut child = *acc;
                     self.nn.ix_apply(&mut child, pos, flipped, mover);
-                    pend[np].write((n, nb, child));
-                    np += 1;
+                    pend.push((n, nb, child));
                 }
                 k
             };
@@ -1017,9 +1024,7 @@ impl NnueSearch {
             out[n] = (pos, flipped, 0);
             n += 1;
         }
-        let pend = unsafe {
-            std::slice::from_raw_parts(pend.as_ptr() as *const (usize, Board, PatternIndices), np)
-        };
+        let pend = pend.as_slice();
         for pair in pend.chunks(2) {
             if let [a, b] = pair {
                 let (x, y) = self.nn.eval_pair_from_indices((&a.2, &a.1), (&b.2, &b.1));
@@ -1052,9 +1057,7 @@ impl NnueSearch {
         let mover = b.player();
         let mut v = f32::NEG_INFINITY;
         // The first child cuts 70% of the time; when it does not, the rest are scored in pairs.
-        let mut rest: [std::mem::MaybeUninit<(Board, PatternIndices)>; MAX_KIDS] =
-            [const { std::mem::MaybeUninit::uninit() }; MAX_KIDS];
-        let mut n_rest = 0usize;
+        let mut rest = KidStack::<(Board, PatternIndices)>::new();
         let mut first = true;
         for mask in STATIC_CELL_PRIORITY {
             let mut l = moves & mask;
@@ -1067,8 +1070,7 @@ impl NnueSearch {
                 let mut child = *acc;
                 self.nn.ix_apply(&mut child, pos, flipped, mover);
                 if !first {
-                    rest[n_rest].write((nb, child));
-                    n_rest += 1;
+                    rest.push((nb, child));
                     continue;
                 }
                 first = false;
@@ -1082,9 +1084,8 @@ impl NnueSearch {
                 }
             }
         }
-        let rest = unsafe {
-            std::slice::from_raw_parts(rest.as_ptr() as *const (Board, PatternIndices), n_rest)
-        };
+        let rest = rest.as_slice();
+        let n_rest = rest.len();
         let mut i = 0;
         while i < n_rest {
             let (ga, gb) = if i + 1 < n_rest {
@@ -1134,23 +1135,17 @@ impl NnueSearch {
             return None;
         }
         let pool = self.pool.unwrap();
+        let mut proto = self.worker();
+        proto.abort = None;
+        proto.dev = self.dev + 1;
+        proto.expect_all = kids_all;
         let fan = std::sync::Arc::new(Fan {
             kids: crate::fan::Kids::new(moves.len(), depth, stop),
             moves,
             board: *b,
             depth,
             alpha,
-            nn: self.nn.clone(),
-            tt: self.tt.clone(),
-            mpc: self.mpc,
-            mpc_relax: self.mpc_relax,
-            split_min: self.split_min,
-            ext_stop: self.stop.clone(),
-            gen: self.done.clone(),
-            my_gen: self.my_gen,
-            dev: self.dev + 1,
-            kids_all,
-            pool,
+            proto,
         });
         pool.open_fan(&fan);
         Some(fan)
