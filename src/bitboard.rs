@@ -606,6 +606,48 @@ unsafe fn span_inv(
     vqsubq_u64(vandq_u64(carry, vbicq_u64(pp, cmask)), one)
 }
 
+/// One side to move, prepared once so that every square's flips cost only the flip kernel.
+#[derive(Clone, Copy)]
+pub struct FlipCtx {
+    #[cfg(target_arch = "aarch64")]
+    ctx: BoardCtx,
+    #[cfg(not(target_arch = "aarch64"))]
+    player: u64,
+    #[cfg(not(target_arch = "aarch64"))]
+    opponent: u64,
+}
+
+impl FlipCtx {
+    #[inline]
+    pub fn new(player_bb: u64, opponent_bb: u64) -> FlipCtx {
+        #[cfg(target_arch = "aarch64")]
+        {
+            FlipCtx {
+                ctx: unsafe { BoardCtx::new(player_bb, opponent_bb) },
+            }
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            FlipCtx {
+                player: player_bb,
+                opponent: opponent_bb,
+            }
+        }
+    }
+
+    #[inline]
+    pub fn flip(&self, sq: u8) -> u64 {
+        #[cfg(target_arch = "aarch64")]
+        {
+            unsafe { self.ctx.flip1((sq & 63) as usize) }
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            flippable_scalar(self.player, self.opponent, 1u64 << (sq & 63))
+        }
+    }
+}
+
 #[inline]
 pub fn flippable(player_bb: u64, opponent_bb: u64, pos_bit: u64) -> u64 {
     #[cfg(target_arch = "aarch64")]
@@ -621,39 +663,14 @@ pub fn flippable(player_bb: u64, opponent_bb: u64, pos_bit: u64) -> u64 {
 
 #[inline]
 pub fn flippable2(player_bb: u64, opponent_bb: u64, a: u8, b: u8) -> (u64, u64) {
-    #[cfg(target_arch = "aarch64")]
-    {
-        unsafe {
-            let ctx = BoardCtx::new(player_bb, opponent_bb);
-            return (ctx.flip1((a & 63) as usize), ctx.flip1((b & 63) as usize));
-        }
-    }
-    #[allow(unreachable_code)]
-    (
-        flippable(player_bb, opponent_bb, 1u64 << a),
-        flippable(player_bb, opponent_bb, 1u64 << b),
-    )
+    let ctx = FlipCtx::new(player_bb, opponent_bb);
+    (ctx.flip(a), ctx.flip(b))
 }
 
 #[inline]
 pub fn flippable3(player_bb: u64, opponent_bb: u64, a: u8, b: u8, c: u8) -> (u64, u64, u64) {
-    #[cfg(target_arch = "aarch64")]
-    {
-        unsafe {
-            let ctx = BoardCtx::new(player_bb, opponent_bb);
-            return (
-                ctx.flip1((a & 63) as usize),
-                ctx.flip1((b & 63) as usize),
-                ctx.flip1((c & 63) as usize),
-            );
-        }
-    }
-    #[allow(unreachable_code)]
-    (
-        flippable(player_bb, opponent_bb, 1u64 << a),
-        flippable(player_bb, opponent_bb, 1u64 << b),
-        flippable(player_bb, opponent_bb, 1u64 << c),
-    )
+    let ctx = FlipCtx::new(player_bb, opponent_bb);
+    (ctx.flip(a), ctx.flip(b), ctx.flip(c))
 }
 
 #[inline]
@@ -665,25 +682,8 @@ pub fn flippable4(
     c: u8,
     d: u8,
 ) -> (u64, u64, u64, u64) {
-    #[cfg(target_arch = "aarch64")]
-    {
-        unsafe {
-            let ctx = BoardCtx::new(player_bb, opponent_bb);
-            return (
-                ctx.flip1((a & 63) as usize),
-                ctx.flip1((b & 63) as usize),
-                ctx.flip1((c & 63) as usize),
-                ctx.flip1((d & 63) as usize),
-            );
-        }
-    }
-    #[allow(unreachable_code)]
-    (
-        flippable(player_bb, opponent_bb, 1u64 << a),
-        flippable(player_bb, opponent_bb, 1u64 << b),
-        flippable(player_bb, opponent_bb, 1u64 << c),
-        flippable(player_bb, opponent_bb, 1u64 << d),
-    )
+    let ctx = FlipCtx::new(player_bb, opponent_bb);
+    (ctx.flip(a), ctx.flip(b), ctx.flip(c), ctx.flip(d))
 }
 
 #[cfg(test)]

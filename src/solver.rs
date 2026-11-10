@@ -2272,6 +2272,7 @@ impl Worker<'_> {
         &mut self,
         player: u64,
         opponent: u64,
+        ctx: &bitboard::FlipCtx,
         pos_bit: u64,
         flips: u64,
         empties: u64,
@@ -2284,8 +2285,9 @@ impl Worker<'_> {
         let co = player | flips | pos_bit;
         let child_hash = zobrist::board_hash(cp, co);
         if next_sibling != 0 {
-            let jb = next_sibling.isolate_lowest_one();
-            let jf = bitboard::flippable(player, opponent, jb);
+            let jsq = next_sibling.trailing_zeros() as u8;
+            let jb = 1u64 << jsq;
+            let jf = ctx.flip(jsq);
             if jf != 0 {
                 let h = zobrist::board_hash(opponent ^ jf, player | jf | jb);
                 prefetch(cache_slot(&self.l4, h));
@@ -2383,6 +2385,7 @@ impl Worker<'_> {
         let mut best = alpha;
         let mut class_ix = 0usize;
         let mut cur = classes[0];
+        let ctx = bitboard::FlipCtx::new(player, opponent);
         loop {
             while cur == 0 {
                 class_ix += 1;
@@ -2404,12 +2407,13 @@ impl Worker<'_> {
             let sq = cur.trailing_zeros() as u8;
             cur &= cur - 1;
             let pos_bit = 1u64 << sq;
-            let flips = bitboard::flippable(player, opponent, pos_bit);
+            let flips = ctx.flip(sq);
             let child_parity = parity ^ quadrant_id(sq);
             let val = if n_empties == 5 {
                 self.child5(
                     player,
                     opponent,
+                    &ctx,
                     pos_bit,
                     flips,
                     empties,
@@ -2982,80 +2986,20 @@ impl Worker<'_> {
 
         let n = {
             let mut m = bitboard::mobility(p, o, bitboard::empty_bb(p, o));
+            let ctx = bitboard::FlipCtx::new(p, o);
             let mut n = 0usize;
             while m != 0 {
-                let s0 = m.trailing_zeros() as u8;
+                let sq = m.trailing_zeros() as u8;
                 m &= m - 1;
-                if m == 0 {
-                    out.write_at(
-                        n,
-                        ScoredMove {
-                            pos: Position(s0),
-                            flipped: bitboard::flippable(p, o, 1u64 << s0),
-                            value: 0,
-                        },
-                    );
-                    n += 1;
-                    break;
-                }
-                let s1 = m.trailing_zeros() as u8;
-                m &= m - 1;
-                if m == 0 {
-                    let (f0, f1) = bitboard::flippable2(p, o, s0, s1);
-                    out.write_at(
-                        n,
-                        ScoredMove {
-                            pos: Position(s0),
-                            flipped: f0,
-                            value: 0,
-                        },
-                    );
-                    out.write_at(
-                        n + 1,
-                        ScoredMove {
-                            pos: Position(s1),
-                            flipped: f1,
-                            value: 0,
-                        },
-                    );
-                    n += 2;
-                    break;
-                }
-                let s2 = m.trailing_zeros() as u8;
-                m &= m - 1;
-                if m == 0 {
-                    let (f0, f1) = bitboard::flippable2(p, o, s0, s1);
-                    let f2 = bitboard::flippable(p, o, 1u64 << s2);
-                    for (k, (sq, fl)) in [(s0, f0), (s1, f1), (s2, f2)].into_iter().enumerate() {
-                        out.write_at(
-                            n + k,
-                            ScoredMove {
-                                pos: Position(sq),
-                                flipped: fl,
-                                value: 0,
-                            },
-                        );
-                    }
-                    n += 3;
-                    break;
-                }
-                let s3 = m.trailing_zeros() as u8;
-                m &= m - 1;
-                let (f0, f1, f2, f3) = bitboard::flippable4(p, o, s0, s1, s2, s3);
-                for (k, (sq, fl)) in [(s0, f0), (s1, f1), (s2, f2), (s3, f3)]
-                    .into_iter()
-                    .enumerate()
-                {
-                    out.write_at(
-                        n + k,
-                        ScoredMove {
-                            pos: Position(sq),
-                            flipped: fl,
-                            value: 0,
-                        },
-                    );
-                }
-                n += 4;
+                out.write_at(
+                    n,
+                    ScoredMove {
+                        pos: Position(sq),
+                        flipped: ctx.flip(sq),
+                        value: 0,
+                    },
+                );
+                n += 1;
             }
             n
         };
