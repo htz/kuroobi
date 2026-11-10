@@ -146,6 +146,17 @@ impl Table {
         &self.slots[i..i + 2]
     }
 
+    #[inline]
+    fn prefetch(&self, h: u64) {
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            let p = self.slots.as_ptr().add((h as usize) & self.mask) as *const u8;
+            std::arch::asm!("prfm pldl2keep, [{p}]", p = in(reg) p, options(nostack, readonly));
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        let _ = h;
+    }
+
     fn get(&self, h: u64) -> Option<Entry> {
         self.bucket(h).iter().find_map(|s| {
             let (k, d) = (s.0.load(Relaxed), s.1.load(Relaxed));
@@ -382,6 +393,14 @@ impl Worker<'_> {
                 deferred[nd] = sq;
                 nd += 1;
                 continue;
+            }
+            // The next kid's table entry loads while this one is searched.
+            if !leaf_kids && j < n {
+                let mut nb = *b;
+                nb.make_move_bits(Position(list[j]));
+                self.sh
+                    .table
+                    .prefetch(zobrist::board_hash(nb.player_bb(), nb.opponent_bb()));
             }
             let v = if leaf_kids {
                 self.child1(b, acc, sq, alpha, beta, j == 1)?
