@@ -487,7 +487,7 @@ impl Fan {
 }
 
 struct Pool {
-    fans: std::sync::Mutex<Vec<std::sync::Arc<Fan>>>,
+    fans: std::sync::RwLock<Vec<std::sync::Arc<Fan>>>,
     n_fans: std::sync::atomic::AtomicUsize,
     q: std::sync::Mutex<std::collections::VecDeque<Box<dyn FnOnce() + Send + 'static>>>,
     cv: std::sync::Condvar,
@@ -501,7 +501,7 @@ impl Pool {
         Pool {
             q: std::sync::Mutex::new(std::collections::VecDeque::new()),
             cv: std::sync::Condvar::new(),
-            fans: std::sync::Mutex::new(Vec::new()),
+            fans: std::sync::RwLock::new(Vec::new()),
             n_fans: AtomicUsize::new(0),
             idle: AtomicUsize::new(0),
             queued: AtomicUsize::new(0),
@@ -519,7 +519,7 @@ impl Pool {
 
     fn open_fan(&self, f: &std::sync::Arc<Fan>) {
         use std::sync::atomic::Ordering;
-        self.fans.lock().unwrap().push(f.clone());
+        self.fans.write().unwrap().push(f.clone());
         self.n_fans.fetch_add(1, Ordering::Relaxed);
         if self.idle.load(Ordering::Relaxed) > 0 {
             let _q = self.q.lock().unwrap();
@@ -534,7 +534,7 @@ impl Pool {
             f.take(k);
         }
         self.fans
-            .lock()
+            .write()
             .unwrap()
             .retain(|x| !std::sync::Arc::ptr_eq(x, f));
         self.n_fans.fetch_sub(1, Ordering::Relaxed);
@@ -557,7 +557,7 @@ impl Pool {
     fn fan_open(&self) -> bool {
         use std::sync::atomic::Ordering;
         self.n_fans.load(Ordering::Relaxed) > 0
-            && self.fans.lock().unwrap().iter().any(|f| f.open())
+            && self.fans.read().unwrap().iter().any(|f| f.open())
     }
 
     /// Joins the open fan nearest the root: its siblings are the largest pieces of work.
@@ -567,7 +567,7 @@ impl Pool {
             return false;
         }
         let pick = {
-            let fans = self.fans.lock().unwrap();
+            let fans = self.fans.read().unwrap();
             let best = fans
                 .iter()
                 .filter(|f| f.open() && under.is_none_or(|a| f.stop.descends_from(a)))
@@ -638,12 +638,16 @@ impl Pool {
                         self.queued.fetch_sub(1, Ordering::Relaxed);
                         break t;
                     }
+                    drop(q);
                     if self.fan_open() {
-                        drop(q);
                         self.idle.fetch_sub(1, Ordering::Relaxed);
                         self.help(None);
                         self.idle.fetch_add(1, Ordering::Relaxed);
                         q = self.q.lock().unwrap();
+                        continue;
+                    }
+                    q = self.q.lock().unwrap();
+                    if !q.is_empty() || self.fan_open() {
                         continue;
                     }
                     q = self.cv.wait(q).unwrap();
