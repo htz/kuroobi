@@ -145,13 +145,7 @@ impl Table {
 
     #[inline]
     fn prefetch(&self, h: u64) {
-        #[cfg(target_arch = "aarch64")]
-        unsafe {
-            let p = self.slots.as_ptr().add((h as usize) & self.mask) as *const u8;
-            std::arch::asm!("prfm pldl2keep, [{p}]", p = in(reg) p, options(nostack, readonly));
-        }
-        #[cfg(not(target_arch = "aarch64"))]
-        let _ = h;
+        crate::prefetch::l2(self.slots.as_ptr().wrapping_add((h as usize) & self.mask));
     }
 
     fn get(&self, h: u64) -> Option<Entry> {

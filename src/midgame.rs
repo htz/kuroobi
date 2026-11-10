@@ -165,15 +165,7 @@ impl SharedTt {
 
     #[inline]
     fn prefetch(&self, hash: u64) {
-        #[cfg(target_arch = "aarch64")]
-        {
-            let p = self.bucket(hash) as *const TtBucket as *const u8;
-            unsafe {
-                std::arch::asm!("prfm pldl2keep, [{0}]", in(reg) p, options(nostack, readonly));
-            }
-        }
-        #[cfg(not(target_arch = "aarch64"))]
-        let _ = hash;
+        crate::prefetch::l2(self.bucket(hash));
     }
 
     #[inline]

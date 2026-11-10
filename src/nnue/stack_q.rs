@@ -29,6 +29,22 @@ const _: () = assert!(
 const _: () = assert!(SO_L1 == 16 && SO_L2 == 64);
 const _: () = assert!(OUT_IN == SO_L2 + SO_SKIP && OUT_IN.is_multiple_of(16));
 
+/// Starts loading every line of row `r` in both tables; Apple's line is 128 B, so a 64 B stride would ask twice.
+#[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+#[inline(always)]
+unsafe fn prefetch_row(ft: *const i16, pa: *const i16, r: u32) {
+    let (hp, pp) = (
+        ft.add(r as usize * ACC_DIMS) as *const u8,
+        pa.add(r as usize * PA_DIMS) as *const u8,
+    );
+    for l in 0..ACC_DIMS * 2 / 128 {
+        crate::prefetch::l1(hp.add(l * 128));
+    }
+    for l in 0..PA_DIMS * 2 / 128 {
+        crate::prefetch::l1(pp.add(l * 128));
+    }
+}
+
 /// Weights packed for `vdotq_laneq_s32`: for input chunk `c` (four inputs) and output `o`, the four bytes `w[o][4c..4c+4]` sit at `(c * OUT + o) * 4`.
 #[inline]
 fn packed_index(out: usize, inp: usize, n_out: usize) -> usize {
@@ -343,18 +359,7 @@ impl StackQ {
         }
 
         for m in 0..n {
-            let r = *rows.get_unchecked(m) as usize;
-            let hp = ft.add(r * ACC_DIMS) as *const u8;
-            let pp = pa.add(r * PA_DIMS) as *const u8;
-            // Apple's cache line is 128 B; a 64 B stride spends load slots on lines already asked for.
-            for l in 0..(H * 4 / 128) {
-                let q = hp.add(l * 128);
-                std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) q, options(nostack, readonly));
-            }
-            for l in 0..(H * 2 / 128) {
-                let q = pp.add(l * 128);
-                std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) q, options(nostack, readonly));
-            }
+            prefetch_row(ft, pa, *rows.get_unchecked(m));
         }
         let mut xin = Buf::<L1_IN>([0; L1_IN]);
         let x = xin.0.as_mut_ptr();
@@ -677,22 +682,12 @@ impl StackQ {
                 nb1 += 1;
             }
         }
-        let prefetch = |r: u32| {
-            let hp = ft.add(r as usize * ACC_DIMS) as *const u8;
-            let pp = pa.add(r as usize * PA_DIMS) as *const u8;
-            for l in 0..(ACC_DIMS * 2 / 128) {
-                std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) hp.add(l * 128), options(nostack, readonly));
-            }
-            for l in 0..(PA_DIMS * 2 / 128) {
-                std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) pp.add(l * 128), options(nostack, readonly));
-            }
-        };
         for &r in &both[..nb] {
-            prefetch(r);
+            prefetch_row(ft, pa, r);
         }
         for i in 0..na1 {
-            prefetch(only_a[i]);
-            prefetch(only_b[i]);
+            prefetch_row(ft, pa, only_a[i]);
+            prefetch_row(ft, pa, only_b[i]);
         }
 
         let mut xa = Buf::<L1_IN>([0; L1_IN]);

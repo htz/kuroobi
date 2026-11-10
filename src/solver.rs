@@ -11,6 +11,7 @@ use crate::linear::Linear;
 use crate::midgame::StopHandle;
 use crate::pattern_index::{PatternIndexer, PatternIndices};
 use crate::position::Position;
+use crate::prefetch::l1 as prefetch;
 use crate::zobrist;
 
 const PVS_LIMIT: u8 = 12;
@@ -1020,16 +1021,6 @@ fn cache_store(
     if let Some(b) = best {
         e.best8 = b.index() + 1;
     }
-}
-
-#[inline(always)]
-fn prefetch<T>(p: *const T) {
-    #[cfg(target_arch = "aarch64")]
-    unsafe {
-        std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) p, options(nostack, preserves_flags));
-    }
-    #[cfg(not(target_arch = "aarch64"))]
-    let _ = p;
 }
 
 fn zeroed_vec<T: Copy>(len: usize) -> Vec<T> {

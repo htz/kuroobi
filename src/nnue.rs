@@ -989,13 +989,7 @@ impl Nnue {
     /// Starts loading `board`'s cached-evaluation slot, which is otherwise a cache miss on every evaluation.
     #[inline]
     pub fn prefetch_eval(&self, board: &Board) {
-        let p = self.cache_slot(board).0 as *const EvalSlot as *const u8;
-        #[cfg(target_arch = "aarch64")]
-        unsafe {
-            std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) p, options(nostack, readonly));
-        }
-        #[cfg(not(target_arch = "aarch64"))]
-        let _ = p;
+        crate::prefetch::l1(self.cache_slot(board).0);
     }
 
     /// Two siblings' values, the same as two `eval_from_indices` calls.
