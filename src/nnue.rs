@@ -1989,49 +1989,32 @@ mod tests {
 
 pub(crate) const EVAL_CACHE_BITS: u32 = 18;
 
-/// One cached evaluation behind a sequence lock, so a reader never takes a half-written entry.
+/// One cached evaluation, written without locks: the key is stored mixed with the value, so a read that
+/// catches two writes half-way fails the check instead of returning the wrong value.
 #[derive(Default)]
 #[repr(align(32))]
 pub(crate) struct EvalSlot {
-    seq: std::sync::atomic::AtomicU32,
-    value: std::sync::atomic::AtomicU32,
-    black: std::sync::atomic::AtomicU64,
-    white: std::sync::atomic::AtomicU64,
-    tag: std::sync::atomic::AtomicU64,
+    kb: std::sync::atomic::AtomicU64,
+    kw: std::sync::atomic::AtomicU64,
+    val: std::sync::atomic::AtomicU64,
 }
 
 impl EvalSlot {
     #[inline]
     fn get(&self, black: u64, white: u64, tag: u64) -> Option<f32> {
-        use std::sync::atomic::{fence, Ordering::*};
-        let s0 = self.seq.load(Acquire);
-        let (b, w, t, v) = (
-            self.black.load(Relaxed),
-            self.white.load(Relaxed),
-            self.tag.load(Relaxed),
-            self.value.load(Relaxed),
-        );
-        fence(Acquire);
-        let s1 = self.seq.load(Relaxed);
-        (s0 & 1 == 0 && s0 == s1 && b == black && w == white && t == tag).then(|| f32::from_bits(v))
+        use std::sync::atomic::Ordering::Relaxed;
+        let v = self.val.load(Relaxed);
+        let (b, w) = (self.kb.load(Relaxed), self.kw.load(Relaxed));
+        (v >> 32 == tag && b ^ v == black && w ^ v.rotate_left(29) == white)
+            .then(|| f32::from_bits(v as u32))
     }
 
     #[inline]
     fn put(&self, black: u64, white: u64, tag: u64, v: f32) {
-        use std::sync::atomic::Ordering::*;
-        let s = self.seq.load(Relaxed);
-        if s & 1 != 0
-            || self
-                .seq
-                .compare_exchange(s, s + 1, Acquire, Relaxed)
-                .is_err()
-        {
-            return;
-        }
-        self.black.store(black, Relaxed);
-        self.white.store(white, Relaxed);
-        self.tag.store(tag, Relaxed);
-        self.value.store(v.to_bits(), Relaxed);
-        self.seq.store(s + 2, Release);
+        use std::sync::atomic::Ordering::Relaxed;
+        let v = (tag << 32) | v.to_bits() as u64;
+        self.kb.store(black ^ v, Relaxed);
+        self.kw.store(white ^ v.rotate_left(29), Relaxed);
+        self.val.store(v, Relaxed);
     }
 }
