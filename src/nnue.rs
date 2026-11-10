@@ -1987,7 +1987,8 @@ mod tests {
     }
 }
 
-pub(crate) const EVAL_CACHE_BITS: u32 = 18;
+/// 2 MB, inside L2: the game search at 1 thread, 2^14..2^18 slots, 2.17 / 2.11 / 2.11 / 2.13 / 2.16 s.
+pub(crate) const EVAL_CACHE_BITS: u32 = 16;
 
 /// One cached evaluation, written without locks: the key is stored mixed with the value, so a read that
 /// catches two writes half-way fails the check instead of returning the wrong value.
