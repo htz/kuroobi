@@ -55,6 +55,66 @@ fn mob_byte(mob: usize) -> i8 {
 #[repr(align(64))]
 struct Buf<const N: usize>([i8; N]);
 
+#[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+use std::arch::aarch64::{int16x8_t, int32x4_t, int8x16_t, int8x8_t};
+
+/// Eight transformer inputs: the clamped low and high sums multiplied, as `x - 128`.
+#[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+#[inline(always)]
+unsafe fn ft_bytes(lo: int16x8_t, hi: int16x8_t) -> int8x8_t {
+    use std::arch::aarch64::*;
+    let clamp = vdupq_n_s16(ROW_CLAMP);
+    let a = vreinterpretq_s16_u16(vqshluq_n_s16::<5>(vminq_s16(lo, clamp)));
+    let p = vqmovun_s16(vqdmulhq_s16(a, vminq_s16(hi, clamp)));
+    vadd_s8(vreinterpret_s8_u8(p), vdup_n_s8(-128))
+}
+
+/// Eight phase inputs: the clamped sum squared, as `x - 128`.
+#[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+#[inline(always)]
+unsafe fn pa_bytes(z: int16x8_t) -> int8x8_t {
+    use std::arch::aarch64::*;
+    let v = vminq_s16(z, vdupq_n_s16(ROW_CLAMP));
+    let p = vqmovun_s16(vqdmulhq_s16(
+        vreinterpretq_s16_u16(vqshluq_n_s16::<5>(v)),
+        v,
+    ));
+    vadd_s8(vreinterpret_s8_u8(p), vdup_n_s8(-128))
+}
+
+/// `L1`'s sixteen outputs as `L2`'s input: squared, then plain, each as `x - 128`.
+#[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+#[inline(always)]
+unsafe fn l1_bytes(acc: &[int32x4_t; 4]) -> [int8x16_t; 2] {
+    use std::arch::aarch64::*;
+    let shift = vdupq_n_s8(-128);
+    let s0 = vcombine_s16(vqmovn_s32(acc[0]), vqmovn_s32(acc[1]));
+    let s1 = vcombine_s16(vqmovn_s32(acc[2]), vqmovn_s32(acc[3]));
+    let sq = vcombine_u8(
+        vqshrun_n_s16::<5>(vqdmulhq_s16(s0, s0)),
+        vqshrun_n_s16::<5>(vqdmulhq_s16(s1, s1)),
+    );
+    let re = vcombine_u8(vqshrun_n_s16::<6>(s0), vqshrun_n_s16::<6>(s1));
+    [
+        vaddq_s8(vreinterpretq_s8_u8(sq), shift),
+        vaddq_s8(vreinterpretq_s8_u8(re), shift),
+    ]
+}
+
+/// Eight of `L2`'s outputs, clamped and squared, as `x - 128`.
+#[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+#[inline(always)]
+unsafe fn l2_bytes(a: int32x4_t, b: int32x4_t) -> int8x8_t {
+    use std::arch::aarch64::*;
+    let (top, zero) = (vdupq_n_s32(255 << 6), vdupq_n_s32(0));
+    let v = vcombine_s16(
+        vqmovn_s32(vmaxq_s32(vminq_s32(a, top), zero)),
+        vqmovn_s32(vmaxq_s32(vminq_s32(b, top), zero)),
+    );
+    let p = vqshrun_n_s16::<5>(vqdmulhq_s16(v, v));
+    vadd_s8(vreinterpret_s8_u8(p), vdup_n_s8(-128))
+}
+
 /// Weights packed for `vdotq_laneq_s32`: for input chunk `c` (four inputs) and output `o`, the four bytes `w[o][4c..4c+4]` sit at `(c * OUT + o) * 4`.
 #[inline]
 fn packed_index(out: usize, inp: usize, n_out: usize) -> usize {
@@ -356,19 +416,11 @@ impl StackQ {
         }
         let mut xin = Buf::<L1_IN>([0; L1_IN]);
         let x = xin.0.as_mut_ptr();
-        let clamp = vdupq_n_s16(ROW_CLAMP);
-        let shift = vdupq_n_s8(-128);
 
         let lo = sum128(ft, ACC_DIMS, self.ft_bias.as_ptr(), rows, n);
         let hi = sum128(ft.add(H), ACC_DIMS, self.ft_bias.as_ptr().add(H), rows, n);
         for r in 0..16 {
-            let a = vreinterpretq_s16_u16(vqshluq_n_s16::<5>(vminq_s16(lo[r], clamp)));
-            let b = vminq_s16(hi[r], clamp);
-            let p = vqmovun_s16(vqdmulhq_s16(a, b));
-            vst1_s8(
-                x.add(r * 8),
-                vadd_s8(vreinterpret_s8_u8(p), vget_low_s8(shift)),
-            );
+            vst1_s8(x.add(r * 8), ft_bytes(lo[r], hi[r]));
         }
         let bucket = pa_bucket(stage);
         let pz = sum128(
@@ -379,15 +431,7 @@ impl StackQ {
             n,
         );
         for (r, &z) in pz.iter().enumerate() {
-            let v = vminq_s16(z, clamp);
-            let p = vqmovun_s16(vqdmulhq_s16(
-                vreinterpretq_s16_u16(vqshluq_n_s16::<5>(v)),
-                v,
-            ));
-            vst1_s8(
-                x.add(H + r * 8),
-                vadd_s8(vreinterpret_s8_u8(p), vget_low_s8(shift)),
-            );
+            vst1_s8(x.add(H + r * 8), pa_bytes(z));
         }
         *x.add(SO_SKIP) = mob_byte(mob);
 
@@ -399,7 +443,6 @@ impl StackQ {
     #[inline(always)]
     unsafe fn layers_neon(&self, x: *const i8, st: usize) -> i32 {
         use std::arch::aarch64::*;
-        let shift = vdupq_n_s8(-128);
         let l1w = self.l1_w.as_ptr().add(st * L1_CHUNKS * 4 * SO_L1);
         let mut acc1: [int32x4_t; 4] = [vdupq_n_s32(0); 4];
         for (j, a) in acc1.iter_mut().enumerate() {
@@ -433,18 +476,9 @@ impl StackQ {
             }
         }
         let mut a1 = Buf::<L2_IN>([0; L2_IN]);
-        let s0 = vcombine_s16(vqmovn_s32(acc1[0]), vqmovn_s32(acc1[1]));
-        let s1 = vcombine_s16(vqmovn_s32(acc1[2]), vqmovn_s32(acc1[3]));
-        let sq = vcombine_u8(
-            vqshrun_n_s16::<5>(vqdmulhq_s16(s0, s0)),
-            vqshrun_n_s16::<5>(vqdmulhq_s16(s1, s1)),
-        );
-        let re = vcombine_u8(vqshrun_n_s16::<6>(s0), vqshrun_n_s16::<6>(s1));
-        vst1q_s8(a1.0.as_mut_ptr(), vaddq_s8(vreinterpretq_s8_u8(sq), shift));
-        vst1q_s8(
-            a1.0.as_mut_ptr().add(16),
-            vaddq_s8(vreinterpretq_s8_u8(re), shift),
-        );
+        let [sq, re] = l1_bytes(&acc1);
+        vst1q_s8(a1.0.as_mut_ptr(), sq);
+        vst1q_s8(a1.0.as_mut_ptr().add(16), re);
 
         let l2w = self.l2_w.as_ptr().add(st * L2_CHUNKS * 4 * SO_L2);
         let mut acc2: [int32x4_t; 16] = [vdupq_n_s32(0); 16];
@@ -462,16 +496,10 @@ impl StackQ {
             }
         }
         let mut xo = Buf::<OUT_IN>([0; OUT_IN]);
-        let top = vdupq_n_s32(255 << 6);
-        let zero = vdupq_n_s32(0);
         for j in 0..8 {
-            let v0 = vqmovn_s32(vmaxq_s32(vminq_s32(acc2[2 * j], top), zero));
-            let v1 = vqmovn_s32(vmaxq_s32(vminq_s32(acc2[2 * j + 1], top), zero));
-            let v = vcombine_s16(v0, v1);
-            let p = vqshrun_n_s16::<5>(vqdmulhq_s16(v, v));
             vst1_s8(
                 xo.0.as_mut_ptr().add(j * 8),
-                vadd_s8(vreinterpret_s8_u8(p), vget_low_s8(shift)),
+                l2_bytes(acc2[2 * j], acc2[2 * j + 1]),
             );
         }
         std::ptr::copy_nonoverlapping(x, xo.0.as_mut_ptr().add(SO_L2), SO_SKIP);
@@ -507,7 +535,6 @@ impl StackQ {
     #[inline(always)]
     unsafe fn layers_pair_neon(&self, x: [*const i8; 2], st: usize) -> (i32, i32) {
         use std::arch::aarch64::*;
-        let shift = vdupq_n_s8(-128);
         let l1w = self.l1_w.as_ptr().add(st * L1_CHUNKS * 4 * SO_L1);
         let mut acc1: [[int32x4_t; 4]; 2] = [[vdupq_n_s32(0); 4]; 2];
         let mut part: [[int32x4_t; 4]; 2] = [[vdupq_n_s32(0); 4]; 2];
@@ -546,24 +573,12 @@ impl StackQ {
                     acc1[e][j] = vaddq_s32(acc1[e][j], part[e][j]);
                     acc1[e][j] = vdotq_s32(acc1[e][j], vld1q_s8(wp.add(j * 16)), xb);
                 }
-                let s0 = vcombine_s16(vqmovn_s32(acc1[e][0]), vqmovn_s32(acc1[e][1]));
-                let s1 = vcombine_s16(vqmovn_s32(acc1[e][2]), vqmovn_s32(acc1[e][3]));
-                let sq = vcombine_u8(
-                    vqshrun_n_s16::<5>(vqdmulhq_s16(s0, s0)),
-                    vqshrun_n_s16::<5>(vqdmulhq_s16(s1, s1)),
-                );
-                let re = vcombine_u8(vqshrun_n_s16::<6>(s0), vqshrun_n_s16::<6>(s1));
-                a1[e] = [
-                    vaddq_s8(vreinterpretq_s8_u8(sq), shift),
-                    vaddq_s8(vreinterpretq_s8_u8(re), shift),
-                ];
+                a1[e] = l1_bytes(&acc1[e]);
             }
         }
 
         let l2w = self.l2_w.as_ptr().add(st * L2_CHUNKS * 4 * SO_L2);
         let mut xo = [Buf::<OUT_IN>([0; OUT_IN]), Buf::<OUT_IN>([0; OUT_IN])];
-        let top = vdupq_n_s32(255 << 6);
-        let zero = vdupq_n_s32(0);
         for half in 0..2 {
             let mut acc2: [[int32x4_t; 8]; 2] = [[vdupq_n_s32(0); 8]; 2];
             for acc in acc2.iter_mut() {
@@ -592,13 +607,9 @@ impl StackQ {
             }
             for e in 0..2 {
                 for k in 0..4 {
-                    let v0 = vqmovn_s32(vmaxq_s32(vminq_s32(acc2[e][2 * k], top), zero));
-                    let v1 = vqmovn_s32(vmaxq_s32(vminq_s32(acc2[e][2 * k + 1], top), zero));
-                    let v = vcombine_s16(v0, v1);
-                    let p = vqshrun_n_s16::<5>(vqdmulhq_s16(v, v));
                     vst1_s8(
                         xo[e].0.as_mut_ptr().add((half * 4 + k) * 8),
-                        vadd_s8(vreinterpret_s8_u8(p), vget_low_s8(shift)),
+                        l2_bytes(acc2[e][2 * k], acc2[e][2 * k + 1]),
                     );
                 }
             }
@@ -677,8 +688,6 @@ impl StackQ {
 
         let mut xa = Buf::<L1_IN>([0; L1_IN]);
         let mut xb = Buf::<L1_IN>([0; L1_IN]);
-        let clamp = vdupq_n_s16(ROW_CLAMP);
-        let shift8 = vdup_n_s8(-128);
 
         for c in 0..H / 32 {
             let mut lo_a: [int16x8_t; 4] = [vdupq_n_s16(0); 4];
@@ -707,13 +716,7 @@ impl StackQ {
             }
             for r in 0..4 {
                 for (lo, hi, x) in [(lo_a[r], hi_a[r], &mut xa), (lo_b[r], hi_b[r], &mut xb)] {
-                    let a = vreinterpretq_s16_u16(vqshluq_n_s16::<5>(vminq_s16(lo, clamp)));
-                    let b = vminq_s16(hi, clamp);
-                    let p = vqmovun_s16(vqdmulhq_s16(a, b));
-                    vst1_s8(
-                        x.0.as_mut_ptr().add(c * 32 + r * 8),
-                        vadd_s8(vreinterpret_s8_u8(p), shift8),
-                    );
+                    vst1_s8(x.0.as_mut_ptr().add(c * 32 + r * 8), ft_bytes(lo, hi));
                 }
             }
         }
@@ -740,15 +743,7 @@ impl StackQ {
             }
             for r in 0..8 {
                 for (z, x) in [(za[r], &mut xa), (zb[r], &mut xb)] {
-                    let v = vminq_s16(z, clamp);
-                    let p = vqmovun_s16(vqdmulhq_s16(
-                        vreinterpretq_s16_u16(vqshluq_n_s16::<5>(v)),
-                        v,
-                    ));
-                    vst1_s8(
-                        x.0.as_mut_ptr().add(H + c * 64 + r * 8),
-                        vadd_s8(vreinterpret_s8_u8(p), shift8),
-                    );
+                    vst1_s8(x.0.as_mut_ptr().add(H + c * 64 + r * 8), pa_bytes(z));
                 }
             }
         }
