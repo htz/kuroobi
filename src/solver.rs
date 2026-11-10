@@ -25,6 +25,17 @@ const DEEP3_ORDER_EMPTIES: u8 = 29;
 const MOBILITY_ORDER_WEIGHT: i32 = 12;
 /// A child's legal set is never all ones, so this marks "not known yet".
 const NO_LEGAL_HINT: u64 = u64::MAX;
+
+/// `hint` when the parent passed one, else the mobility computed here.
+#[inline(always)]
+fn legal_or(hint: u64, player: u64, opponent: u64, empties: u64) -> u64 {
+    if hint != NO_LEGAL_HINT {
+        debug_assert_eq!(hint, bitboard::mobility(player, opponent, empties));
+        hint
+    } else {
+        bitboard::mobility(player, opponent, empties)
+    }
+}
 const EDGE_STABILITY_ORDER_WEIGHT: i32 = 1;
 const SORT_ALPHA_DELTA: i32 = 12;
 const PARALLEL_MIN_EMPTIES: u8 = 16;
@@ -2354,12 +2365,7 @@ impl Worker<'_> {
         }
 
         let empties = bitboard::empty_bb(player, opponent);
-        let legal = if legal != NO_LEGAL_HINT {
-            debug_assert_eq!(legal, bitboard::mobility(player, opponent, empties));
-            legal
-        } else {
-            bitboard::mobility(player, opponent, empties)
-        };
+        let legal = legal_or(legal, player, opponent, empties);
         if legal == 0 {
             if passed {
                 return final_score_bb(player, opponent);
@@ -3001,12 +3007,7 @@ impl Worker<'_> {
         out.len = 0;
 
         let n = {
-            let mut m = if legal != NO_LEGAL_HINT {
-                debug_assert_eq!(legal, bitboard::mobility(p, o, bitboard::empty_bb(p, o)));
-                legal
-            } else {
-                bitboard::mobility(p, o, bitboard::empty_bb(p, o))
-            };
+            let mut m = legal_or(legal, p, o, bitboard::empty_bb(p, o));
             let ctx = bitboard::FlipCtx::new(p, o);
             let mut n = 0usize;
             while m != 0 {

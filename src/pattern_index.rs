@@ -131,7 +131,7 @@ impl PatternIndexer {
         }
     }
 
-    /// The indices stay in ten vector registers across every square the move changes.
+    /// The indices stay in vector registers, eight masks each, across every square the move changes.
     #[cfg(target_arch = "aarch64")]
     #[target_feature(enable = "neon")]
     unsafe fn apply_neon(

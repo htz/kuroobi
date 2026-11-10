@@ -651,14 +651,13 @@ impl FlipCtx {
 #[inline]
 pub fn flippable(player_bb: u64, opponent_bb: u64, pos_bit: u64) -> u64 {
     #[cfg(target_arch = "aarch64")]
-    {
-        unsafe {
-            let ctx = BoardCtx::new(player_bb, opponent_bb);
-            return ctx.flip1(pos_bit.trailing_zeros() as usize);
-        }
+    unsafe {
+        BoardCtx::new(player_bb, opponent_bb).flip1(pos_bit.trailing_zeros() as usize)
     }
-    #[allow(unreachable_code)]
-    flippable_scalar(player_bb, opponent_bb, pos_bit)
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        flippable_scalar(player_bb, opponent_bb, pos_bit)
+    }
 }
 
 #[inline]
