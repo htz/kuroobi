@@ -263,7 +263,6 @@ impl Fan {
     fn worker<'a>(&'a self, pool: &Arc<Pool>) -> Worker<'a> {
         Worker {
             sh: &self.sh,
-            shared: &self.sh,
             nodes: 0,
             history: self.history,
             margin: self.margin,
@@ -294,6 +293,8 @@ impl Fan {
 }
 
 struct Pool {
+    /// What every fan's searches share; the pool outlives them all.
+    sh: Arc<Shared>,
     fans: FanList<Fan>,
     m: Mutex<()>,
     cv: Condvar,
@@ -302,8 +303,9 @@ struct Pool {
 }
 
 impl Pool {
-    fn start(workers: usize) -> Arc<Pool> {
+    fn start(workers: usize, sh: &Arc<Shared>) -> Arc<Pool> {
         let p = Arc::new(Pool {
+            sh: sh.clone(),
             fans: FanList::new(),
             m: Mutex::new(()),
             cv: Condvar::new(),
@@ -361,8 +363,6 @@ impl Pool {
 
 struct Worker<'a> {
     sh: &'a Shared,
-    /// `sh` itself, for fans to hold.
-    shared: &'a Arc<Shared>,
     /// The kid this worker searches for a fan, when it does.
     stop: Option<Arc<AbortChain>>,
     pool: Option<Arc<Pool>>,
@@ -635,7 +635,7 @@ impl Worker<'_> {
                 AbortChain::child(self.stop.clone()),
             ),
             moves: rest.to_vec(),
-            sh: self.shared.clone(),
+            sh: pool.sh.clone(),
             board: *b,
             acc: *acc,
             alpha,
@@ -891,18 +891,19 @@ impl ClockSearch {
         stop: Option<StopHandle>,
     ) -> ClockSearch {
         let sigma = nn.mpc_sigma();
+        let sh = Arc::new(Shared {
+            nn,
+            table: Table::new(table_bits),
+            sigma,
+            timeout: AtomicBool::new(false),
+            deadline_ns: AtomicU64::new(u64::MAX),
+            epoch: Instant::now(),
+            stop,
+        });
         ClockSearch {
-            sh: Arc::new(Shared {
-                nn,
-                table: Table::new(table_bits),
-                sigma,
-                timeout: AtomicBool::new(false),
-                deadline_ns: AtomicU64::new(u64::MAX),
-                epoch: Instant::now(),
-                stop,
-            }),
+            pool: (threads > 1).then(|| Pool::start(threads - 1, &sh)),
+            sh,
             threads: threads.max(1),
-            pool: (threads > 1).then(|| Pool::start(threads - 1)),
             history: [[0; 64]; 2],
             step: 0,
             first_move: true,
@@ -918,7 +919,7 @@ impl ClockSearch {
             p.stop_all();
         }
         self.threads = threads;
-        self.pool = (threads > 1).then(|| Pool::start(threads - 1));
+        self.pool = (threads > 1).then(|| Pool::start(threads - 1, &self.sh));
     }
 
     pub fn table_move(&self, b: &Board) -> Option<Position> {
@@ -967,7 +968,6 @@ impl ClockSearch {
         let acc = self.sh.nn.indices(b.black, b.white);
         let mut w = Worker {
             sh: &self.sh,
-            shared: &self.sh,
             nodes: 0,
             history: self.history,
             margin: MARGINS[self.step],
@@ -1197,7 +1197,6 @@ mod tests {
         let acc = s.sh.nn.indices(b.black, b.white);
         let mut w = Worker {
             sh: &s.sh,
-            shared: &s.sh,
             nodes: 0,
             history: [[0; 64]; 2],
             margin: 0,
