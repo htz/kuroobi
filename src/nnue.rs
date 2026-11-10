@@ -6,6 +6,7 @@ use crate::linear::STAGE_COUNT;
 use crate::pattern::Pattern;
 use crate::pattern_index::{PatternIndexer, PatternIndices, MAX_MASKS};
 use crate::position::Position;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 #[cfg(feature = "gpu")]
 pub mod gpu;
@@ -844,6 +845,37 @@ pub struct Nnue {
     mpc_alpha: Option<MpcAlpha>,
 }
 
+/// 2 MB, inside L2: the game search at 1 thread, 2^14..2^18 slots, 2.17 / 2.11 / 2.11 / 2.13 / 2.16 s.
+pub(crate) const EVAL_CACHE_BITS: u32 = 16;
+
+/// One cached evaluation, written without locks: the key is stored mixed with the value, so a read that
+/// catches two writes half-way fails the check instead of returning the wrong value.
+#[derive(Default)]
+#[repr(align(32))]
+pub(crate) struct EvalSlot {
+    kb: AtomicU64,
+    kw: AtomicU64,
+    val: AtomicU64,
+}
+
+impl EvalSlot {
+    #[inline]
+    fn get(&self, black: u64, white: u64, tag: u64) -> Option<f32> {
+        let v = self.val.load(Relaxed);
+        let (b, w) = (self.kb.load(Relaxed), self.kw.load(Relaxed));
+        (v >> 32 == tag && b ^ v == black && w ^ v.rotate_left(29) == white)
+            .then(|| f32::from_bits(v as u32))
+    }
+
+    #[inline]
+    fn put(&self, black: u64, white: u64, tag: u64, v: f32) {
+        let v = (tag << 32) | v.to_bits() as u64;
+        self.kb.store(black ^ v, Relaxed);
+        self.kw.store(white ^ v.rotate_left(29), Relaxed);
+        self.val.store(v, Relaxed);
+    }
+}
+
 impl Nnue {
     pub fn new(patterns: &'static [Pattern]) -> Nnue {
         let indexer = PatternIndexer::new(patterns);
@@ -1009,8 +1041,8 @@ impl Nnue {
             || stage != crate::linear::Linear::stage(b.1)
         {
             return (
-                ha.unwrap_or_else(|| self.eval_from_indices(a.0, a.1)),
-                hb.unwrap_or_else(|| self.eval_from_indices(b.0, b.1)),
+                ha.unwrap_or_else(|| self.eval_into(a.0, a.1, sa, ta)),
+                hb.unwrap_or_else(|| self.eval_into(b.0, b.1, sb, tb)),
             );
         }
         let (va, vb) = self.sq.eval_pair(
@@ -1033,6 +1065,12 @@ impl Nnue {
         if let Some(v) = slot.get(board.black, board.white, tag) {
             return v;
         }
+        self.eval_into(indices, board, slot, tag)
+    }
+
+    /// Evaluates `board`, whose slot missed, and fills the slot.
+    #[inline(always)]
+    fn eval_into(&self, indices: &PatternIndices, board: &Board, slot: &EvalSlot, tag: u64) -> f32 {
         let stage = crate::linear::Linear::stage(board);
         let v = self
             .sq
@@ -1978,38 +2016,5 @@ mod tests {
             worst < 0.02,
             "backward disagrees with finite differences by {worst:.4} relative: {worst_name}"
         );
-    }
-}
-
-/// 2 MB, inside L2: the game search at 1 thread, 2^14..2^18 slots, 2.17 / 2.11 / 2.11 / 2.13 / 2.16 s.
-pub(crate) const EVAL_CACHE_BITS: u32 = 16;
-
-/// One cached evaluation, written without locks: the key is stored mixed with the value, so a read that
-/// catches two writes half-way fails the check instead of returning the wrong value.
-#[derive(Default)]
-#[repr(align(32))]
-pub(crate) struct EvalSlot {
-    kb: std::sync::atomic::AtomicU64,
-    kw: std::sync::atomic::AtomicU64,
-    val: std::sync::atomic::AtomicU64,
-}
-
-impl EvalSlot {
-    #[inline]
-    fn get(&self, black: u64, white: u64, tag: u64) -> Option<f32> {
-        use std::sync::atomic::Ordering::Relaxed;
-        let v = self.val.load(Relaxed);
-        let (b, w) = (self.kb.load(Relaxed), self.kw.load(Relaxed));
-        (v >> 32 == tag && b ^ v == black && w ^ v.rotate_left(29) == white)
-            .then(|| f32::from_bits(v as u32))
-    }
-
-    #[inline]
-    fn put(&self, black: u64, white: u64, tag: u64, v: f32) {
-        use std::sync::atomic::Ordering::Relaxed;
-        let v = (tag << 32) | v.to_bits() as u64;
-        self.kb.store(black ^ v, Relaxed);
-        self.kw.store(white ^ v.rotate_left(29), Relaxed);
-        self.val.store(v, Relaxed);
     }
 }

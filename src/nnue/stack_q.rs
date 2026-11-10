@@ -45,6 +45,16 @@ unsafe fn prefetch_row(ft: *const i16, pa: *const i16, r: u32) {
     }
 }
 
+/// The mobility input lane, shifted like the rest of `L1`'s input.
+#[inline(always)]
+fn mob_byte(mob: usize) -> i8 {
+    ((mob as i32 * 7).min(255) - 128) as i8
+}
+
+#[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+#[repr(align(64))]
+struct Buf<const N: usize>([i8; N]);
+
 /// Weights packed for `vdotq_laneq_s32`: for input chunk `c` (four inputs) and output `o`, the four bytes `w[o][4c..4c+4]` sit at `(c * OUT + o) * 4`.
 #[inline]
 fn packed_index(out: usize, inp: usize, n_out: usize) -> usize {
@@ -153,6 +163,19 @@ impl StackQ {
         }
     }
 
+    /// The rows for `player` to move: the transformer's, and the phase rows of `stage`'s bucket.
+    #[inline(always)]
+    fn tables(&self, net: &Nnue, player: Color, stage: usize) -> (&[i16], &[i16]) {
+        let (ft, pa) = if player == Color::Black {
+            (&self.ft_b, &self.pa_b)
+        } else {
+            (&self.ft_w, &self.pa_w)
+        };
+        let base = pa_bucket(stage) * net.n_features * PA_DIMS;
+        // `pa` holds every bucket's rows, so the start is inside it.
+        (ft, unsafe { pa.get_unchecked(base..) })
+    }
+
     /// The score in discs for the side to move.
     #[inline]
     pub(super) fn eval(
@@ -164,35 +187,13 @@ impl StackQ {
         mob: usize,
     ) -> f32 {
         let rows = net.features_black(indices);
-        let (ft, pa) = if player == Color::Black {
-            (&self.ft_b, &self.pa_b)
-        } else {
-            (&self.ft_w, &self.pa_w)
-        };
-        let pa_base = pa_bucket(stage) * net.n_features;
+        let (ft, pa) = self.tables(net, player, stage);
         let st = so_stage(stage);
         #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
-        let sum = unsafe {
-            self.eval_neon(
-                ft.as_ptr(),
-                pa.as_ptr().add(pa_base * PA_DIMS),
-                &rows,
-                net.n_masks,
-                st,
-                stage,
-                mob,
-            )
-        };
+        let sum =
+            unsafe { self.eval_neon(ft.as_ptr(), pa.as_ptr(), &rows, net.n_masks, st, stage, mob) };
         #[cfg(not(all(target_arch = "aarch64", not(feature = "nnue-scalar"))))]
-        let sum = self.eval_scalar(
-            ft,
-            &pa[pa_base * PA_DIMS..],
-            &rows,
-            net.n_masks,
-            st,
-            stage,
-            mob,
-        );
+        let sum = self.eval_scalar(ft, pa, &rows, net.n_masks, st, stage, mob);
         sum as f32 / OUT_PER_DISC
     }
 
@@ -209,16 +210,11 @@ impl StackQ {
         {
             let ra = net.features_black(indices.0);
             let rb = net.features_black(indices.1);
-            let (ft, pa) = if player == Color::Black {
-                (&self.ft_b, &self.pa_b)
-            } else {
-                (&self.ft_w, &self.pa_w)
-            };
-            let pa_base = pa_bucket(stage) * net.n_features;
+            let (ft, pa) = self.tables(net, player, stage);
             let (a, b) = unsafe {
                 self.eval_pair_neon(
                     ft.as_ptr(),
-                    pa.as_ptr().add(pa_base * PA_DIMS),
+                    pa.as_ptr(),
                     &ra,
                     &rb,
                     net.n_masks,
@@ -284,7 +280,7 @@ impl StackQ {
             let p = ((v.max(0) << 5) * v) >> 15;
             xin[H + j] = (p.clamp(0, 255) - 128) as i8;
         }
-        xin[SO_SKIP] = ((mob as i32 * 7).min(255) - 128) as i8;
+        xin[SO_SKIP] = mob_byte(mob);
 
         let l1w = &self.l1_w[st * L1_CHUNKS * 4 * SO_L1..];
         let mut a1 = [0i8; L2_IN];
@@ -332,9 +328,6 @@ impl StackQ {
         mob: usize,
     ) -> i32 {
         use std::arch::aarch64::*;
-
-        #[repr(align(64))]
-        struct Buf<const N: usize>([i8; N]);
 
         /// Sum 128 lanes of `n` rows onto `bias`, in sixteen registers.
         #[inline(always)]
@@ -396,7 +389,7 @@ impl StackQ {
                 vadd_s8(vreinterpret_s8_u8(p), vget_low_s8(shift)),
             );
         }
-        *x.add(SO_SKIP) = ((mob as i32 * 7).min(255) - 128) as i8;
+        *x.add(SO_SKIP) = mob_byte(mob);
 
         self.layers_neon(x, st)
     }
@@ -406,8 +399,6 @@ impl StackQ {
     #[inline(always)]
     unsafe fn layers_neon(&self, x: *const i8, st: usize) -> i32 {
         use std::arch::aarch64::*;
-        #[repr(align(64))]
-        struct Buf<const N: usize>([i8; N]);
         let shift = vdupq_n_s8(-128);
         let l1w = self.l1_w.as_ptr().add(st * L1_CHUNKS * 4 * SO_L1);
         let mut acc1: [int32x4_t; 4] = [vdupq_n_s32(0); 4];
@@ -516,8 +507,6 @@ impl StackQ {
     #[inline(always)]
     unsafe fn layers_pair_neon(&self, x: [*const i8; 2], st: usize) -> (i32, i32) {
         use std::arch::aarch64::*;
-        #[repr(align(64))]
-        struct Buf<const N: usize>([i8; N]);
         let shift = vdupq_n_s8(-128);
         let l1w = self.l1_w.as_ptr().add(st * L1_CHUNKS * 4 * SO_L1);
         let mut acc1: [[int32x4_t; 4]; 2] = [[vdupq_n_s32(0); 4]; 2];
@@ -651,7 +640,7 @@ impl StackQ {
     /// Two siblings at once: same side to move and stage, so a row both use is read once.
     #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
     #[allow(clippy::too_many_arguments)]
-    pub(super) unsafe fn eval_pair_neon(
+    unsafe fn eval_pair_neon(
         &self,
         ft: *const i16,
         pa: *const i16,
@@ -663,29 +652,25 @@ impl StackQ {
         mob: (usize, usize),
     ) -> (i32, i32) {
         use std::arch::aarch64::*;
-        #[repr(align(64))]
-        struct Buf<const N: usize>([i8; N]);
-
         let mut both = [0u32; MAX_MASKS];
         let mut only_a = [0u32; MAX_MASKS];
         let mut only_b = [0u32; MAX_MASKS];
-        let (mut nb, mut na1, mut nb1) = (0, 0, 0);
+        let (mut n_both, mut n_diff) = (0, 0);
         for m in 0..n {
             let (x, y) = (*ra.get_unchecked(m), *rb.get_unchecked(m));
             if x == y {
-                both[nb] = x;
-                nb += 1;
+                both[n_both] = x;
+                n_both += 1;
             } else {
-                only_a[na1] = x;
-                na1 += 1;
-                only_b[nb1] = y;
-                nb1 += 1;
+                only_a[n_diff] = x;
+                only_b[n_diff] = y;
+                n_diff += 1;
             }
         }
-        for &r in &both[..nb] {
+        for &r in &both[..n_both] {
             prefetch_row(ft, pa, r);
         }
-        for i in 0..na1 {
+        for i in 0..n_diff {
             prefetch_row(ft, pa, only_a[i]);
             prefetch_row(ft, pa, only_b[i]);
         }
@@ -695,7 +680,6 @@ impl StackQ {
         let clamp = vdupq_n_s16(ROW_CLAMP);
         let shift8 = vdup_n_s8(-128);
 
-        // Transformer: 32 lanes of the low and high halves per pass, for both positions.
         for c in 0..H / 32 {
             let mut lo_a: [int16x8_t; 4] = [vdupq_n_s16(0); 4];
             let mut hi_a: [int16x8_t; 4] = [vdupq_n_s16(0); 4];
@@ -703,7 +687,7 @@ impl StackQ {
                 lo_a[r] = vld1q_s16(self.ft_bias.as_ptr().add(c * 32 + r * 8));
                 hi_a[r] = vld1q_s16(self.ft_bias.as_ptr().add(H + c * 32 + r * 8));
             }
-            for &row in &both[..nb] {
+            for &row in &both[..n_both] {
                 let p = ft.add(row as usize * ACC_DIMS + c * 32);
                 for r in 0..4 {
                     lo_a[r] = vaddq_s16(lo_a[r], vld1q_s16(p.add(r * 8)));
@@ -711,7 +695,7 @@ impl StackQ {
                 }
             }
             let (mut lo_b, mut hi_b) = (lo_a, hi_a);
-            for i in 0..na1 {
+            for i in 0..n_diff {
                 let p = ft.add(only_a[i] as usize * ACC_DIMS + c * 32);
                 let q = ft.add(only_b[i] as usize * ACC_DIMS + c * 32);
                 for r in 0..4 {
@@ -733,21 +717,20 @@ impl StackQ {
                 }
             }
         }
-        // Phase rows: 64 lanes per pass.
         let pbias = self.pa_bias.as_ptr().add(pa_bucket(stage) * PA_DIMS);
         for c in 0..PA_DIMS / 64 {
             let mut za: [int16x8_t; 8] = [vdupq_n_s16(0); 8];
             for (r, z) in za.iter_mut().enumerate() {
                 *z = vld1q_s16(pbias.add(c * 64 + r * 8));
             }
-            for &row in &both[..nb] {
+            for &row in &both[..n_both] {
                 let p = pa.add(row as usize * PA_DIMS + c * 64);
                 for (r, z) in za.iter_mut().enumerate() {
                     *z = vaddq_s16(*z, vld1q_s16(p.add(r * 8)));
                 }
             }
             let mut zb = za;
-            for i in 0..na1 {
+            for i in 0..n_diff {
                 let p = pa.add(only_a[i] as usize * PA_DIMS + c * 64);
                 let q = pa.add(only_b[i] as usize * PA_DIMS + c * 64);
                 for r in 0..8 {
@@ -769,8 +752,8 @@ impl StackQ {
                 }
             }
         }
-        xa.0[SO_SKIP] = ((mob.0 as i32 * 7).min(255) - 128) as i8;
-        xb.0[SO_SKIP] = ((mob.1 as i32 * 7).min(255) - 128) as i8;
+        xa.0[SO_SKIP] = mob_byte(mob.0);
+        xb.0[SO_SKIP] = mob_byte(mob.1);
         self.layers_pair_neon([xa.0.as_ptr(), xb.0.as_ptr()], st)
     }
 }
@@ -803,14 +786,10 @@ mod tests {
         let ix = nn.indices(board.black, board.white);
         let stage = crate::linear::Linear::stage(board);
         let rows = nn.features_black(&ix);
-        let (ft, pa) = if board.player() == Color::Black {
-            (&nn.sq.ft_b, &nn.sq.pa_b)
-        } else {
-            (&nn.sq.ft_w, &nn.sq.pa_w)
-        };
+        let (ft, pa) = nn.sq.tables(nn, board.player(), stage);
         nn.sq.eval_scalar(
             ft,
-            &pa[pa_bucket(stage) * nn.n_features * PA_DIMS..],
+            pa,
             &rows,
             nn.n_masks,
             so_stage(stage),
@@ -833,6 +812,41 @@ mod tests {
                 (q - s).abs() < 1e-6,
                 "vector {q} vs scalar {s} at ply {ply}"
             );
+        });
+    }
+
+    #[test]
+    fn pair_kernel_matches_two_singles() {
+        let mut nn = Nnue::new(NNUE_PATTERNS);
+        nn.init_weights();
+        nn.quantize();
+        walk_game(|board, _| {
+            let ix = nn.indices(board.black, board.white);
+            let kids: Vec<(Board, PatternIndices)> = (0..64)
+                .filter(|&i| board.movable() >> i & 1 == 1)
+                .map(|i| {
+                    let pos = Position::from_index(i).unwrap();
+                    let mut b = *board;
+                    let flipped = b.make_move_bits(pos);
+                    let mut cix = ix;
+                    nn.ix_apply(&mut cix, pos, flipped, board.player());
+                    (b, cix)
+                })
+                .collect();
+            for w in kids.windows(2) {
+                let ((ba, ia), (bb, ib)) = (&w[0], &w[1]);
+                let stage = crate::linear::Linear::stage(ba);
+                let mobs = (Nnue::mob_index(ba), Nnue::mob_index(bb));
+                let (x, y) = nn.sq.eval_pair(&nn, (ia, ib), ba.player(), stage, mobs);
+                assert_eq!(
+                    x.to_bits(),
+                    nn.sq.eval(&nn, ia, ba.player(), stage, mobs.0).to_bits()
+                );
+                assert_eq!(
+                    y.to_bits(),
+                    nn.sq.eval(&nn, ib, bb.player(), stage, mobs.1).to_bits()
+                );
+            }
         });
     }
 
