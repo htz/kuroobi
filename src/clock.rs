@@ -590,12 +590,17 @@ impl Worker<'_> {
                 if v > alpha {
                     alpha = v;
                     if alpha >= beta {
-                        self.history[side][sq as usize] += depth;
-                        for &k in &list[..j - 1] {
-                            self.history[side][k as usize] -= depth;
-                        }
-                        self.store(h, alpha0, beta, best, best_move, depth);
-                        return Some((best, best_move));
+                        return self.cut(
+                            h,
+                            alpha0,
+                            beta,
+                            depth,
+                            side,
+                            sq,
+                            &list[..j - 1],
+                            best,
+                            best_move,
+                        );
                     }
                 }
             }
@@ -659,12 +664,8 @@ impl Worker<'_> {
             }
             if g > alpha {
                 if !pv {
-                    self.history[side][sq as usize] += depth;
-                    for &t in tried.iter().chain(&rest[..k]) {
-                        self.history[side][t as usize] -= depth;
-                    }
-                    self.store(h, alpha0, beta, g, sq, depth);
-                    return Some((g, sq));
+                    let before = tried.iter().chain(&rest[..k]);
+                    return self.cut(h, alpha0, beta, depth, side, sq, before, g, sq);
                 }
                 high[nh] = k as u8;
                 nh += 1;
@@ -680,17 +681,36 @@ impl Worker<'_> {
             if v > alpha {
                 alpha = v;
                 if alpha >= beta {
-                    self.history[side][sq as usize] += depth;
-                    for &t in tried.iter().chain(&rest[..k as usize]) {
-                        self.history[side][t as usize] -= depth;
-                    }
-                    self.store(h, alpha0, beta, best, best_move, depth);
-                    return Some((best, best_move));
+                    let before = tried.iter().chain(&rest[..k as usize]);
+                    return self.cut(h, alpha0, beta, depth, side, sq, before, best, best_move);
                 }
             }
         }
         self.store(h, alpha0, beta, best, best_move, depth);
         Some((best, best_move))
+    }
+
+    /// Credits the move that cut, debits the moves searched before it, and stores the node's result.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    fn cut<'t>(
+        &mut self,
+        h: u64,
+        alpha0: i32,
+        beta: i32,
+        depth: i32,
+        side: usize,
+        sq: u8,
+        before: impl IntoIterator<Item = &'t u8>,
+        score: i32,
+        mv: u8,
+    ) -> Option<(i32, u8)> {
+        self.history[side][sq as usize] += depth;
+        for &t in before {
+            self.history[side][t as usize] -= depth;
+        }
+        self.store(h, alpha0, beta, score, mv, depth);
+        Some((score, mv))
     }
 
     /// A leaf's value as `search` at depth 0 gives it, counting the same nodes.
