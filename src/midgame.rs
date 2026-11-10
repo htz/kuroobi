@@ -1104,6 +1104,7 @@ impl NnueSearch {
                     k += (38.0 - potential_mobility(nb.opponent_bb(), empties) as f32) * w_pm;
                 }
                 if eval_order {
+                    self.nn.prefetch_eval(&nb);
                     let mut child = *acc;
                     self.nn.ix_apply(&mut child, pos, flipped, mover);
                     pend[np].write((n, nb, child));
@@ -1163,6 +1164,7 @@ impl NnueSearch {
                 l &= l - 1;
                 let mut nb = *b;
                 let flipped = nb.make_move_bits(pos);
+                self.nn.prefetch_eval(&nb);
                 let mut child = *acc;
                 self.nn.ix_apply(&mut child, pos, flipped, mover);
                 if !first {
