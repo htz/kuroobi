@@ -3,7 +3,7 @@
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::too_many_arguments)]
 
-use crate::fan::AbortChain;
+use crate::fan::{AbortChain, HasKids, Kids};
 use crate::nnue::Nnue;
 use crate::pattern_index::PatternIndices;
 use crate::zobrist;
@@ -54,6 +54,7 @@ impl<T: Copy> KidStack<T> {
 
     #[inline(always)]
     fn as_slice(&self) -> &[T] {
+        // Every item below `len` was written by `push`.
         unsafe { std::slice::from_raw_parts(self.items.as_ptr() as *const T, self.len) }
     }
 }
@@ -375,17 +376,16 @@ impl Slot {
 
 /// One node's unsearched siblings, left open for any idle thread to take.
 struct Fan {
-    kids: crate::fan::Kids,
+    kids: Kids,
     moves: Vec<(Position, u64)>,
     board: Board,
-    depth: u32,
     alpha: f32,
     /// The search each kid starts from: the owner's settings, one deviation deeper.
     proto: NnueSearch,
 }
 
-impl crate::fan::Fan for Fan {
-    fn kids(&self) -> &crate::fan::Kids {
+impl HasKids for Fan {
+    fn kids(&self) -> &Kids {
         &self.kids
     }
 }
@@ -406,11 +406,11 @@ impl Fan {
             w.abort_countdown = 1;
             let mut acc = w.nn.indices(child.black, child.white);
             let (lo, hi) = (-(self.alpha + PVS_EPS), -self.alpha);
-            let v = w.negamax(&child, &mut acc, self.depth, lo, hi);
+            let v = w.negamax(&child, &mut acc, self.kids.depth(), lo, hi);
             self.kids.nodes.fetch_add(w.nodes, Ordering::Relaxed);
             v.to_bits()
         };
-        // A search the winner stopped has nothing to say; any other result, even `ABORTED`, is the kid's.
+        // `ABORTED` is written like any value but never cuts: the kid only failed to finish.
         let cuts = |bits: u32| {
             let v = f32::from_bits(bits);
             v != ABORTED && -v > self.alpha
@@ -419,22 +419,16 @@ impl Fan {
     }
 
     fn help(&self) -> bool {
-        let mut ran = false;
-        for k in 0..self.kids.len() {
-            if self.kids.stop.stopped() {
-                break;
-            }
-            if self.kids.take(k) {
-                ran = true;
-                self.search_kid(k);
-            }
-        }
-        ran
+        self.kids.search_free(|k| self.search_kid(k))
     }
 
     /// Searches, alongside its helper, a kid whose helper has not finished; true if there was one.
     fn take_over(&self) -> bool {
-        self.kids.take_over().map(|k| self.search_kid(k)).is_some()
+        let Some(k) = self.kids.take_over() else {
+            return false;
+        };
+        self.search_kid(k);
+        true
     }
 }
 
@@ -1140,10 +1134,9 @@ impl NnueSearch {
         proto.dev = self.dev + 1;
         proto.expect_all = kids_all;
         let fan = std::sync::Arc::new(Fan {
-            kids: crate::fan::Kids::new(moves.len(), depth, stop),
+            kids: Kids::new(moves.len(), depth, stop),
             moves,
             board: *b,
-            depth,
             alpha,
             proto,
         });

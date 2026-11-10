@@ -1,5 +1,4 @@
-//! A node's siblings after the first, searched by any idle thread: the bookkeeping both searches share.
-//! What a kid's search is, and how idle threads are woken, stay with each search.
+//! Siblings opened to idle threads (young brothers wait): the bookkeeping both searches share.
 
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize};
@@ -50,9 +49,13 @@ impl AbortChain {
     }
 }
 
+const OPEN: u8 = 0;
+const WRITING: u8 = 1;
+const WRITTEN: u8 = 2;
+
 struct Kid {
     taken: AtomicBool,
-    /// 0 open, 1 being written, 2 written: the first search to finish the kid owns its value.
+    /// The first search to finish the kid owns its value.
     state: AtomicU8,
     bits: AtomicU32,
     /// Searches of this kid now running; more than one when the owner takes over a slow helper's.
@@ -81,7 +84,7 @@ impl Kids {
             kids: (0..n)
                 .map(|_| Kid {
                     taken: AtomicBool::new(false),
-                    state: AtomicU8::new(0),
+                    state: AtomicU8::new(OPEN),
                     bits: AtomicU32::new(0),
                     running: AtomicU32::new(0),
                     taken_over: AtomicBool::new(false),
@@ -117,17 +120,16 @@ impl Kids {
     fn settled(&self) -> bool {
         self.kids
             .iter()
-            .all(|k| k.running.load(Acquire) == 0 || k.state.load(Acquire) == 2)
+            .all(|k| k.running.load(Acquire) == 0 || k.state.load(Acquire) == WRITTEN)
     }
 
     /// Kid `k`'s value, once a search wrote it.
     pub(crate) fn result(&self, k: usize) -> Option<u32> {
         let kid = &self.kids[k];
-        (kid.state.load(Acquire) == 2).then(|| kid.bits.load(Relaxed))
+        (kid.state.load(Acquire) == WRITTEN).then(|| kid.bits.load(Relaxed))
     }
 
-    /// Searches kid `k` with `search`, given the kid's stop; the first search to finish writes its value,
-    /// raises the fan's stop if `cuts` says so, and stops the kid's other searches.
+    /// Searches kid `k` given its stop; the first finisher writes the value, stops the rest, and the fan too if `cuts`.
     pub(crate) fn run(
         &self,
         k: usize,
@@ -137,29 +139,52 @@ impl Kids {
         let kid = &self.kids[k];
         kid.running.fetch_add(1, AcqRel);
         let bits = search(&kid.stop);
-        if kid.state.compare_exchange(0, 1, AcqRel, Acquire).is_ok() {
+        if kid
+            .state
+            .compare_exchange(OPEN, WRITING, AcqRel, Acquire)
+            .is_ok()
+        {
             if cuts(bits) {
                 self.stop.raise();
             }
             kid.bits.store(bits, Relaxed);
-            kid.state.store(2, Release);
+            kid.state.store(WRITTEN, Release);
             kid.stop.raise();
         }
         kid.running.fetch_sub(1, AcqRel);
+    }
+
+    pub(crate) fn depth(&self) -> u32 {
+        self.depth
+    }
+
+    /// Searches every kid nobody has taken, in order, until the fan stops; true if it took one.
+    pub(crate) fn search_free(&self, mut search: impl FnMut(usize)) -> bool {
+        let mut ran = false;
+        for k in 0..self.kids.len() {
+            if self.stop.stopped() {
+                break;
+            }
+            if self.take(k) {
+                ran = true;
+                search(k);
+            }
+        }
+        ran
     }
 
     /// A kid a helper is still searching and nobody took over yet, now taken over by the caller.
     pub(crate) fn take_over(&self) -> Option<usize> {
         self.kids.iter().position(|kid| {
             kid.running.load(Acquire) > 0
-                && kid.state.load(Acquire) == 0
+                && kid.state.load(Acquire) == OPEN
                 && !kid.taken_over.swap(true, AcqRel)
         })
     }
 }
 
 /// A search's fan: its kids plus whatever the search needs to search one.
-pub(crate) trait Fan: Send + Sync {
+pub(crate) trait HasKids: Send + Sync {
     fn kids(&self) -> &Kids;
 }
 
@@ -169,7 +194,7 @@ pub(crate) struct FanList<F> {
     n: AtomicUsize,
 }
 
-impl<F: Fan> FanList<F> {
+impl<F: HasKids> FanList<F> {
     pub(crate) fn new() -> FanList<F> {
         FanList {
             fans: RwLock::new(Vec::new()),
@@ -231,8 +256,7 @@ impl<F: Fan> FanList<F> {
         self.n.fetch_sub(1, Relaxed);
         let mut idle = 0u32;
         while kids.helpers.load(Acquire) > 0 && !kids.settled() {
-            // A fan elsewhere would hold this thread past its own result, and a late cut is searched siblings.
-            // A helper the OS has set aside would hold the owner too: search its kid as well, first value wins.
+            // Only fans below: one elsewhere would hold the owner past its result. A set-aside helper's kid is searched too.
             if help_under(&kids.stop) || take_over() {
                 idle = 0;
                 continue;

@@ -35,7 +35,7 @@ pub mod nnue;
 pub mod pattern;
 pub mod pattern_index;
 pub mod position;
-pub mod prefetch;
+mod prefetch;
 pub mod record;
 pub mod resources;
 pub mod solver;

@@ -3,12 +3,12 @@
 //! with ever wider ProbCut margins until only the exact solve is left. Integer disc scores,
 //! siblings after the first shared among threads, and a time rule from the clock alone.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::bitboard;
-use crate::fan::{AbortChain, FanList, Kids};
+use crate::fan::{AbortChain, FanList, HasKids, Kids};
 use crate::midgame::StopHandle;
 use crate::nnue::{MpcSigma, Nnue};
 use crate::pattern_index::PatternIndices;
@@ -215,16 +215,15 @@ struct Fan {
     sh: Arc<Shared>,
     board: Board,
     acc: PatternIndices,
-    depth: i32,
     alpha: i32,
     /// On a PV node a fail high is re-searched, not a cut, so the others go on.
     pv: bool,
     margin: i32,
     history: [[i32; 64]; 2],
-    kids_all: bool,
+    kid_all: bool,
 }
 
-impl crate::fan::Fan for Fan {
+impl HasKids for Fan {
     fn kids(&self) -> &Kids {
         &self.kids
     }
@@ -244,8 +243,15 @@ impl Fan {
             w.sh.nn
                 .ix_apply(&mut child, pos, flipped, self.board.player());
             let saved = w.stop.replace(stop.clone());
-            w.expect_all = self.kids_all;
-            let r = w.search(&nb, &child, self.depth, -self.alpha - 1, -self.alpha, false);
+            w.expect_all = self.kid_all;
+            let r = w.search(
+                &nb,
+                &child,
+                self.kids.depth() as i32,
+                -self.alpha - 1,
+                -self.alpha,
+                false,
+            );
             w.stop = saved;
             r.map_or(KID_ABORTED, |(v, _)| -v) as u32
         };
@@ -271,16 +277,7 @@ impl Fan {
 
     fn help(&self, pool: &Arc<Pool>) -> bool {
         let mut w = self.worker(pool);
-        let mut ran = false;
-        for k in 0..self.kids.len() {
-            if self.kids.stop.stopped() {
-                break;
-            }
-            if self.kids.take(k) {
-                ran = true;
-                self.search_kid(&mut w, k);
-            }
-        }
+        let ran = self.kids.search_free(|k| self.search_kid(&mut w, k));
         self.kids.nodes.fetch_add(w.nodes, Relaxed);
         ran
     }
@@ -298,9 +295,9 @@ impl Fan {
 
 struct Pool {
     fans: FanList<Fan>,
-    m: std::sync::Mutex<()>,
-    cv: std::sync::Condvar,
-    idle: std::sync::atomic::AtomicUsize,
+    m: Mutex<()>,
+    cv: Condvar,
+    idle: AtomicUsize,
     shutdown: AtomicBool,
 }
 
@@ -308,9 +305,9 @@ impl Pool {
     fn start(workers: usize) -> Arc<Pool> {
         let p = Arc::new(Pool {
             fans: FanList::new(),
-            m: std::sync::Mutex::new(()),
-            cv: std::sync::Condvar::new(),
-            idle: std::sync::atomic::AtomicUsize::new(0),
+            m: Mutex::new(()),
+            cv: Condvar::new(),
+            idle: AtomicUsize::new(0),
             shutdown: AtomicBool::new(false),
         });
         for _ in 0..workers {
@@ -549,7 +546,6 @@ impl Worker<'_> {
             if j == sorted && n > j + 2 {
                 self.sort(b, &mut list[j..n]);
             }
-            // After the first kid, or at once where every kid is expected to fail low.
             if split && n - j >= 2 && (j >= 1 || (all_node && !pv)) {
                 let (rest, tried) = (&list[j..n], &list[..j]);
                 return self.split(
@@ -560,7 +556,7 @@ impl Worker<'_> {
             let sq = list[j];
             j += 1;
             let v = if leaf_kids {
-                self.child1(b, acc, sq, alpha, beta, j == 1)?
+                self.leaf_child(b, acc, sq, alpha, beta, j == 1)?
             } else {
                 let (nb, flipped) = match next.take() {
                     Some((s, nb, f)) if s == sq => (nb, f),
@@ -637,22 +633,14 @@ impl Worker<'_> {
             sh: self.shared.clone(),
             board: *b,
             acc: *acc,
-            depth: depth - 1,
             alpha,
             pv,
             margin: self.margin,
             history: self.history,
-            kids_all: kid_all,
+            kid_all,
         });
         pool.open_fan(&fan);
-        for k in 0..rest.len() {
-            if fan.kids.stop.stopped() {
-                break;
-            }
-            if fan.kids.take(k) {
-                fan.search_kid(self, k);
-            }
-        }
+        fan.kids.search_free(|k| fan.search_kid(self, k));
         pool.close_fan(&fan);
         self.nodes += fan.kids.nodes.load(Relaxed);
         if self.sh.timeout.load(Relaxed) || self.stop.as_ref().is_some_and(|s| s.stopped()) {
@@ -729,7 +717,7 @@ impl Worker<'_> {
 
     /// [`Worker::child`] for a leaf kid: the null-window search and its re-search give the same value.
     #[inline]
-    fn child1(
+    fn leaf_child(
         &mut self,
         b: &Board,
         acc: &PatternIndices,

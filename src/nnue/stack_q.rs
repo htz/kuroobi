@@ -5,6 +5,8 @@ use super::{
 };
 use crate::color::Color;
 use crate::pattern_index::{PatternIndices, MAX_MASKS};
+#[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+use std::arch::aarch64::{int16x8_t, int16x8x4_t, int32x4_t, int8x16_t, int8x16x2_t, int8x8_t};
 
 /// Rows are scaled so that `1.0` is this many steps.
 const ROW_ONE: i32 = 512;
@@ -54,9 +56,6 @@ fn mob_byte(mob: usize) -> i8 {
 #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
 #[repr(align(64))]
 struct Buf<const N: usize>([i8; N]);
-
-#[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
-use std::arch::aarch64::{int16x8_t, int16x8x4_t, int32x4_t, int8x16_t, int8x16x2_t, int8x8_t};
 
 /// Eight transformer inputs: the clamped low and high sums multiplied, as `x - 128`.
 #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
@@ -553,6 +552,7 @@ impl StackQ {
         use std::arch::aarch64::*;
         let l1w = self.l1_w.as_ptr().add(st * L1_CHUNKS * 4 * SO_L1);
         let mut acc1: [[int32x4_t; 4]; 2] = [[vdupq_n_s32(0); 4]; 2];
+        // Two chains per output, not four: two positions' four would not fit the registers.
         let mut part: [[int32x4_t; 4]; 2] = [[vdupq_n_s32(0); 4]; 2];
         for acc in acc1.iter_mut() {
             for (j, a) in acc.iter_mut().enumerate() {
