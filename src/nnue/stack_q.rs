@@ -352,15 +352,23 @@ impl StackQ {
         for (j, a) in acc1.iter_mut().enumerate() {
             *a = vld1q_s32(self.l1_b.as_ptr().add(st * SO_L1 + j * 4));
         }
+        // Four partial sums per output: one chain of 64 `sdot`s would wait on its own latency.
+        let mut part: [[int32x4_t; 4]; 3] = [[vdupq_n_s32(0); 4]; 3];
         for g in 0..SO_SKIP / 16 {
             let xv = vld1q_s8(x.add(g * 16));
             let wp = l1w.add(g * 4 * SO_L1 * 4);
-            for (j, a) in acc1.iter_mut().enumerate() {
-                *a = vdotq_laneq_s32::<0>(*a, vld1q_s8(wp.add(j * 16)), xv);
-                *a = vdotq_laneq_s32::<1>(*a, vld1q_s8(wp.add(64 + j * 16)), xv);
-                *a = vdotq_laneq_s32::<2>(*a, vld1q_s8(wp.add(128 + j * 16)), xv);
-                *a = vdotq_laneq_s32::<3>(*a, vld1q_s8(wp.add(192 + j * 16)), xv);
+            for j in 0..4 {
+                acc1[j] = vdotq_laneq_s32::<0>(acc1[j], vld1q_s8(wp.add(j * 16)), xv);
+                part[0][j] = vdotq_laneq_s32::<1>(part[0][j], vld1q_s8(wp.add(64 + j * 16)), xv);
+                part[1][j] = vdotq_laneq_s32::<2>(part[1][j], vld1q_s8(wp.add(128 + j * 16)), xv);
+                part[2][j] = vdotq_laneq_s32::<3>(part[2][j], vld1q_s8(wp.add(192 + j * 16)), xv);
             }
+        }
+        for j in 0..4 {
+            acc1[j] = vaddq_s32(
+                vaddq_s32(acc1[j], part[0][j]),
+                vaddq_s32(part[1][j], part[2][j]),
+            );
         }
         {
             let c = SO_SKIP / 4;
