@@ -368,6 +368,8 @@ impl Worker<'_> {
         let mut deferred = [0u8; 32];
         let mut nd = 0usize;
         let share = self.sh.busy.len() > 1 && depth >= DEFER_DEPTH;
+        // The kids are leaves outside the exact zone: their values do not depend on the window.
+        let leaf_kids = depth == 1 && 64 - (empties - 1) <= EXACT_DISCS;
         let mut j = 0usize;
         while j < n {
             if j == sorted && n > j + 2 {
@@ -381,17 +383,21 @@ impl Worker<'_> {
                 nd += 1;
                 continue;
             }
-            let v = self.child(
-                b,
-                acc,
-                sq,
-                depth,
-                alpha,
-                beta,
-                pv,
-                j == 1,
-                share.then_some(key),
-            )?;
+            let v = if leaf_kids {
+                self.child1(b, acc, sq, alpha, beta, j == 1)?
+            } else {
+                self.child(
+                    b,
+                    acc,
+                    sq,
+                    depth,
+                    alpha,
+                    beta,
+                    pv,
+                    j == 1,
+                    share.then_some(key),
+                )?
+            };
             if v > best {
                 best = v;
                 best_move = sq;
@@ -425,6 +431,52 @@ impl Worker<'_> {
         }
         self.store(h, alpha0, beta, best, best_move, depth);
         Some((best, best_move))
+    }
+
+    /// A leaf's value as `search` at depth 0 gives it, counting the same nodes.
+    #[inline]
+    fn leaf(&mut self, nb: &Board, acc: &PatternIndices) -> Option<i32> {
+        self.nodes += 1;
+        if self.aborted() {
+            return None;
+        }
+        if nb.movable() != 0 {
+            return Some(self.eval(nb, acc));
+        }
+        let mut p = *nb;
+        p.pass();
+        if p.movable() == 0 {
+            return Some(final_score_bb(nb.player_bb(), nb.opponent_bb()));
+        }
+        self.nodes += 1;
+        if self.aborted() {
+            return None;
+        }
+        Some(-self.eval(&p, acc))
+    }
+
+    /// [`Worker::child`] for a leaf kid: the null-window search and its re-search give the same value.
+    #[inline]
+    fn child1(
+        &mut self,
+        b: &Board,
+        acc: &PatternIndices,
+        sq: u8,
+        alpha: i32,
+        beta: i32,
+        first: bool,
+    ) -> Option<i32> {
+        let pos = Position(sq);
+        let mut nb = *b;
+        let flipped = nb.make_move_bits(pos);
+        self.sh.nn.prefetch_eval(&nb);
+        let mut child = *acc;
+        self.sh.nn.ix_apply(&mut child, pos, flipped, b.player());
+        let v = -self.leaf(&nb, &child)?;
+        if !first && v > alpha && v < beta {
+            self.leaf(&nb, &child)?;
+        }
+        Some(v)
     }
 
     /// The first move gets the full window; the rest a null window and a re-search on a fail high.
