@@ -56,7 +56,7 @@ fn mob_byte(mob: usize) -> i8 {
 struct Buf<const N: usize>([i8; N]);
 
 #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
-use std::arch::aarch64::{int16x8_t, int32x4_t, int8x16_t, int8x8_t};
+use std::arch::aarch64::{int16x8_t, int16x8x4_t, int32x4_t, int8x16_t, int8x16x2_t, int8x8_t};
 
 /// Eight transformer inputs: the clamped low and high sums multiplied, as `x - 128`.
 #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
@@ -99,6 +99,35 @@ unsafe fn l1_bytes(acc: &[int32x4_t; 4]) -> [int8x16_t; 2] {
         vaddq_s8(vreinterpretq_s8_u8(sq), shift),
         vaddq_s8(vreinterpretq_s8_u8(re), shift),
     ]
+}
+
+/// Thirty-two of the output layer's products, added onto its eight running sums.
+#[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+#[inline(always)]
+unsafe fn out_mla(o: &mut [int32x4_t; 8], wv: int16x8x4_t, xv: int8x16x2_t) {
+    use std::arch::aarch64::*;
+    let x0 = vmovl_s8(vget_low_s8(xv.0));
+    let x1 = vmovl_s8(vget_high_s8(xv.0));
+    let x2 = vmovl_s8(vget_low_s8(xv.1));
+    let x3 = vmovl_s8(vget_high_s8(xv.1));
+    o[0] = vmlal_s16(o[0], vget_low_s16(wv.0), vget_low_s16(x0));
+    o[1] = vmlal_s16(o[1], vget_high_s16(wv.0), vget_high_s16(x0));
+    o[2] = vmlal_s16(o[2], vget_low_s16(wv.1), vget_low_s16(x1));
+    o[3] = vmlal_s16(o[3], vget_high_s16(wv.1), vget_high_s16(x1));
+    o[4] = vmlal_s16(o[4], vget_low_s16(wv.2), vget_low_s16(x2));
+    o[5] = vmlal_s16(o[5], vget_high_s16(wv.2), vget_high_s16(x2));
+    o[6] = vmlal_s16(o[6], vget_low_s16(wv.3), vget_low_s16(x3));
+    o[7] = vmlal_s16(o[7], vget_high_s16(wv.3), vget_high_s16(x3));
+}
+
+#[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+#[inline(always)]
+unsafe fn out_total(o: &[int32x4_t; 8]) -> i32 {
+    use std::arch::aarch64::*;
+    vaddvq_s32(vaddq_s32(
+        vaddq_s32(vaddq_s32(o[0], o[1]), vaddq_s32(o[2], o[3])),
+        vaddq_s32(vaddq_s32(o[4], o[5]), vaddq_s32(o[6], o[7])),
+    ))
 }
 
 /// Eight of `L2`'s outputs, clamped and squared, as `x - 128`.
@@ -508,26 +537,13 @@ impl StackQ {
         let xp = xo.0.as_ptr();
         let mut o: [int32x4_t; 8] = [vdupq_n_s32(0); 8];
         for g in 0..OUT_IN / 32 {
-            let xv = vld1q_s8_x2(xp.add(g * 32));
-            let wv = vld1q_s16_x4(ow.add(g * 32));
-            let x0 = vmovl_s8(vget_low_s8(xv.0));
-            let x1 = vmovl_s8(vget_high_s8(xv.0));
-            let x2 = vmovl_s8(vget_low_s8(xv.1));
-            let x3 = vmovl_s8(vget_high_s8(xv.1));
-            o[0] = vmlal_s16(o[0], vget_low_s16(wv.0), vget_low_s16(x0));
-            o[1] = vmlal_s16(o[1], vget_high_s16(wv.0), vget_high_s16(x0));
-            o[2] = vmlal_s16(o[2], vget_low_s16(wv.1), vget_low_s16(x1));
-            o[3] = vmlal_s16(o[3], vget_high_s16(wv.1), vget_high_s16(x1));
-            o[4] = vmlal_s16(o[4], vget_low_s16(wv.2), vget_low_s16(x2));
-            o[5] = vmlal_s16(o[5], vget_high_s16(wv.2), vget_high_s16(x2));
-            o[6] = vmlal_s16(o[6], vget_low_s16(wv.3), vget_low_s16(x3));
-            o[7] = vmlal_s16(o[7], vget_high_s16(wv.3), vget_high_s16(x3));
+            out_mla(
+                &mut o,
+                vld1q_s16_x4(ow.add(g * 32)),
+                vld1q_s8_x2(xp.add(g * 32)),
+            );
         }
-        let s = vaddq_s32(
-            vaddq_s32(vaddq_s32(o[0], o[1]), vaddq_s32(o[2], o[3])),
-            vaddq_s32(vaddq_s32(o[4], o[5]), vaddq_s32(o[6], o[7])),
-        );
-        vaddvq_s32(s) + self.out_b[st]
+        out_total(&o) + self.out_b[st]
     }
 
     /// [`StackQ::layers_neon`] for two inputs of one stage: each weight is read once, and the two chains interleave.
@@ -622,30 +638,14 @@ impl StackQ {
         let mut o: [[int32x4_t; 8]; 2] = [[vdupq_n_s32(0); 8]; 2];
         for g in 0..OUT_IN / 32 {
             let wv = vld1q_s16_x4(ow.add(g * 32));
-            for e in 0..2 {
-                let xv = vld1q_s8_x2(xo[e].0.as_ptr().add(g * 32));
-                let x0 = vmovl_s8(vget_low_s8(xv.0));
-                let x1 = vmovl_s8(vget_high_s8(xv.0));
-                let x2 = vmovl_s8(vget_low_s8(xv.1));
-                let x3 = vmovl_s8(vget_high_s8(xv.1));
-                o[e][0] = vmlal_s16(o[e][0], vget_low_s16(wv.0), vget_low_s16(x0));
-                o[e][1] = vmlal_s16(o[e][1], vget_high_s16(wv.0), vget_high_s16(x0));
-                o[e][2] = vmlal_s16(o[e][2], vget_low_s16(wv.1), vget_low_s16(x1));
-                o[e][3] = vmlal_s16(o[e][3], vget_high_s16(wv.1), vget_high_s16(x1));
-                o[e][4] = vmlal_s16(o[e][4], vget_low_s16(wv.2), vget_low_s16(x2));
-                o[e][5] = vmlal_s16(o[e][5], vget_high_s16(wv.2), vget_high_s16(x2));
-                o[e][6] = vmlal_s16(o[e][6], vget_low_s16(wv.3), vget_low_s16(x3));
-                o[e][7] = vmlal_s16(o[e][7], vget_high_s16(wv.3), vget_high_s16(x3));
+            for (oe, x) in o.iter_mut().zip(&xo) {
+                out_mla(oe, wv, vld1q_s8_x2(x.0.as_ptr().add(g * 32)));
             }
         }
-        let fin = |o: &[int32x4_t; 8]| {
-            let s = vaddq_s32(
-                vaddq_s32(vaddq_s32(o[0], o[1]), vaddq_s32(o[2], o[3])),
-                vaddq_s32(vaddq_s32(o[4], o[5]), vaddq_s32(o[6], o[7])),
-            );
-            vaddvq_s32(s) + self.out_b[st]
-        };
-        (fin(&o[0]), fin(&o[1]))
+        (
+            out_total(&o[0]) + self.out_b[st],
+            out_total(&o[1]) + self.out_b[st],
+        )
     }
 
     /// Two siblings at once: same side to move and stage, so a row both use is read once.
