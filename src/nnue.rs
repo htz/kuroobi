@@ -976,16 +976,54 @@ impl Nnue {
         f
     }
 
-    /// The search's evaluation: the integer network, which needs [`Nnue::quantize`] first.
     #[inline]
-    /// `indices` must be `board`'s: the value is cached under the board alone.
-    pub fn eval_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
+    fn cache_slot(&self, board: &Board) -> (&EvalSlot, u64) {
         let tag = board.player() as u64 + 1;
         let h = (board.black.wrapping_mul(0x9E37_79B9_7F4A_7C15)
             ^ board.white.wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
             ^ tag)
             >> (64 - EVAL_CACHE_BITS);
-        let slot = &self.sq.cache[h as usize];
+        (&self.sq.cache[h as usize], tag)
+    }
+
+    /// Two siblings' values, the same as two `eval_from_indices` calls.
+    pub fn eval_pair_from_indices(
+        &self,
+        a: (&PatternIndices, &Board),
+        b: (&PatternIndices, &Board),
+    ) -> (f32, f32) {
+        let (sa, ta) = self.cache_slot(a.1);
+        let (sb, tb) = self.cache_slot(b.1);
+        let ha = sa.get(a.1.black, a.1.white, ta);
+        let hb = sb.get(b.1.black, b.1.white, tb);
+        let stage = crate::linear::Linear::stage(a.1);
+        if ha.is_some()
+            || hb.is_some()
+            || a.1.player() != b.1.player()
+            || stage != crate::linear::Linear::stage(b.1)
+        {
+            return (
+                ha.unwrap_or_else(|| self.eval_from_indices(a.0, a.1)),
+                hb.unwrap_or_else(|| self.eval_from_indices(b.0, b.1)),
+            );
+        }
+        let (va, vb) = self.sq.eval_pair(
+            self,
+            (a.0, b.0),
+            a.1.player(),
+            stage,
+            (Self::mob_index(a.1), Self::mob_index(b.1)),
+        );
+        sa.put(a.1.black, a.1.white, ta, va);
+        sb.put(b.1.black, b.1.white, tb, vb);
+        (va, vb)
+    }
+
+    /// The search's evaluation: the integer network, which needs [`Nnue::quantize`] first.
+    /// `indices` must be `board`'s: the value is cached under the board alone.
+    #[inline]
+    pub fn eval_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
+        let (slot, tag) = self.cache_slot(board);
         if let Some(v) = slot.get(board.black, board.white, tag) {
             return v;
         }

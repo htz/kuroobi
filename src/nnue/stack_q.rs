@@ -180,6 +180,46 @@ impl StackQ {
         sum as f32 / OUT_PER_DISC
     }
 
+    /// Two siblings' scores: the same values as two [`StackQ::eval`] calls.
+    pub(super) fn eval_pair(
+        &self,
+        net: &Nnue,
+        indices: (&PatternIndices, &PatternIndices),
+        player: Color,
+        stage: usize,
+        mob: (usize, usize),
+    ) -> (f32, f32) {
+        #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+        {
+            let ra = net.features_black(indices.0);
+            let rb = net.features_black(indices.1);
+            let (ft, pa) = if player == Color::Black {
+                (&self.ft_b, &self.pa_b)
+            } else {
+                (&self.ft_w, &self.pa_w)
+            };
+            let pa_base = pa_bucket(stage) * net.n_features;
+            let (a, b) = unsafe {
+                self.eval_pair_neon(
+                    ft.as_ptr(),
+                    pa.as_ptr().add(pa_base * PA_DIMS),
+                    &ra,
+                    &rb,
+                    net.n_masks,
+                    so_stage(stage),
+                    stage,
+                    mob,
+                )
+            };
+            (a as f32 / OUT_PER_DISC, b as f32 / OUT_PER_DISC)
+        }
+        #[cfg(not(all(target_arch = "aarch64", not(feature = "nnue-scalar"))))]
+        (
+            self.eval(net, indices.0, player, stage, mob.0),
+            self.eval(net, indices.1, player, stage, mob.1),
+        )
+    }
+
     #[cfg_attr(
         all(target_arch = "aarch64", not(feature = "nnue-scalar")),
         allow(dead_code)
@@ -353,6 +393,17 @@ impl StackQ {
         }
         *x.add(SO_SKIP) = ((mob as i32 * 7).min(255) - 128) as i8;
 
+        self.layers_neon(x, st)
+    }
+
+    /// The stacked layers on one position's input bytes (`x - 128`, `L1_IN` of them).
+    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+    #[inline(always)]
+    unsafe fn layers_neon(&self, x: *const i8, st: usize) -> i32 {
+        use std::arch::aarch64::*;
+        #[repr(align(64))]
+        struct Buf<const N: usize>([i8; N]);
+        let shift = vdupq_n_s8(-128);
         let l1w = self.l1_w.as_ptr().add(st * L1_CHUNKS * 4 * SO_L1);
         let mut acc1: [int32x4_t; 4] = [vdupq_n_s32(0); 4];
         for (j, a) in acc1.iter_mut().enumerate() {
@@ -453,6 +504,279 @@ impl StackQ {
             vaddq_s32(vaddq_s32(o[4], o[5]), vaddq_s32(o[6], o[7])),
         );
         vaddvq_s32(s) + self.out_b[st]
+    }
+
+    /// [`StackQ::layers_neon`] for two inputs of one stage: each weight is read once, and the two chains interleave.
+    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+    #[inline(always)]
+    unsafe fn layers_pair_neon(&self, x: [*const i8; 2], st: usize) -> (i32, i32) {
+        use std::arch::aarch64::*;
+        #[repr(align(64))]
+        struct Buf<const N: usize>([i8; N]);
+        let shift = vdupq_n_s8(-128);
+        let l1w = self.l1_w.as_ptr().add(st * L1_CHUNKS * 4 * SO_L1);
+        let mut acc1: [[int32x4_t; 4]; 2] = [[vdupq_n_s32(0); 4]; 2];
+        let mut part: [[int32x4_t; 4]; 2] = [[vdupq_n_s32(0); 4]; 2];
+        for acc in acc1.iter_mut() {
+            for (j, a) in acc.iter_mut().enumerate() {
+                *a = vld1q_s32(self.l1_b.as_ptr().add(st * SO_L1 + j * 4));
+            }
+        }
+        for g in 0..SO_SKIP / 16 {
+            let xv = [vld1q_s8(x[0].add(g * 16)), vld1q_s8(x[1].add(g * 16))];
+            let wp = l1w.add(g * 4 * SO_L1 * 4);
+            for j in 0..4 {
+                let w = [
+                    vld1q_s8(wp.add(j * 16)),
+                    vld1q_s8(wp.add(64 + j * 16)),
+                    vld1q_s8(wp.add(128 + j * 16)),
+                    vld1q_s8(wp.add(192 + j * 16)),
+                ];
+                for e in 0..2 {
+                    acc1[e][j] = vdotq_laneq_s32::<0>(acc1[e][j], w[0], xv[e]);
+                    part[e][j] = vdotq_laneq_s32::<1>(part[e][j], w[1], xv[e]);
+                    acc1[e][j] = vdotq_laneq_s32::<2>(acc1[e][j], w[2], xv[e]);
+                    part[e][j] = vdotq_laneq_s32::<3>(part[e][j], w[3], xv[e]);
+                }
+            }
+        }
+        let mut a1: [[int8x16_t; 2]; 2] = [[vdupq_n_s8(0); 2]; 2];
+        {
+            let c = SO_SKIP / 4;
+            let wp = l1w.add(c * SO_L1 * 4);
+            for e in 0..2 {
+                let xb = vreinterpretq_s8_s32(vdupq_n_s32(
+                    (x[e].add(c * 4) as *const i32).read_unaligned(),
+                ));
+                for j in 0..4 {
+                    acc1[e][j] = vaddq_s32(acc1[e][j], part[e][j]);
+                    acc1[e][j] = vdotq_s32(acc1[e][j], vld1q_s8(wp.add(j * 16)), xb);
+                }
+                let s0 = vcombine_s16(vqmovn_s32(acc1[e][0]), vqmovn_s32(acc1[e][1]));
+                let s1 = vcombine_s16(vqmovn_s32(acc1[e][2]), vqmovn_s32(acc1[e][3]));
+                let sq = vcombine_u8(
+                    vqshrun_n_s16::<5>(vqdmulhq_s16(s0, s0)),
+                    vqshrun_n_s16::<5>(vqdmulhq_s16(s1, s1)),
+                );
+                let re = vcombine_u8(vqshrun_n_s16::<6>(s0), vqshrun_n_s16::<6>(s1));
+                a1[e] = [
+                    vaddq_s8(vreinterpretq_s8_u8(sq), shift),
+                    vaddq_s8(vreinterpretq_s8_u8(re), shift),
+                ];
+            }
+        }
+
+        let l2w = self.l2_w.as_ptr().add(st * L2_CHUNKS * 4 * SO_L2);
+        let mut xo = [Buf::<OUT_IN>([0; OUT_IN]), Buf::<OUT_IN>([0; OUT_IN])];
+        let top = vdupq_n_s32(255 << 6);
+        let zero = vdupq_n_s32(0);
+        for half in 0..2 {
+            let mut acc2: [[int32x4_t; 8]; 2] = [[vdupq_n_s32(0); 8]; 2];
+            for acc in acc2.iter_mut() {
+                for (j, a) in acc.iter_mut().enumerate() {
+                    *a = vld1q_s32(self.l2_b.as_ptr().add(st * SO_L2 + (half * 8 + j) * 4));
+                }
+            }
+            for g in 0..L2_IN / 16 {
+                let wp = l2w.add(g * 4 * SO_L2 * 4);
+                for j in 0..8 {
+                    let jj = half * 8 + j;
+                    let w = [
+                        vld1q_s8(wp.add(jj * 16)),
+                        vld1q_s8(wp.add(256 + jj * 16)),
+                        vld1q_s8(wp.add(512 + jj * 16)),
+                        vld1q_s8(wp.add(768 + jj * 16)),
+                    ];
+                    for (acc, xs) in acc2.iter_mut().zip(&a1) {
+                        let xv = xs[g];
+                        acc[j] = vdotq_laneq_s32::<0>(acc[j], w[0], xv);
+                        acc[j] = vdotq_laneq_s32::<1>(acc[j], w[1], xv);
+                        acc[j] = vdotq_laneq_s32::<2>(acc[j], w[2], xv);
+                        acc[j] = vdotq_laneq_s32::<3>(acc[j], w[3], xv);
+                    }
+                }
+            }
+            for e in 0..2 {
+                for k in 0..4 {
+                    let v0 = vqmovn_s32(vmaxq_s32(vminq_s32(acc2[e][2 * k], top), zero));
+                    let v1 = vqmovn_s32(vmaxq_s32(vminq_s32(acc2[e][2 * k + 1], top), zero));
+                    let v = vcombine_s16(v0, v1);
+                    let p = vqshrun_n_s16::<5>(vqdmulhq_s16(v, v));
+                    vst1_s8(
+                        xo[e].0.as_mut_ptr().add((half * 4 + k) * 8),
+                        vadd_s8(vreinterpret_s8_u8(p), vget_low_s8(shift)),
+                    );
+                }
+            }
+        }
+        for e in 0..2 {
+            std::ptr::copy_nonoverlapping(x[e], xo[e].0.as_mut_ptr().add(SO_L2), SO_SKIP);
+        }
+
+        let ow = self.out_w.as_ptr().add(st * OUT_IN);
+        let mut o: [[int32x4_t; 8]; 2] = [[vdupq_n_s32(0); 8]; 2];
+        for g in 0..OUT_IN / 32 {
+            let wv = vld1q_s16_x4(ow.add(g * 32));
+            for e in 0..2 {
+                let xv = vld1q_s8_x2(xo[e].0.as_ptr().add(g * 32));
+                let x0 = vmovl_s8(vget_low_s8(xv.0));
+                let x1 = vmovl_s8(vget_high_s8(xv.0));
+                let x2 = vmovl_s8(vget_low_s8(xv.1));
+                let x3 = vmovl_s8(vget_high_s8(xv.1));
+                o[e][0] = vmlal_s16(o[e][0], vget_low_s16(wv.0), vget_low_s16(x0));
+                o[e][1] = vmlal_s16(o[e][1], vget_high_s16(wv.0), vget_high_s16(x0));
+                o[e][2] = vmlal_s16(o[e][2], vget_low_s16(wv.1), vget_low_s16(x1));
+                o[e][3] = vmlal_s16(o[e][3], vget_high_s16(wv.1), vget_high_s16(x1));
+                o[e][4] = vmlal_s16(o[e][4], vget_low_s16(wv.2), vget_low_s16(x2));
+                o[e][5] = vmlal_s16(o[e][5], vget_high_s16(wv.2), vget_high_s16(x2));
+                o[e][6] = vmlal_s16(o[e][6], vget_low_s16(wv.3), vget_low_s16(x3));
+                o[e][7] = vmlal_s16(o[e][7], vget_high_s16(wv.3), vget_high_s16(x3));
+            }
+        }
+        let fin = |o: &[int32x4_t; 8]| {
+            let s = vaddq_s32(
+                vaddq_s32(vaddq_s32(o[0], o[1]), vaddq_s32(o[2], o[3])),
+                vaddq_s32(vaddq_s32(o[4], o[5]), vaddq_s32(o[6], o[7])),
+            );
+            vaddvq_s32(s) + self.out_b[st]
+        };
+        (fin(&o[0]), fin(&o[1]))
+    }
+
+    /// Two siblings at once: same side to move and stage, so a row both use is read once.
+    #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) unsafe fn eval_pair_neon(
+        &self,
+        ft: *const i16,
+        pa: *const i16,
+        ra: &[u32; MAX_MASKS],
+        rb: &[u32; MAX_MASKS],
+        n: usize,
+        st: usize,
+        stage: usize,
+        mob: (usize, usize),
+    ) -> (i32, i32) {
+        use std::arch::aarch64::*;
+        #[repr(align(64))]
+        struct Buf<const N: usize>([i8; N]);
+
+        let mut both = [0u32; MAX_MASKS];
+        let mut only_a = [0u32; MAX_MASKS];
+        let mut only_b = [0u32; MAX_MASKS];
+        let (mut nb, mut na1, mut nb1) = (0, 0, 0);
+        for m in 0..n {
+            let (x, y) = (*ra.get_unchecked(m), *rb.get_unchecked(m));
+            if x == y {
+                both[nb] = x;
+                nb += 1;
+            } else {
+                only_a[na1] = x;
+                na1 += 1;
+                only_b[nb1] = y;
+                nb1 += 1;
+            }
+        }
+        let prefetch = |r: u32| {
+            let hp = ft.add(r as usize * ACC_DIMS) as *const u8;
+            let pp = pa.add(r as usize * PA_DIMS) as *const u8;
+            for l in 0..(ACC_DIMS * 2 / 128) {
+                std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) hp.add(l * 128), options(nostack, readonly));
+            }
+            for l in 0..(PA_DIMS * 2 / 128) {
+                std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) pp.add(l * 128), options(nostack, readonly));
+            }
+        };
+        for &r in &both[..nb] {
+            prefetch(r);
+        }
+        for i in 0..na1 {
+            prefetch(only_a[i]);
+            prefetch(only_b[i]);
+        }
+
+        let mut xa = Buf::<L1_IN>([0; L1_IN]);
+        let mut xb = Buf::<L1_IN>([0; L1_IN]);
+        let clamp = vdupq_n_s16(ROW_CLAMP);
+        let shift8 = vdup_n_s8(-128);
+
+        // Transformer: 32 lanes of the low and high halves per pass, for both positions.
+        for c in 0..H / 32 {
+            let mut lo_a: [int16x8_t; 4] = [vdupq_n_s16(0); 4];
+            let mut hi_a: [int16x8_t; 4] = [vdupq_n_s16(0); 4];
+            for r in 0..4 {
+                lo_a[r] = vld1q_s16(self.ft_bias.as_ptr().add(c * 32 + r * 8));
+                hi_a[r] = vld1q_s16(self.ft_bias.as_ptr().add(H + c * 32 + r * 8));
+            }
+            for &row in &both[..nb] {
+                let p = ft.add(row as usize * ACC_DIMS + c * 32);
+                for r in 0..4 {
+                    lo_a[r] = vaddq_s16(lo_a[r], vld1q_s16(p.add(r * 8)));
+                    hi_a[r] = vaddq_s16(hi_a[r], vld1q_s16(p.add(H + r * 8)));
+                }
+            }
+            let (mut lo_b, mut hi_b) = (lo_a, hi_a);
+            for i in 0..na1 {
+                let p = ft.add(only_a[i] as usize * ACC_DIMS + c * 32);
+                let q = ft.add(only_b[i] as usize * ACC_DIMS + c * 32);
+                for r in 0..4 {
+                    lo_a[r] = vaddq_s16(lo_a[r], vld1q_s16(p.add(r * 8)));
+                    hi_a[r] = vaddq_s16(hi_a[r], vld1q_s16(p.add(H + r * 8)));
+                    lo_b[r] = vaddq_s16(lo_b[r], vld1q_s16(q.add(r * 8)));
+                    hi_b[r] = vaddq_s16(hi_b[r], vld1q_s16(q.add(H + r * 8)));
+                }
+            }
+            for r in 0..4 {
+                for (lo, hi, x) in [(lo_a[r], hi_a[r], &mut xa), (lo_b[r], hi_b[r], &mut xb)] {
+                    let a = vreinterpretq_s16_u16(vqshluq_n_s16::<5>(vminq_s16(lo, clamp)));
+                    let b = vminq_s16(hi, clamp);
+                    let p = vqmovun_s16(vqdmulhq_s16(a, b));
+                    vst1_s8(
+                        x.0.as_mut_ptr().add(c * 32 + r * 8),
+                        vadd_s8(vreinterpret_s8_u8(p), shift8),
+                    );
+                }
+            }
+        }
+        // Phase rows: 64 lanes per pass.
+        let pbias = self.pa_bias.as_ptr().add(pa_bucket(stage) * PA_DIMS);
+        for c in 0..PA_DIMS / 64 {
+            let mut za: [int16x8_t; 8] = [vdupq_n_s16(0); 8];
+            for (r, z) in za.iter_mut().enumerate() {
+                *z = vld1q_s16(pbias.add(c * 64 + r * 8));
+            }
+            for &row in &both[..nb] {
+                let p = pa.add(row as usize * PA_DIMS + c * 64);
+                for (r, z) in za.iter_mut().enumerate() {
+                    *z = vaddq_s16(*z, vld1q_s16(p.add(r * 8)));
+                }
+            }
+            let mut zb = za;
+            for i in 0..na1 {
+                let p = pa.add(only_a[i] as usize * PA_DIMS + c * 64);
+                let q = pa.add(only_b[i] as usize * PA_DIMS + c * 64);
+                for r in 0..8 {
+                    za[r] = vaddq_s16(za[r], vld1q_s16(p.add(r * 8)));
+                    zb[r] = vaddq_s16(zb[r], vld1q_s16(q.add(r * 8)));
+                }
+            }
+            for r in 0..8 {
+                for (z, x) in [(za[r], &mut xa), (zb[r], &mut xb)] {
+                    let v = vminq_s16(z, clamp);
+                    let p = vqmovun_s16(vqdmulhq_s16(
+                        vreinterpretq_s16_u16(vqshluq_n_s16::<5>(v)),
+                        v,
+                    ));
+                    vst1_s8(
+                        x.0.as_mut_ptr().add(H + c * 64 + r * 8),
+                        vadd_s8(vreinterpret_s8_u8(p), shift8),
+                    );
+                }
+            }
+        }
+        xa.0[SO_SKIP] = ((mob.0 as i32 * 7).min(255) - 128) as i8;
+        xb.0[SO_SKIP] = ((mob.1 as i32 * 7).min(255) - 128) as i8;
+        self.layers_pair_neon([xa.0.as_ptr(), xb.0.as_ptr()], st)
     }
 }
 

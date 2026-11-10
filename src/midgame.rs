@@ -1080,6 +1080,10 @@ impl NnueSearch {
             (35.0 / 269.0, 17.0 / 269.0, 1.0)
         };
         let eval_order = depth >= EVAL_ORDER_DEPTH;
+        let mut pend: [std::mem::MaybeUninit<(usize, Board, PatternIndices)>; MAX_KIDS] =
+            [const { std::mem::MaybeUninit::uninit() }; MAX_KIDS];
+        let mut np = 0usize;
+        let mut keys = [0f32; MAX_KIDS];
         let mut n = 0usize;
         let mut m = moves;
         while m != 0 {
@@ -1102,14 +1106,32 @@ impl NnueSearch {
                 if eval_order {
                     let mut child = *acc;
                     self.nn.ix_apply(&mut child, pos, flipped, mover);
-                    k += -self.nn.eval_from_indices(&child, &nb) * w_val;
+                    pend[np].write((n, nb, child));
+                    np += 1;
                 }
                 k
             };
             self.tt
                 .prefetch(zobrist::board_hash(nb.player_bb(), nb.opponent_bb()));
-            out[n] = (pos, flipped, order_key(key));
+            keys[n] = key;
+            out[n] = (pos, flipped, 0);
             n += 1;
+        }
+        let pend = unsafe {
+            std::slice::from_raw_parts(pend.as_ptr() as *const (usize, Board, PatternIndices), np)
+        };
+        for pair in pend.chunks(2) {
+            if let [a, b] = pair {
+                let (x, y) = self.nn.eval_pair_from_indices((&a.2, &a.1), (&b.2, &b.1));
+                keys[a.0] += -x * w_val;
+                keys[b.0] += -y * w_val;
+            } else {
+                let a = &pair[0];
+                keys[a.0] += -self.nn.eval_from_indices(&a.2, &a.1) * w_val;
+            }
+        }
+        for i in 0..n {
+            out[i].2 = order_key(keys[i]);
         }
         out[..n].sort_unstable_by_key(|k| core::cmp::Reverse(k.2));
         n
@@ -1129,6 +1151,11 @@ impl NnueSearch {
         }
         let mover = b.player();
         let mut v = f32::NEG_INFINITY;
+        // The first child cuts 70% of the time; when it does not, the rest are scored in pairs.
+        let mut rest: [std::mem::MaybeUninit<(Board, PatternIndices)>; MAX_KIDS] =
+            [const { std::mem::MaybeUninit::uninit() }; MAX_KIDS];
+        let mut n_rest = 0usize;
+        let mut first = true;
         for mask in STATIC_CELL_PRIORITY {
             let mut l = moves & mask;
             while l != 0 {
@@ -1136,9 +1163,15 @@ impl NnueSearch {
                 l &= l - 1;
                 let mut nb = *b;
                 let flipped = nb.make_move_bits(pos);
-                self.nodes += 1;
                 let mut child = *acc;
                 self.nn.ix_apply(&mut child, pos, flipped, mover);
+                if !first {
+                    rest[n_rest].write((nb, child));
+                    n_rest += 1;
+                    continue;
+                }
+                first = false;
+                self.nodes += 1;
                 let g = -self.nn.eval_from_indices(&child, &nb);
                 if g > v {
                     if g > alpha {
@@ -1147,6 +1180,29 @@ impl NnueSearch {
                     v = g;
                 }
             }
+        }
+        let rest = unsafe {
+            std::slice::from_raw_parts(rest.as_ptr() as *const (Board, PatternIndices), n_rest)
+        };
+        let mut i = 0;
+        while i < n_rest {
+            let (ga, gb) = if i + 1 < n_rest {
+                let (a, b) = (&rest[i], &rest[i + 1]);
+                let (x, y) = self.nn.eval_pair_from_indices((&a.1, &a.0), (&b.1, &b.0));
+                (-x, Some(-y))
+            } else {
+                (-self.nn.eval_from_indices(&rest[i].1, &rest[i].0), None)
+            };
+            for g in std::iter::once(ga).chain(gb) {
+                self.nodes += 1;
+                if g > v {
+                    if g > alpha {
+                        return g;
+                    }
+                    v = g;
+                }
+            }
+            i += 2;
         }
         v
     }
