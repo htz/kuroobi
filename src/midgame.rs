@@ -398,8 +398,14 @@ struct FanKid {
     pos: Position,
     flipped: u64,
     taken: std::sync::atomic::AtomicBool,
-    done: std::sync::atomic::AtomicBool,
+    /// 0 open, 1 being written, 2 written: the first search to finish the kid owns its value.
+    state: std::sync::atomic::AtomicU8,
     bits: std::sync::atomic::AtomicU32,
+    /// Searches of this kid now running; more than one when the owner takes over a slow helper's.
+    running: std::sync::atomic::AtomicU32,
+    taken_over: std::sync::atomic::AtomicBool,
+    /// Stops every search of this kid once one of them has its value.
+    stop: std::sync::Arc<AbortChain>,
 }
 
 /// One node's unsearched siblings, left open for any idle thread to take.
@@ -442,15 +448,59 @@ impl Fan {
     fn result(&self, k: usize) -> Option<f32> {
         use std::sync::atomic::Ordering;
         let kid = &self.kids[k];
-        kid.done
-            .load(Ordering::Acquire)
+        (kid.state.load(Ordering::Acquire) == 2)
             .then(|| f32::from_bits(kid.bits.load(Ordering::Relaxed)))
     }
 
-    fn help(&self) -> bool {
+    /// Whether every kid a search started on has its value.
+    fn settled(&self) -> bool {
         use std::sync::atomic::Ordering;
+        self.kids
+            .iter()
+            .all(|k| k.running.load(Ordering::Acquire) == 0 || k.state.load(Ordering::Acquire) == 2)
+    }
+
+    fn search_kid(&self, k: usize) {
+        use std::sync::atomic::Ordering;
+        let kid = &self.kids[k];
+        kid.running.fetch_add(1, Ordering::AcqRel);
+        let mut child = self.board;
+        child.apply_flips(kid.pos, kid.flipped);
+        let mut w = NnueSearch::new(self.nn.clone(), self.tt.clone());
+        w.mpc = self.mpc;
+        w.mpc_relax = self.mpc_relax;
+        w.split_min = self.split_min;
+        w.pool = Some(self.pool);
+        w.abort = Some(kid.stop.clone());
+        w.stop = self.ext_stop.clone();
+        w.abort_countdown = 1;
+        w.done = self.gen.clone();
+        w.my_gen = self.my_gen;
+        w.dev = self.dev;
+        w.expect_all = self.kids_all;
+        let mut acc = w.nn.indices(child.black, child.white);
+        let (lo, hi) = (-(self.alpha + PVS_EPS), -self.alpha);
+        let v = w.negamax(&child, &mut acc, self.depth, lo, hi);
+        self.nodes.fetch_add(w.nodes, Ordering::Relaxed);
+        // A search the winner stopped has nothing to say; any other result, even `ABORTED`, is the kid's.
+        if kid
+            .state
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            if v != ABORTED && -v > self.alpha {
+                self.stop.raise();
+            }
+            kid.bits.store(v.to_bits(), Ordering::Relaxed);
+            kid.state.store(2, Ordering::Release);
+            kid.stop.raise();
+        }
+        kid.running.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    fn help(&self) -> bool {
         let mut ran = false;
-        for (k, kid) in self.kids.iter().enumerate() {
+        for k in 0..self.kids.len() {
             if self.stop.stopped() {
                 break;
             }
@@ -458,31 +508,24 @@ impl Fan {
                 continue;
             }
             ran = true;
-            let mut child = self.board;
-            child.apply_flips(kid.pos, kid.flipped);
-            let mut w = NnueSearch::new(self.nn.clone(), self.tt.clone());
-            w.mpc = self.mpc;
-            w.mpc_relax = self.mpc_relax;
-            w.split_min = self.split_min;
-            w.pool = Some(self.pool);
-            w.abort = Some(self.stop.clone());
-            w.stop = self.ext_stop.clone();
-            w.abort_countdown = 1;
-            w.done = self.gen.clone();
-            w.my_gen = self.my_gen;
-            w.dev = self.dev;
-            w.expect_all = self.kids_all;
-            let mut acc = w.nn.indices(child.black, child.white);
-            let (lo, hi) = (-(self.alpha + PVS_EPS), -self.alpha);
-            let v = w.negamax(&child, &mut acc, self.depth, lo, hi);
-            if v != ABORTED && -v > self.alpha {
-                self.stop.raise();
-            }
-            self.nodes.fetch_add(w.nodes, Ordering::Relaxed);
-            kid.bits.store(v.to_bits(), Ordering::Relaxed);
-            kid.done.store(true, Ordering::Release);
+            self.search_kid(k);
         }
         ran
+    }
+
+    /// Searches, alongside its helper, a kid whose helper has not finished; true if there was one.
+    fn take_over(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        for (k, kid) in self.kids.iter().enumerate() {
+            if kid.running.load(Ordering::Acquire) > 0
+                && kid.state.load(Ordering::Acquire) == 0
+                && !kid.taken_over.swap(true, Ordering::AcqRel)
+            {
+                self.search_kid(k);
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -539,9 +582,14 @@ impl Pool {
             .retain(|x| !std::sync::Arc::ptr_eq(x, f));
         self.n_fans.fetch_sub(1, Ordering::Relaxed);
         let mut idle = 0u32;
-        while f.helpers.load(Ordering::Acquire) > 0 {
+        while f.helpers.load(Ordering::Acquire) > 0 && !f.settled() {
             // A fan elsewhere would hold this thread past its own result, and a late cut is searched siblings.
             if self.help(Some(&f.stop)) {
+                idle = 0;
+                continue;
+            }
+            // A helper the OS has set aside would hold the owner too: search its kid as well, first value wins.
+            if f.take_over() {
                 idle = 0;
                 continue;
             }
@@ -1236,8 +1284,11 @@ impl NnueSearch {
                     pos: kids[j].0,
                     flipped: kids[j].1,
                     taken: AtomicBool::new(false),
-                    done: AtomicBool::new(false),
+                    state: std::sync::atomic::AtomicU8::new(0),
                     bits: AtomicU32::new(0),
+                    running: AtomicU32::new(0),
+                    taken_over: AtomicBool::new(false),
+                    stop: AbortChain::child(Some(stop.clone())),
                 });
             }
         }
