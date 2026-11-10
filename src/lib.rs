@@ -25,6 +25,7 @@ pub mod book;
 pub mod clock;
 pub mod color;
 pub mod engine;
+mod fan;
 pub mod game;
 pub mod learn;
 pub mod linear;

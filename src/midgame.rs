@@ -3,6 +3,7 @@
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::too_many_arguments)]
 
+use crate::fan::AbortChain;
 use crate::nnue::Nnue;
 use crate::pattern_index::PatternIndices;
 use crate::zobrist;
@@ -331,47 +332,6 @@ impl StopHandle {
     }
 }
 
-pub(crate) struct AbortChain {
-    flag: std::sync::atomic::AtomicBool,
-    parent: Option<std::sync::Arc<AbortChain>>,
-}
-
-impl AbortChain {
-    pub(crate) fn child(parent: Option<std::sync::Arc<AbortChain>>) -> std::sync::Arc<AbortChain> {
-        std::sync::Arc::new(AbortChain {
-            flag: std::sync::atomic::AtomicBool::new(false),
-            parent,
-        })
-    }
-    pub(crate) fn raise(&self) {
-        self.flag.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-    pub(crate) fn stopped(&self) -> bool {
-        let mut n = self;
-        loop {
-            if n.flag.load(std::sync::atomic::Ordering::Relaxed) {
-                return true;
-            }
-            match &n.parent {
-                Some(p) => n = p,
-                None => return false,
-            }
-        }
-    }
-    pub(crate) fn descends_from(&self, ancestor: &AbortChain) -> bool {
-        let mut n = self;
-        loop {
-            if std::ptr::eq(n, ancestor) {
-                return true;
-            }
-            match &n.parent {
-                Some(p) => n = p,
-                None => return false,
-            }
-        }
-    }
-}
-
 #[derive(Default)]
 struct Slot {
     done: std::sync::atomic::AtomicBool,
@@ -386,30 +346,13 @@ impl Slot {
     }
 }
 
-struct FanKid {
-    pos: Position,
-    flipped: u64,
-    taken: std::sync::atomic::AtomicBool,
-    /// 0 open, 1 being written, 2 written: the first search to finish the kid owns its value.
-    state: std::sync::atomic::AtomicU8,
-    bits: std::sync::atomic::AtomicU32,
-    /// Searches of this kid now running; more than one when the owner takes over a slow helper's.
-    running: std::sync::atomic::AtomicU32,
-    taken_over: std::sync::atomic::AtomicBool,
-    /// Stops every search of this kid once one of them has its value.
-    stop: std::sync::Arc<AbortChain>,
-}
-
 /// One node's unsearched siblings, left open for any idle thread to take.
 struct Fan {
+    kids: crate::fan::Kids,
+    moves: Vec<(Position, u64)>,
     board: Board,
     depth: u32,
     alpha: f32,
-    kids: Vec<FanKid>,
-    left: std::sync::atomic::AtomicUsize,
-    helpers: std::sync::atomic::AtomicUsize,
-    nodes: std::sync::atomic::AtomicU64,
-    stop: std::sync::Arc<AbortChain>,
     nn: std::sync::Arc<Nnue>,
     tt: std::sync::Arc<SharedTt>,
     mpc: bool,
@@ -423,107 +366,71 @@ struct Fan {
     pool: &'static Pool,
 }
 
+impl crate::fan::Fan for Fan {
+    fn kids(&self) -> &crate::fan::Kids {
+        &self.kids
+    }
+}
+
 impl Fan {
-    fn take(&self, k: usize) -> bool {
-        use std::sync::atomic::Ordering;
-        if self.kids[k].taken.swap(true, Ordering::AcqRel) {
-            return false;
-        }
-        self.left.fetch_sub(1, Ordering::Relaxed);
-        true
-    }
-
-    fn open(&self) -> bool {
-        self.left.load(std::sync::atomic::Ordering::Relaxed) > 0 && !self.stop.stopped()
-    }
-
     fn result(&self, k: usize) -> Option<f32> {
-        use std::sync::atomic::Ordering;
-        let kid = &self.kids[k];
-        (kid.state.load(Ordering::Acquire) == 2)
-            .then(|| f32::from_bits(kid.bits.load(Ordering::Relaxed)))
-    }
-
-    /// Whether every kid a search started on has its value.
-    fn settled(&self) -> bool {
-        use std::sync::atomic::Ordering;
-        self.kids
-            .iter()
-            .all(|k| k.running.load(Ordering::Acquire) == 0 || k.state.load(Ordering::Acquire) == 2)
+        self.kids.result(k).map(f32::from_bits)
     }
 
     fn search_kid(&self, k: usize) {
         use std::sync::atomic::Ordering;
-        let kid = &self.kids[k];
-        kid.running.fetch_add(1, Ordering::AcqRel);
-        let mut child = self.board;
-        child.apply_flips(kid.pos, kid.flipped);
-        let mut w = NnueSearch::new(self.nn.clone(), self.tt.clone());
-        w.mpc = self.mpc;
-        w.mpc_relax = self.mpc_relax;
-        w.split_min = self.split_min;
-        w.pool = Some(self.pool);
-        w.abort = Some(kid.stop.clone());
-        w.stop = self.ext_stop.clone();
-        w.abort_countdown = 1;
-        w.done = self.gen.clone();
-        w.my_gen = self.my_gen;
-        w.dev = self.dev;
-        w.expect_all = self.kids_all;
-        let mut acc = w.nn.indices(child.black, child.white);
-        let (lo, hi) = (-(self.alpha + PVS_EPS), -self.alpha);
-        let v = w.negamax(&child, &mut acc, self.depth, lo, hi);
-        self.nodes.fetch_add(w.nodes, Ordering::Relaxed);
+        let (pos, flipped) = self.moves[k];
+        let search = |stop: &std::sync::Arc<AbortChain>| {
+            let mut child = self.board;
+            child.apply_flips(pos, flipped);
+            let mut w = NnueSearch::new(self.nn.clone(), self.tt.clone());
+            w.mpc = self.mpc;
+            w.mpc_relax = self.mpc_relax;
+            w.split_min = self.split_min;
+            w.pool = Some(self.pool);
+            w.abort = Some(stop.clone());
+            w.stop = self.ext_stop.clone();
+            w.abort_countdown = 1;
+            w.done = self.gen.clone();
+            w.my_gen = self.my_gen;
+            w.dev = self.dev;
+            w.expect_all = self.kids_all;
+            let mut acc = w.nn.indices(child.black, child.white);
+            let (lo, hi) = (-(self.alpha + PVS_EPS), -self.alpha);
+            let v = w.negamax(&child, &mut acc, self.depth, lo, hi);
+            self.kids.nodes.fetch_add(w.nodes, Ordering::Relaxed);
+            v.to_bits()
+        };
         // A search the winner stopped has nothing to say; any other result, even `ABORTED`, is the kid's.
-        if kid
-            .state
-            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            if v != ABORTED && -v > self.alpha {
-                self.stop.raise();
-            }
-            kid.bits.store(v.to_bits(), Ordering::Relaxed);
-            kid.state.store(2, Ordering::Release);
-            kid.stop.raise();
-        }
-        kid.running.fetch_sub(1, Ordering::AcqRel);
+        let cuts = |bits: u32| {
+            let v = f32::from_bits(bits);
+            v != ABORTED && -v > self.alpha
+        };
+        self.kids.run(k, search, cuts);
     }
 
     fn help(&self) -> bool {
         let mut ran = false;
         for k in 0..self.kids.len() {
-            if self.stop.stopped() {
+            if self.kids.stop.stopped() {
                 break;
             }
-            if !self.take(k) {
-                continue;
+            if self.kids.take(k) {
+                ran = true;
+                self.search_kid(k);
             }
-            ran = true;
-            self.search_kid(k);
         }
         ran
     }
 
     /// Searches, alongside its helper, a kid whose helper has not finished; true if there was one.
     fn take_over(&self) -> bool {
-        use std::sync::atomic::Ordering;
-        for (k, kid) in self.kids.iter().enumerate() {
-            if kid.running.load(Ordering::Acquire) > 0
-                && kid.state.load(Ordering::Acquire) == 0
-                && !kid.taken_over.swap(true, Ordering::AcqRel)
-            {
-                self.search_kid(k);
-                return true;
-            }
-        }
-        false
+        self.kids.take_over().map(|k| self.search_kid(k)).is_some()
     }
 }
 
 struct Pool {
-    fans: std::sync::RwLock<Vec<std::sync::Arc<Fan>>>,
-    n_fans: std::sync::atomic::AtomicUsize,
+    fans: crate::fan::FanList<Fan>,
     q: std::sync::Mutex<std::collections::VecDeque<Box<dyn FnOnce() + Send + 'static>>>,
     cv: std::sync::Condvar,
     idle: std::sync::atomic::AtomicUsize,
@@ -536,8 +443,7 @@ impl Pool {
         Pool {
             q: std::sync::Mutex::new(std::collections::VecDeque::new()),
             cv: std::sync::Condvar::new(),
-            fans: std::sync::RwLock::new(Vec::new()),
-            n_fans: AtomicUsize::new(0),
+            fans: crate::fan::FanList::new(),
             idle: AtomicUsize::new(0),
             queued: AtomicUsize::new(0),
         }
@@ -554,75 +460,24 @@ impl Pool {
 
     fn open_fan(&self, f: &std::sync::Arc<Fan>) {
         use std::sync::atomic::Ordering;
-        self.fans.write().unwrap().push(f.clone());
-        self.n_fans.fetch_add(1, Ordering::Relaxed);
+        self.fans.add(f);
         if self.idle.load(Ordering::Relaxed) > 0 {
             let _q = self.q.lock().unwrap();
             self.cv.notify_all();
         }
     }
 
-    /// Takes back what nobody started and waits out the helpers, helping the fans under this one meanwhile.
     fn close_fan(&self, f: &std::sync::Arc<Fan>) {
-        use std::sync::atomic::Ordering;
-        for k in 0..f.kids.len() {
-            f.take(k);
-        }
         self.fans
-            .write()
-            .unwrap()
-            .retain(|x| !std::sync::Arc::ptr_eq(x, f));
-        self.n_fans.fetch_sub(1, Ordering::Relaxed);
-        let mut idle = 0u32;
-        while f.helpers.load(Ordering::Acquire) > 0 && !f.settled() {
-            // A fan elsewhere would hold this thread past its own result, and a late cut is searched siblings.
-            if self.help(Some(&f.stop)) {
-                idle = 0;
-                continue;
-            }
-            // A helper the OS has set aside would hold the owner too: search its kid as well, first value wins.
-            if f.take_over() {
-                idle = 0;
-                continue;
-            }
-            idle += 1;
-            if idle < 64 {
-                std::hint::spin_loop();
-            } else {
-                std::thread::yield_now();
-            }
-        }
+            .close(f, |under| self.help(Some(under)), || f.take_over());
     }
 
     fn fan_open(&self) -> bool {
-        use std::sync::atomic::Ordering;
-        self.n_fans.load(Ordering::Relaxed) > 0
-            && self.fans.read().unwrap().iter().any(|f| f.open())
+        self.fans.any_open()
     }
 
-    /// Joins the open fan nearest the root: its siblings are the largest pieces of work.
     fn help(&self, under: Option<&AbortChain>) -> bool {
-        use std::sync::atomic::Ordering;
-        if self.n_fans.load(Ordering::Relaxed) == 0 {
-            return false;
-        }
-        let pick = {
-            let fans = self.fans.read().unwrap();
-            let best = fans
-                .iter()
-                .filter(|f| f.open() && under.is_none_or(|a| f.stop.descends_from(a)))
-                .max_by_key(|f| f.depth);
-            best.map(|f| {
-                f.helpers.fetch_add(1, Ordering::AcqRel);
-                f.clone()
-            })
-        };
-        let Some(f) = pick else {
-            return false;
-        };
-        let ran = f.help();
-        f.helpers.fetch_sub(1, Ordering::AcqRel);
-        ran
+        self.fans.help(under, |f| f.help())
     }
 
     fn run_one(&self) -> bool {
@@ -1267,37 +1122,24 @@ impl NnueSearch {
         kids_all: bool,
         slot_of: &mut [u8; MAX_KIDS],
     ) -> Option<std::sync::Arc<Fan>> {
-        use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize};
-        let mut fan_kids = Vec::new();
+        let mut moves = Vec::new();
         for j in from..kids.len() {
             if !settled[j] {
-                slot_of[j] = fan_kids.len() as u8;
-                fan_kids.push(FanKid {
-                    pos: kids[j].0,
-                    flipped: kids[j].1,
-                    taken: AtomicBool::new(false),
-                    state: std::sync::atomic::AtomicU8::new(0),
-                    bits: AtomicU32::new(0),
-                    running: AtomicU32::new(0),
-                    taken_over: AtomicBool::new(false),
-                    stop: AbortChain::child(Some(stop.clone())),
-                });
+                slot_of[j] = moves.len() as u8;
+                moves.push((kids[j].0, kids[j].1));
             }
         }
-        if fan_kids.len() < 2 {
+        if moves.len() < 2 {
             *slot_of = [NO_SLOT; MAX_KIDS];
             return None;
         }
         let pool = self.pool.unwrap();
         let fan = std::sync::Arc::new(Fan {
+            kids: crate::fan::Kids::new(moves.len(), depth, stop),
+            moves,
             board: *b,
             depth,
             alpha,
-            left: AtomicUsize::new(fan_kids.len()),
-            kids: fan_kids,
-            helpers: AtomicUsize::new(0),
-            nodes: AtomicU64::new(0),
-            stop,
             nn: self.nn.clone(),
             tt: self.tt.clone(),
             mpc: self.mpc,
@@ -1675,7 +1517,7 @@ impl NnueSearch {
                     fan_tried = true;
                 }
                 if let Some(f) = fan.as_ref().filter(|_| slot_of[i] != NO_SLOT) {
-                    if !f.take(slot_of[i] as usize) {
+                    if !f.kids.take(slot_of[i] as usize) {
                         continue;
                     }
                 }
@@ -1725,7 +1567,7 @@ impl NnueSearch {
             let helped = fan.take();
             if let Some(f) = &helped {
                 self.pool.unwrap().close_fan(f);
-                self.nodes += f.nodes.load(std::sync::atomic::Ordering::Relaxed);
+                self.nodes += f.kids.nodes.load(std::sync::atomic::Ordering::Relaxed);
             }
             for i in 0..n_kids {
                 let Some(raw) = helped

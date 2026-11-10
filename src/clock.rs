@@ -8,7 +8,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::bitboard;
-use crate::midgame::{AbortChain, StopHandle};
+use crate::fan::{AbortChain, FanList, Kids};
+use crate::midgame::StopHandle;
 use crate::nnue::{MpcSigma, Nnue};
 use crate::pattern_index::PatternIndices;
 use crate::solver::final_score_bb;
@@ -200,19 +201,10 @@ struct Shared {
 
 const KID_ABORTED: i32 = i32::MIN;
 
-struct Kid {
-    sq: u8,
-    taken: AtomicBool,
-    /// 0 open, 1 being written, 2 written.
-    state: std::sync::atomic::AtomicU8,
-    val: std::sync::atomic::AtomicI32,
-    running: std::sync::atomic::AtomicU32,
-    taken_over: AtomicBool,
-    stop: Arc<AbortChain>,
-}
-
 /// One node's siblings after the first, open to every idle thread.
 struct Fan {
+    kids: Kids,
+    moves: Vec<u8>,
     sh: Arc<Shared>,
     board: Board,
     acc: PatternIndices,
@@ -223,65 +215,35 @@ struct Fan {
     margin: i32,
     history: [[i32; 64]; 2],
     kids_all: bool,
-    kids: Vec<Kid>,
-    left: std::sync::atomic::AtomicUsize,
-    helpers: std::sync::atomic::AtomicUsize,
-    nodes: AtomicU64,
-    stop: Arc<AbortChain>,
+}
+
+impl crate::fan::Fan for Fan {
+    fn kids(&self) -> &Kids {
+        &self.kids
+    }
 }
 
 impl Fan {
-    fn take(&self, k: usize) -> bool {
-        if self.kids[k]
-            .taken
-            .swap(true, std::sync::atomic::Ordering::AcqRel)
-        {
-            return false;
-        }
-        self.left.fetch_sub(1, Relaxed);
-        true
-    }
-
-    fn open(&self) -> bool {
-        self.left.load(Relaxed) > 0 && !self.stop.stopped()
-    }
-
-    fn settled(&self) -> bool {
-        use std::sync::atomic::Ordering::Acquire;
-        self.kids
-            .iter()
-            .all(|k| k.running.load(Acquire) == 0 || k.state.load(Acquire) == 2)
+    fn result(&self, k: usize) -> Option<i32> {
+        self.kids.result(k).map(|b| b as i32)
     }
 
     fn search_kid(&self, w: &mut Worker, k: usize) {
-        use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
-        let kid = &self.kids[k];
-        kid.running.fetch_add(1, AcqRel);
-        let pos = Position(kid.sq);
-        let mut nb = self.board;
-        let flipped = nb.make_move_bits(pos);
-        let mut child = self.acc;
-        w.sh.nn
-            .ix_apply(&mut child, pos, flipped, self.board.player());
-        let saved = w.stop.replace(kid.stop.clone());
-        w.expect_all = self.kids_all;
-        let r = w.search(&nb, &child, self.depth, -self.alpha - 1, -self.alpha, false);
-        w.stop = saved;
-        if kid.state.compare_exchange(0, 1, AcqRel, Acquire).is_ok() {
-            let v = match r {
-                Some((v, _)) => {
-                    if -v > self.alpha && !self.pv {
-                        self.stop.raise();
-                    }
-                    -v
-                }
-                None => KID_ABORTED,
-            };
-            kid.val.store(v, Relaxed);
-            kid.state.store(2, Release);
-            kid.stop.raise();
-        }
-        kid.running.fetch_sub(1, AcqRel);
+        let search = |stop: &Arc<AbortChain>| {
+            let pos = Position(self.moves[k]);
+            let mut nb = self.board;
+            let flipped = nb.make_move_bits(pos);
+            let mut child = self.acc;
+            w.sh.nn
+                .ix_apply(&mut child, pos, flipped, self.board.player());
+            let saved = w.stop.replace(stop.clone());
+            w.expect_all = self.kids_all;
+            let r = w.search(&nb, &child, self.depth, -self.alpha - 1, -self.alpha, false);
+            w.stop = saved;
+            r.map_or(KID_ABORTED, |(v, _)| -v) as u32
+        };
+        let cuts = |bits: u32| bits as i32 > self.alpha && !self.pv;
+        self.kids.run(k, search, cuts);
     }
 
     /// A helper searching this fan's kids, starting from the owner's history.
@@ -304,38 +266,31 @@ impl Fan {
         let mut w = self.worker(pool);
         let mut ran = false;
         for k in 0..self.kids.len() {
-            if self.stop.stopped() {
+            if self.kids.stop.stopped() {
                 break;
             }
-            if self.take(k) {
+            if self.kids.take(k) {
                 ran = true;
                 self.search_kid(&mut w, k);
             }
         }
-        self.nodes.fetch_add(w.nodes, Relaxed);
+        self.kids.nodes.fetch_add(w.nodes, Relaxed);
         ran
     }
 
     fn take_over(&self, pool: &Arc<Pool>) -> bool {
-        use std::sync::atomic::Ordering::{AcqRel, Acquire};
-        for (k, kid) in self.kids.iter().enumerate() {
-            if kid.running.load(Acquire) > 0
-                && kid.state.load(Acquire) == 0
-                && !kid.taken_over.swap(true, AcqRel)
-            {
-                let mut w = self.worker(pool);
-                self.search_kid(&mut w, k);
-                self.nodes.fetch_add(w.nodes, Relaxed);
-                return true;
-            }
-        }
-        false
+        let Some(k) = self.kids.take_over() else {
+            return false;
+        };
+        let mut w = self.worker(pool);
+        self.search_kid(&mut w, k);
+        self.kids.nodes.fetch_add(w.nodes, Relaxed);
+        true
     }
 }
 
 struct Pool {
-    fans: std::sync::RwLock<Vec<Arc<Fan>>>,
-    n_fans: std::sync::atomic::AtomicUsize,
+    fans: FanList<Fan>,
     m: std::sync::Mutex<()>,
     cv: std::sync::Condvar,
     idle: std::sync::atomic::AtomicUsize,
@@ -345,8 +300,7 @@ struct Pool {
 impl Pool {
     fn start(workers: usize) -> Arc<Pool> {
         let p = Arc::new(Pool {
-            fans: std::sync::RwLock::new(Vec::new()),
-            n_fans: std::sync::atomic::AtomicUsize::new(0),
+            fans: FanList::new(),
             m: std::sync::Mutex::new(()),
             cv: std::sync::Condvar::new(),
             idle: std::sync::atomic::AtomicUsize::new(0),
@@ -360,64 +314,20 @@ impl Pool {
     }
 
     fn open_fan(&self, f: &Arc<Fan>) {
-        self.fans.write().unwrap().push(f.clone());
-        self.n_fans.fetch_add(1, Relaxed);
+        self.fans.add(f);
         if self.idle.load(Relaxed) > 0 {
             let _g = self.m.lock().unwrap();
             self.cv.notify_all();
         }
     }
 
-    fn fan_open(&self) -> bool {
-        self.n_fans.load(Relaxed) > 0 && self.fans.read().unwrap().iter().any(|f| f.open())
-    }
-
     fn help(self: &Arc<Self>, under: Option<&AbortChain>) -> bool {
-        if self.n_fans.load(Relaxed) == 0 {
-            return false;
-        }
-        let pick = {
-            let fans = self.fans.read().unwrap();
-            fans.iter()
-                .filter(|f| f.open() && under.is_none_or(|a| f.stop.descends_from(a)))
-                .max_by_key(|f| f.depth)
-                .map(|f| {
-                    f.helpers.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                    f.clone()
-                })
-        };
-        let Some(f) = pick else {
-            return false;
-        };
-        let ran = f.help(self);
-        f.helpers.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-        ran
+        self.fans.help(under, |f| f.help(self))
     }
 
     fn close_fan(self: &Arc<Self>, f: &Arc<Fan>) {
-        use std::sync::atomic::Ordering::Acquire;
-        for k in 0..f.kids.len() {
-            f.take(k);
-        }
-        self.fans.write().unwrap().retain(|x| !Arc::ptr_eq(x, f));
-        self.n_fans.fetch_sub(1, Relaxed);
-        let mut idle = 0u32;
-        while f.helpers.load(Acquire) > 0 && !f.settled() {
-            if self.help(Some(&f.stop)) || f.take_over(self) {
-                idle = 0;
-                continue;
-            }
-            idle += 1;
-            if idle < 64 {
-                std::hint::spin_loop();
-            } else {
-                std::thread::yield_now();
-            }
-        }
-        // A helper may still be between taking nothing and leaving.
-        while f.helpers.load(Acquire) > 0 {
-            std::hint::spin_loop();
-        }
+        self.fans
+            .close(f, |under| self.help(Some(under)), || f.take_over(self));
     }
 
     fn worker_loop(self: Arc<Self>) {
@@ -425,13 +335,13 @@ impl Pool {
             if self.shutdown.load(Relaxed) {
                 return;
             }
-            if self.fan_open() {
+            if self.fans.any_open() {
                 self.help(None);
                 continue;
             }
             self.idle.fetch_add(1, Relaxed);
             let g = self.m.lock().unwrap();
-            if !self.fan_open() && !self.shutdown.load(Relaxed) {
+            if !self.fans.any_open() && !self.shutdown.load(Relaxed) {
                 drop(self.cv.wait(g).unwrap());
             }
             self.idle.fetch_sub(1, Relaxed);
@@ -692,22 +602,14 @@ impl Worker<'_> {
         mut best_move: u8,
         kid_all: bool,
     ) -> Option<(i32, u8)> {
-        use std::sync::atomic::Ordering::Acquire;
         let pool = self.pool.clone().unwrap();
-        let fan_stop = AbortChain::child(self.stop.clone());
-        let kids = rest
-            .iter()
-            .map(|&sq| Kid {
-                sq,
-                taken: AtomicBool::new(false),
-                state: std::sync::atomic::AtomicU8::new(0),
-                val: std::sync::atomic::AtomicI32::new(0),
-                running: std::sync::atomic::AtomicU32::new(0),
-                taken_over: AtomicBool::new(false),
-                stop: AbortChain::child(Some(fan_stop.clone())),
-            })
-            .collect();
         let fan = Arc::new(Fan {
+            kids: Kids::new(
+                rest.len(),
+                (depth - 1) as u32,
+                AbortChain::child(self.stop.clone()),
+            ),
+            moves: rest.to_vec(),
             sh: self.shared.clone(),
             board: *b,
             acc: *acc,
@@ -717,49 +619,40 @@ impl Worker<'_> {
             margin: self.margin,
             history: self.history,
             kids_all: kid_all,
-            kids,
-            left: std::sync::atomic::AtomicUsize::new(rest.len()),
-            helpers: std::sync::atomic::AtomicUsize::new(0),
-            nodes: AtomicU64::new(0),
-            stop: fan_stop,
         });
         pool.open_fan(&fan);
         for k in 0..rest.len() {
-            if fan.stop.stopped() {
+            if fan.kids.stop.stopped() {
                 break;
             }
-            if fan.take(k) {
+            if fan.kids.take(k) {
                 fan.search_kid(self, k);
             }
         }
         pool.close_fan(&fan);
-        self.nodes += fan.nodes.load(Relaxed);
+        self.nodes += fan.kids.nodes.load(Relaxed);
         if self.sh.timeout.load(Relaxed) || self.stop.as_ref().is_some_and(|s| s.stopped()) {
             return None;
         }
         let side = b.player() as usize & 1;
         let mut high = [0u8; 32];
         let mut nh = 0usize;
-        for (k, kid) in fan.kids.iter().enumerate() {
-            if kid.state.load(Acquire) != 2 {
+        for (k, &sq) in rest.iter().enumerate() {
+            let Some(g) = fan.result(k).filter(|&g| g != KID_ABORTED) else {
                 continue;
-            }
-            let g = kid.val.load(Relaxed);
-            if g == KID_ABORTED {
-                continue;
-            }
+            };
             if g > best {
                 best = g;
-                best_move = kid.sq;
+                best_move = sq;
             }
             if g > alpha {
                 if !pv {
-                    self.history[side][kid.sq as usize] += depth;
+                    self.history[side][sq as usize] += depth;
                     for &t in tried.iter().chain(&rest[..k]) {
                         self.history[side][t as usize] -= depth;
                     }
-                    self.store(h, alpha0, beta, g, kid.sq, depth);
-                    return Some((g, kid.sq));
+                    self.store(h, alpha0, beta, g, sq, depth);
+                    return Some((g, sq));
                 }
                 high[nh] = k as u8;
                 nh += 1;
