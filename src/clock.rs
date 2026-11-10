@@ -1,14 +1,14 @@
 //! The search for games on a clock: one alpha-beta search from the first move to the solve.
 //! Iterative deepening by two plies up to the full depth, then the same full-depth search again
 //! with ever wider ProbCut margins until only the exact solve is left. Integer disc scores,
-//! helper threads over one shared table, and a time rule from the clock alone.
+//! siblings after the first shared among threads, and a time rule from the clock alone.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::bitboard;
-use crate::midgame::StopHandle;
+use crate::midgame::{AbortChain, StopHandle};
 use crate::nnue::{MpcSigma, Nnue};
 use crate::pattern_index::PatternIndices;
 use crate::solver::final_score_bb;
@@ -198,50 +198,9 @@ struct Shared {
     stop: Option<StopHandle>,
 }
 
-/// A stop that also trips when any ancestor's does.
-struct CStop {
-    flag: AtomicBool,
-    parent: Option<Arc<CStop>>,
-}
-
-impl CStop {
-    fn new(parent: Option<Arc<CStop>>) -> Arc<CStop> {
-        Arc::new(CStop {
-            flag: AtomicBool::new(false),
-            parent,
-        })
-    }
-
-    fn raise(&self) {
-        self.flag.store(true, Relaxed);
-    }
-
-    fn stopped(&self) -> bool {
-        let mut c = Some(self);
-        while let Some(s) = c {
-            if s.flag.load(Relaxed) {
-                return true;
-            }
-            c = s.parent.as_deref();
-        }
-        false
-    }
-
-    fn descends_from(&self, a: &CStop) -> bool {
-        let mut c = Some(self);
-        while let Some(s) = c {
-            if std::ptr::eq(s, a) {
-                return true;
-            }
-            c = s.parent.as_deref();
-        }
-        false
-    }
-}
-
 const KID_ABORTED: i32 = i32::MIN;
 
-struct CKid {
+struct Kid {
     sq: u8,
     taken: AtomicBool,
     /// 0 open, 1 being written, 2 written.
@@ -249,12 +208,12 @@ struct CKid {
     val: std::sync::atomic::AtomicI32,
     running: std::sync::atomic::AtomicU32,
     taken_over: AtomicBool,
-    stop: Arc<CStop>,
+    stop: Arc<AbortChain>,
 }
 
 /// One node's siblings after the first, open to every idle thread.
-struct CFan {
-    sh: *const Shared,
+struct Fan {
+    sh: Arc<Shared>,
     board: Board,
     acc: PatternIndices,
     depth: i32,
@@ -264,18 +223,14 @@ struct CFan {
     margin: i32,
     history: [[i32; 64]; 2],
     kids_all: bool,
-    kids: Vec<CKid>,
+    kids: Vec<Kid>,
     left: std::sync::atomic::AtomicUsize,
     helpers: std::sync::atomic::AtomicUsize,
     nodes: AtomicU64,
-    stop: Arc<CStop>,
+    stop: Arc<AbortChain>,
 }
 
-// The owner does not leave the node before every search of a kid has returned, so `sh` outlives the fan's use.
-unsafe impl Send for CFan {}
-unsafe impl Sync for CFan {}
-
-impl CFan {
+impl Fan {
     fn take(&self, k: usize) -> bool {
         if self.kids[k]
             .taken
@@ -329,10 +284,11 @@ impl CFan {
         kid.running.fetch_sub(1, AcqRel);
     }
 
-    fn help(&self, pool: &Arc<CPool>) -> bool {
-        let sh = unsafe { &*self.sh };
-        let mut w = Worker {
-            sh,
+    /// A helper searching this fan's kids, starting from the owner's history.
+    fn worker<'a>(&'a self, pool: &Arc<Pool>) -> Worker<'a> {
+        Worker {
+            sh: &self.sh,
+            shared: &self.sh,
             nodes: 0,
             history: self.history,
             margin: self.margin,
@@ -341,7 +297,11 @@ impl CFan {
             stop: None,
             pool: Some(pool.clone()),
             expect_all: false,
-        };
+        }
+    }
+
+    fn help(&self, pool: &Arc<Pool>) -> bool {
+        let mut w = self.worker(pool);
         let mut ran = false;
         for k in 0..self.kids.len() {
             if self.stop.stopped() {
@@ -356,25 +316,14 @@ impl CFan {
         ran
     }
 
-    fn take_over(&self, pool: &Arc<CPool>) -> bool {
+    fn take_over(&self, pool: &Arc<Pool>) -> bool {
         use std::sync::atomic::Ordering::{AcqRel, Acquire};
         for (k, kid) in self.kids.iter().enumerate() {
             if kid.running.load(Acquire) > 0
                 && kid.state.load(Acquire) == 0
                 && !kid.taken_over.swap(true, AcqRel)
             {
-                let sh = unsafe { &*self.sh };
-                let mut w = Worker {
-                    sh,
-                    nodes: 0,
-                    history: self.history,
-                    margin: self.margin,
-                    root_mask: 0,
-                    root_depth: -1,
-                    stop: None,
-                    pool: Some(pool.clone()),
-                    expect_all: false,
-                };
+                let mut w = self.worker(pool);
                 self.search_kid(&mut w, k);
                 self.nodes.fetch_add(w.nodes, Relaxed);
                 return true;
@@ -384,8 +333,8 @@ impl CFan {
     }
 }
 
-struct CPool {
-    fans: std::sync::RwLock<Vec<Arc<CFan>>>,
+struct Pool {
+    fans: std::sync::RwLock<Vec<Arc<Fan>>>,
     n_fans: std::sync::atomic::AtomicUsize,
     m: std::sync::Mutex<()>,
     cv: std::sync::Condvar,
@@ -393,9 +342,9 @@ struct CPool {
     shutdown: AtomicBool,
 }
 
-impl CPool {
-    fn start(workers: usize) -> Arc<CPool> {
-        let p = Arc::new(CPool {
+impl Pool {
+    fn start(workers: usize) -> Arc<Pool> {
+        let p = Arc::new(Pool {
             fans: std::sync::RwLock::new(Vec::new()),
             n_fans: std::sync::atomic::AtomicUsize::new(0),
             m: std::sync::Mutex::new(()),
@@ -410,7 +359,7 @@ impl CPool {
         p
     }
 
-    fn open_fan(&self, f: &Arc<CFan>) {
+    fn open_fan(&self, f: &Arc<Fan>) {
         self.fans.write().unwrap().push(f.clone());
         self.n_fans.fetch_add(1, Relaxed);
         if self.idle.load(Relaxed) > 0 {
@@ -423,7 +372,7 @@ impl CPool {
         self.n_fans.load(Relaxed) > 0 && self.fans.read().unwrap().iter().any(|f| f.open())
     }
 
-    fn help(self: &Arc<Self>, under: Option<&CStop>) -> bool {
+    fn help(self: &Arc<Self>, under: Option<&AbortChain>) -> bool {
         if self.n_fans.load(Relaxed) == 0 {
             return false;
         }
@@ -433,7 +382,7 @@ impl CPool {
                 .filter(|f| f.open() && under.is_none_or(|a| f.stop.descends_from(a)))
                 .max_by_key(|f| f.depth)
                 .map(|f| {
-                    f.helpers.fetch_add(1, Relaxed);
+                    f.helpers.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                     f.clone()
                 })
         };
@@ -441,11 +390,11 @@ impl CPool {
             return false;
         };
         let ran = f.help(self);
-        f.helpers.fetch_sub(1, Relaxed);
+        f.helpers.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
         ran
     }
 
-    fn close_fan(self: &Arc<Self>, f: &Arc<CFan>) {
+    fn close_fan(self: &Arc<Self>, f: &Arc<Fan>) {
         use std::sync::atomic::Ordering::Acquire;
         for k in 0..f.kids.len() {
             f.take(k);
@@ -498,9 +447,11 @@ impl CPool {
 
 struct Worker<'a> {
     sh: &'a Shared,
+    /// `sh` itself, for fans to hold.
+    shared: &'a Arc<Shared>,
     /// The kid this worker searches for a fan, when it does.
-    stop: Option<Arc<CStop>>,
-    pool: Option<Arc<CPool>>,
+    stop: Option<Arc<AbortChain>>,
+    pool: Option<Arc<Pool>>,
     /// The next search's node is expected to fail low on every move; taken at entry.
     expect_all: bool,
     nodes: u64,
@@ -743,21 +694,21 @@ impl Worker<'_> {
     ) -> Option<(i32, u8)> {
         use std::sync::atomic::Ordering::Acquire;
         let pool = self.pool.clone().unwrap();
-        let fan_stop = CStop::new(self.stop.clone());
+        let fan_stop = AbortChain::child(self.stop.clone());
         let kids = rest
             .iter()
-            .map(|&sq| CKid {
+            .map(|&sq| Kid {
                 sq,
                 taken: AtomicBool::new(false),
                 state: std::sync::atomic::AtomicU8::new(0),
                 val: std::sync::atomic::AtomicI32::new(0),
                 running: std::sync::atomic::AtomicU32::new(0),
                 taken_over: AtomicBool::new(false),
-                stop: CStop::new(Some(fan_stop.clone())),
+                stop: AbortChain::child(Some(fan_stop.clone())),
             })
             .collect();
-        let fan = Arc::new(CFan {
-            sh: self.sh as *const Shared,
+        let fan = Arc::new(Fan {
+            sh: self.shared.clone(),
             board: *b,
             acc: *acc,
             depth: depth - 1,
@@ -825,6 +776,9 @@ impl Worker<'_> {
                 alpha = v;
                 if alpha >= beta {
                     self.history[side][sq as usize] += depth;
+                    for &t in tried.iter().chain(&rest[..k as usize]) {
+                        self.history[side][t as usize] -= depth;
+                    }
                     self.store(h, alpha0, beta, best, best_move, depth);
                     return Some((best, best_move));
                 }
@@ -968,7 +922,7 @@ pub struct ClockSearch {
     sh: Arc<Shared>,
     threads: usize,
     /// Threads beyond the first, waiting for fans to help with.
-    pool: Option<Arc<CPool>>,
+    pool: Option<Arc<Pool>>,
     history: [[i32; 64]; 2],
     /// Index into `MARGINS` (its length: the solve), carried over while searches reach the full depth.
     step: usize,
@@ -1002,7 +956,7 @@ impl ClockSearch {
                 stop,
             }),
             threads: threads.max(1),
-            pool: (threads > 1).then(|| CPool::start(threads - 1)),
+            pool: (threads > 1).then(|| Pool::start(threads - 1)),
             history: [[0; 64]; 2],
             step: 0,
             first_move: true,
@@ -1018,7 +972,7 @@ impl ClockSearch {
             p.stop_all();
         }
         self.threads = threads;
-        self.pool = (threads > 1).then(|| CPool::start(threads - 1));
+        self.pool = (threads > 1).then(|| Pool::start(threads - 1));
     }
 
     pub fn table_move(&self, b: &Board) -> Option<Position> {
@@ -1064,10 +1018,10 @@ impl ClockSearch {
         beta: i32,
         root_mask: u64,
     ) -> (Option<(i32, u8)>, u64) {
-        let sh = &*self.sh;
-        let acc = sh.nn.indices(b.black, b.white);
+        let acc = self.sh.nn.indices(b.black, b.white);
         let mut w = Worker {
-            sh,
+            sh: &self.sh,
+            shared: &self.sh,
             nodes: 0,
             history: self.history,
             margin: MARGINS[self.step],
@@ -1297,6 +1251,7 @@ mod tests {
         let acc = s.sh.nn.indices(b.black, b.white);
         let mut w = Worker {
             sh: &s.sh,
+            shared: &s.sh,
             nodes: 0,
             history: [[0; 64]; 2],
             margin: 0,

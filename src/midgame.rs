@@ -331,22 +331,22 @@ impl StopHandle {
     }
 }
 
-struct AbortChain {
+pub(crate) struct AbortChain {
     flag: std::sync::atomic::AtomicBool,
     parent: Option<std::sync::Arc<AbortChain>>,
 }
 
 impl AbortChain {
-    fn child(parent: Option<std::sync::Arc<AbortChain>>) -> std::sync::Arc<AbortChain> {
+    pub(crate) fn child(parent: Option<std::sync::Arc<AbortChain>>) -> std::sync::Arc<AbortChain> {
         std::sync::Arc::new(AbortChain {
             flag: std::sync::atomic::AtomicBool::new(false),
             parent,
         })
     }
-    fn raise(&self) {
+    pub(crate) fn raise(&self) {
         self.flag.store(true, std::sync::atomic::Ordering::Relaxed);
     }
-    fn stopped(&self) -> bool {
+    pub(crate) fn stopped(&self) -> bool {
         let mut n = self;
         loop {
             if n.flag.load(std::sync::atomic::Ordering::Relaxed) {
@@ -358,7 +358,7 @@ impl AbortChain {
             }
         }
     }
-    fn descends_from(&self, ancestor: &AbortChain) -> bool {
+    pub(crate) fn descends_from(&self, ancestor: &AbortChain) -> bool {
         let mut n = self;
         loop {
             if std::ptr::eq(n, ancestor) {
