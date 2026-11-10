@@ -301,12 +301,13 @@ impl StackQ {
             let r = *rows.get_unchecked(m) as usize;
             let hp = ft.add(r * ACC_DIMS) as *const u8;
             let pp = pa.add(r * PA_DIMS) as *const u8;
-            for l in 0..(H * 4 / 64) {
-                let q = hp.add(l * 64);
+            // Apple's cache line is 128 B; a 64 B stride spends load slots on lines already asked for.
+            for l in 0..(H * 4 / 128) {
+                let q = hp.add(l * 128);
                 std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) q, options(nostack, readonly));
             }
-            for l in 0..(H * 2 / 64) {
-                let q = pp.add(l * 64);
+            for l in 0..(H * 2 / 128) {
+                let q = pp.add(l * 128);
                 std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) q, options(nostack, readonly));
             }
         }
