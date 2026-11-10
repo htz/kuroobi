@@ -53,6 +53,8 @@ pub(super) struct StackQ {
     l2_b: Vec<i32>,
     out_w: Vec<i16>,
     out_b: Vec<i32>,
+    /// Evaluations by board, shared by every thread; rebuilt with the weights.
+    pub(super) cache: Vec<super::EvalSlot>,
 }
 
 impl StackQ {
@@ -129,6 +131,9 @@ impl StackQ {
             l2_b,
             out_w,
             out_b,
+            cache: (0..1usize << super::EVAL_CACHE_BITS)
+                .map(|_| super::EvalSlot::default())
+                .collect(),
         }
     }
 

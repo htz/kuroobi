@@ -978,10 +978,23 @@ impl Nnue {
 
     /// The search's evaluation: the integer network, which needs [`Nnue::quantize`] first.
     #[inline]
+    /// `indices` must be `board`'s: the value is cached under the board alone.
     pub fn eval_from_indices(&self, indices: &PatternIndices, board: &Board) -> f32 {
+        let tag = board.player() as u64 + 1;
+        let h = (board.black.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ board.white.wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+            ^ tag)
+            >> (64 - EVAL_CACHE_BITS);
+        let slot = &self.sq.cache[h as usize];
+        if let Some(v) = slot.get(board.black, board.white, tag) {
+            return v;
+        }
         let stage = crate::linear::Linear::stage(board);
-        self.sq
-            .eval(self, indices, board.player(), stage, Self::mob_index(board))
+        let v = self
+            .sq
+            .eval(self, indices, board.player(), stage, Self::mob_index(board));
+        slot.put(board.black, board.white, tag, v);
+        v
     }
 
     pub fn eval(&self, board: &Board) -> f32 {
@@ -1921,5 +1934,54 @@ mod tests {
             worst < 0.02,
             "backward disagrees with finite differences by {worst:.4} relative: {worst_name}"
         );
+    }
+}
+
+pub(crate) const EVAL_CACHE_BITS: u32 = 18;
+
+/// One cached evaluation behind a sequence lock, so a reader never takes a half-written entry.
+#[derive(Default)]
+#[repr(align(32))]
+pub(crate) struct EvalSlot {
+    seq: std::sync::atomic::AtomicU32,
+    value: std::sync::atomic::AtomicU32,
+    black: std::sync::atomic::AtomicU64,
+    white: std::sync::atomic::AtomicU64,
+    tag: std::sync::atomic::AtomicU64,
+}
+
+impl EvalSlot {
+    #[inline]
+    fn get(&self, black: u64, white: u64, tag: u64) -> Option<f32> {
+        use std::sync::atomic::{fence, Ordering::*};
+        let s0 = self.seq.load(Acquire);
+        let (b, w, t, v) = (
+            self.black.load(Relaxed),
+            self.white.load(Relaxed),
+            self.tag.load(Relaxed),
+            self.value.load(Relaxed),
+        );
+        fence(Acquire);
+        let s1 = self.seq.load(Relaxed);
+        (s0 & 1 == 0 && s0 == s1 && b == black && w == white && t == tag).then(|| f32::from_bits(v))
+    }
+
+    #[inline]
+    fn put(&self, black: u64, white: u64, tag: u64, v: f32) {
+        use std::sync::atomic::Ordering::*;
+        let s = self.seq.load(Relaxed);
+        if s & 1 != 0
+            || self
+                .seq
+                .compare_exchange(s, s + 1, Acquire, Relaxed)
+                .is_err()
+        {
+            return;
+        }
+        self.black.store(black, Relaxed);
+        self.white.store(white, Relaxed);
+        self.tag.store(tag, Relaxed);
+        self.value.store(v.to_bits(), Relaxed);
+        self.seq.store(s + 2, Release);
     }
 }
