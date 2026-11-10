@@ -201,6 +201,13 @@ struct Shared {
 
 const KID_ABORTED: i32 = i32::MIN;
 
+#[inline(always)]
+fn kid_board(b: &Board, sq: u8) -> (Board, u64) {
+    let mut nb = *b;
+    let flipped = nb.make_move_bits(Position(sq));
+    (nb, flipped)
+}
+
 /// One node's siblings after the first, open to every idle thread.
 struct Fan {
     kids: Kids,
@@ -536,6 +543,7 @@ impl Worker<'_> {
         let leaf_kids = depth == 1 && 64 - (empties - 1) <= EXACT_DISCS;
         let split = self.pool.is_some() && depth >= SPLIT_MIN;
         let kid_all = !pv && !all_node;
+        let mut next: Option<(u8, Board, u64)> = None;
         let mut j = 0usize;
         while j < n {
             if j == sorted && n > j + 2 {
@@ -551,18 +559,34 @@ impl Worker<'_> {
             }
             let sq = list[j];
             j += 1;
-            // The next kid's table entry loads while this one is searched.
-            if !leaf_kids && j < n {
-                let mut nb = *b;
-                nb.make_move_bits(Position(list[j]));
-                self.sh
-                    .table
-                    .prefetch(zobrist::board_hash(nb.player_bb(), nb.opponent_bb()));
-            }
             let v = if leaf_kids {
                 self.child1(b, acc, sq, alpha, beta, j == 1)?
             } else {
-                self.child(b, acc, sq, depth, alpha, beta, pv, j == 1, kid_all)?
+                let (nb, flipped) = match next.take() {
+                    Some((s, nb, f)) if s == sq => (nb, f),
+                    _ => kid_board(b, sq),
+                };
+                // The next kid is made now so that its table entry loads while this one is searched.
+                if j < n {
+                    let (kb, kf) = kid_board(b, list[j]);
+                    self.sh
+                        .table
+                        .prefetch(zobrist::board_hash(kb.player_bb(), kb.opponent_bb()));
+                    next = Some((list[j], kb, kf));
+                }
+                self.child_made(
+                    b,
+                    acc,
+                    sq,
+                    nb,
+                    flipped,
+                    depth,
+                    alpha,
+                    beta,
+                    pv,
+                    j == 1,
+                    kid_all,
+                )?
             };
             if v > best {
                 best = v;
@@ -741,11 +765,32 @@ impl Worker<'_> {
         first: bool,
         kid_all: bool,
     ) -> Option<i32> {
-        let pos = Position(sq);
-        let mut nb = *b;
-        let flipped = nb.make_move_bits(pos);
+        let (nb, flipped) = kid_board(b, sq);
+        self.child_made(
+            b, acc, sq, nb, flipped, depth, alpha, beta, pv, first, kid_all,
+        )
+    }
+
+    /// [`Worker::child`] with the move already made on `nb`.
+    #[allow(clippy::too_many_arguments)]
+    fn child_made(
+        &mut self,
+        b: &Board,
+        acc: &PatternIndices,
+        sq: u8,
+        nb: Board,
+        flipped: u64,
+        depth: i32,
+        alpha: i32,
+        beta: i32,
+        pv: bool,
+        first: bool,
+        kid_all: bool,
+    ) -> Option<i32> {
         let mut child = *acc;
-        self.sh.nn.ix_apply(&mut child, pos, flipped, b.player());
+        self.sh
+            .nn
+            .ix_apply(&mut child, Position(sq), flipped, b.player());
         self.expect_all = kid_all;
         if first {
             return Some(-self.search(&nb, &child, depth - 1, -beta, -alpha, pv)?.0);
