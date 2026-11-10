@@ -22,6 +22,8 @@ const DEEP_ORDER_EMPTIES: u8 = 17;
 const DEEP2_ORDER_EMPTIES: u8 = 20;
 const DEEP3_ORDER_EMPTIES: u8 = 29;
 const MOBILITY_ORDER_WEIGHT: i32 = 12;
+/// A child's legal set is never all ones, so this marks "not known yet".
+const NO_LEGAL_HINT: u64 = u64::MAX;
 const EDGE_STABILITY_ORDER_WEIGHT: i32 = 1;
 const SORT_ALPHA_DELTA: i32 = 12;
 const PARALLEL_MIN_EMPTIES: u8 = 16;
@@ -2015,9 +2017,20 @@ impl Worker<'_> {
                     false,
                     parity,
                     ev,
+                    NO_LEGAL_HINT,
                 )
             } else {
-                -self.alpha_beta(player, opponent, empties, hash, alpha, beta, false, parity)
+                -self.alpha_beta(
+                    player,
+                    opponent,
+                    empties,
+                    hash,
+                    alpha,
+                    beta,
+                    false,
+                    parity,
+                    NO_LEGAL_HINT,
+                )
             }
         }
     }
@@ -2111,9 +2124,10 @@ impl Worker<'_> {
                 false,
                 cp,
                 ev,
+                m.legal,
             )
         } else {
-            -self.alpha_beta(cbp, cbo, ce, ch, -beta, -alpha, false, cp)
+            -self.alpha_beta(cbp, cbo, ce, ch, -beta, -alpha, false, cp, m.legal)
         }
     }
 
@@ -2129,6 +2143,7 @@ impl Worker<'_> {
         passed: bool,
         parity: u8,
         ev: Option<&Linear>,
+        legal: u64,
     ) -> i32 {
         debug_assert!(alpha < beta, "alpha_beta_ordered needs a non-empty window");
         let mut alpha = alpha;
@@ -2179,7 +2194,7 @@ impl Worker<'_> {
 
         let orig_alpha = alpha;
         let mut moves = MoveBuf::new();
-        self.gen_moves_bb(player, opponent, n_empties, &mut moves);
+        self.gen_moves_bb(player, opponent, n_empties, &mut moves, legal);
 
         if moves.is_empty() {
             if passed {
@@ -2196,6 +2211,7 @@ impl Worker<'_> {
                 true,
                 parity,
                 ev,
+                NO_LEGAL_HINT,
             );
             self.ordered_store(
                 use_tt, to_move, hash, player, opponent, orig_alpha, beta, val, None,
@@ -2320,6 +2336,7 @@ impl Worker<'_> {
         beta: i32,
         passed: bool,
         parity: u8,
+        legal: u64,
     ) -> i32 {
         if n_empties == 4 {
             if let Some(v) = wipeout_score(player, opponent) {
@@ -2346,7 +2363,12 @@ impl Worker<'_> {
         }
 
         let empties = bitboard::empty_bb(player, opponent);
-        let legal = bitboard::mobility(player, opponent, empties);
+        let legal = if legal != NO_LEGAL_HINT {
+            debug_assert_eq!(legal, bitboard::mobility(player, opponent, empties));
+            legal
+        } else {
+            bitboard::mobility(player, opponent, empties)
+        };
         if legal == 0 {
             if passed {
                 return final_score_bb(player, opponent);
@@ -2360,6 +2382,7 @@ impl Worker<'_> {
                 -alpha,
                 true,
                 parity,
+                NO_LEGAL_HINT,
             );
         }
 
@@ -2434,6 +2457,7 @@ impl Worker<'_> {
                     -best,
                     false,
                     child_parity,
+                    NO_LEGAL_HINT,
                 )
             };
             if val >= beta {
@@ -2978,14 +3002,20 @@ impl Worker<'_> {
             board.opponent_bb(),
             board.empty_count(),
             out,
+            NO_LEGAL_HINT,
         )
     }
 
-    fn gen_moves_bb(&self, p: u64, o: u64, n_empties: u8, out: &mut MoveBuf) {
+    fn gen_moves_bb(&self, p: u64, o: u64, n_empties: u8, out: &mut MoveBuf, legal: u64) {
         out.len = 0;
 
         let n = {
-            let mut m = bitboard::mobility(p, o, bitboard::empty_bb(p, o));
+            let mut m = if legal != NO_LEGAL_HINT {
+                debug_assert_eq!(legal, bitboard::mobility(p, o, bitboard::empty_bb(p, o)));
+                legal
+            } else {
+                bitboard::mobility(p, o, bitboard::empty_bb(p, o))
+            };
             let ctx = bitboard::FlipCtx::new(p, o);
             let mut n = 0usize;
             while m != 0 {
@@ -2997,6 +3027,7 @@ impl Worker<'_> {
                         pos: Position(sq),
                         flipped: ctx.flip(sq),
                         value: 0,
+                        legal: NO_LEGAL_HINT,
                     },
                 );
                 n += 1;
@@ -3056,8 +3087,9 @@ impl Worker<'_> {
                 };
                 indices = saved;
                 let edge = corner_stability_bb(co) * 8;
-                (v * 8.0) as i32 + weighted_mobility(cp, co) * MOBILITY_ORDER_WEIGHT
-                    - edge * EDGE_STABILITY_ORDER_WEIGHT
+                let (wm, legal) = weighted_mobility(cp, co);
+                sm.legal = legal;
+                (v * 8.0) as i32 + wm * MOBILITY_ORDER_WEIGHT - edge * EDGE_STABILITY_ORDER_WEIGHT
             };
         }
     }
@@ -3082,6 +3114,7 @@ struct ScoredMove {
     pos: Position,
     flipped: u64,
     value: i32,
+    legal: u64,
 }
 
 impl ScoredMove {
@@ -3237,9 +3270,9 @@ fn shallow_search(
 }
 
 #[inline]
-fn weighted_mobility(cp: u64, co: u64) -> i32 {
+fn weighted_mobility(cp: u64, co: u64) -> (i32, u64) {
     let m = bitboard::mobility(cp, co, !(cp | co));
-    (m.count_ones() + (m & CORNER_MASK).count_ones()) as i32
+    ((m.count_ones() + (m & CORNER_MASK).count_ones()) as i32, m)
 }
 
 fn score_moves_static(
@@ -3254,7 +3287,9 @@ fn score_moves_static(
         sm.value = if cp == 0 {
             i32::MIN
         } else {
-            move_ordering_value(sm.pos, cp, co)
+            let (v, legal) = move_ordering_value(sm.pos, cp, co);
+            sm.legal = legal;
+            v
         };
     }
     if let Some(best) = tt_best {
@@ -3267,14 +3302,15 @@ fn score_moves_static(
     }
 }
 
-fn move_ordering_value(pos: Position, cp: u64, co: u64) -> i32 {
+fn move_ordering_value(pos: Position, cp: u64, co: u64) -> (i32, u64) {
     const W_MOBILITY: i32 = 1 << 15;
     const W_CORNER_STABILITY: i32 = 1 << 11;
 
     let mut score = SQUARE_VALUE[(pos.index() & 63) as usize] as i32;
     score += corner_stability_bb(co) * W_CORNER_STABILITY;
-    score += (36 - weighted_mobility(cp, co)) * W_MOBILITY;
-    -score
+    let (wm, legal) = weighted_mobility(cp, co);
+    score += (36 - wm) * W_MOBILITY;
+    (-score, legal)
 }
 
 const SQUARE_VALUE: [u8; 64] = [
