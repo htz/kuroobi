@@ -5,6 +5,7 @@ use crate::pattern::Pattern;
 use crate::position::Position;
 
 pub const MAX_MASKS: usize = 80;
+const _: () = assert!(MAX_MASKS.is_multiple_of(8));
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PatternIndices {
@@ -112,16 +113,61 @@ impl PatternIndexer {
     #[inline]
     pub fn apply(&self, indices: &mut PatternIndices, pos: Position, flipped: u64, mover: Color) {
         let mover_digit = mover.index() as u16;
-        self.update_square(indices, pos.index(), mover_digit.wrapping_sub(2));
+        let mover_diff = mover_digit.wrapping_sub(2);
         let flip_diff = mover_digit.wrapping_sub(1 - mover_digit);
-        let mut f = flipped;
-        while f != 0 {
-            let sq = f.trailing_zeros() as u8;
-            f &= f - 1;
-            self.update_square(indices, sq, flip_diff);
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            self.apply_neon(indices, pos.index(), mover_diff, flipped, flip_diff)
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            self.update_square(indices, pos.index(), mover_diff);
+            let mut f = flipped;
+            while f != 0 {
+                let sq = f.trailing_zeros() as u8;
+                f &= f - 1;
+                self.update_square(indices, sq, flip_diff);
+            }
         }
     }
 
+    /// The indices stay in ten vector registers across every square the move changes.
+    #[cfg(target_arch = "aarch64")]
+    #[target_feature(enable = "neon")]
+    unsafe fn apply_neon(
+        &self,
+        indices: &mut PatternIndices,
+        pos: u8,
+        mover_diff: u16,
+        flipped: u64,
+        flip_diff: u16,
+    ) {
+        use core::arch::aarch64::*;
+        const V: usize = MAX_MASKS / 8;
+        let dst = indices.idx.as_mut_ptr();
+        let mut acc = [vdupq_n_u16(0); V];
+        for (i, a) in acc.iter_mut().enumerate() {
+            *a = vld1q_u16(dst.add(8 * i));
+        }
+        let row = self.dense_pow3.get_unchecked(pos as usize).as_ptr();
+        for (i, a) in acc.iter_mut().enumerate() {
+            *a = vmlaq_n_u16(*a, vld1q_u16(row.add(8 * i)), mover_diff);
+        }
+        let mut f = flipped;
+        while f != 0 {
+            let sq = f.trailing_zeros() as usize;
+            f &= f - 1;
+            let row = self.dense_pow3.get_unchecked(sq).as_ptr();
+            for (i, a) in acc.iter_mut().enumerate() {
+                *a = vmlaq_n_u16(*a, vld1q_u16(row.add(8 * i)), flip_diff);
+            }
+        }
+        for (i, a) in acc.iter().enumerate() {
+            vst1q_u16(dst.add(8 * i), *a);
+        }
+    }
+
+    #[cfg(not(target_arch = "aarch64"))]
     #[inline]
     fn update_square(&self, indices: &mut PatternIndices, sq: u8, digit_diff: u16) {
         let row = unsafe { self.dense_pow3.get_unchecked(sq as usize) };
