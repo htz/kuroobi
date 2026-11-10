@@ -29,6 +29,7 @@ const MARGINS: [i32; 5] = [3, 4, 5, 6, 8];
 /// Past this many discs on the board the rest is searched exactly.
 const EXACT_DISCS: i32 = 60;
 /// Nodes this deep share their siblings after the first; 8 threads, depth 24: 7 / 8 / 10 gave 2.03 / 1.87 / 1.89 s.
+/// ProbCut probes never share: splitting them made 8 threads search 5-10x one thread's nodes in full-depth passes.
 const SPLIT_MIN: i32 = 8;
 const HISTORY_DECAY: i32 = 8;
 const STATIC_BONUS: [i32; 64] = {
@@ -271,6 +272,7 @@ impl Fan {
             stop: None,
             pool: Some(pool.clone()),
             expect_all: false,
+            probe: false,
         }
     }
 
@@ -374,6 +376,8 @@ struct Worker<'a> {
     /// Moves searched at the root (all when 0); a narrowed root is not stored, its bound is not the position's.
     root_mask: u64,
     root_depth: i32,
+    /// Inside a ProbCut probe's search.
+    probe: bool,
 }
 
 impl Worker<'_> {
@@ -502,7 +506,10 @@ impl Worker<'_> {
             let sigma = sigma.value(empties as u32, depth as u32, d1 as u32);
             let s = ((sigma * self.margin as f32) / 2.0).round().max(1.0) as i32;
             self.expect_all = all_node;
-            let (v, mv) = self.search(b, acc, d1 as i32, alpha - s, beta + s, false)?;
+            let outer = std::mem::replace(&mut self.probe, true);
+            let r = self.search(b, acc, d1 as i32, alpha - s, beta + s, false);
+            self.probe = outer;
+            let (v, mv) = r?;
             if v >= beta + s {
                 return Some((beta, mv));
             }
@@ -538,7 +545,7 @@ impl Worker<'_> {
         let mut best_move = NO_MOVE;
         // The kids are leaves outside the exact zone: their values do not depend on the window.
         let leaf_kids = depth == 1 && 64 - (empties - 1) <= EXACT_DISCS;
-        let split = self.pool.is_some() && depth >= SPLIT_MIN;
+        let split = self.pool.is_some() && depth >= SPLIT_MIN && !self.probe;
         let kid_all = !pv && !all_node;
         let mut next: Option<(u8, Board, u64)> = None;
         let mut j = 0usize;
@@ -976,6 +983,7 @@ impl ClockSearch {
             stop: None,
             pool: self.pool.clone(),
             expect_all: false,
+            probe: false,
         };
         let r = w.search(b, &acc, depth, alpha, beta, true);
         let (nodes, history) = (w.nodes, w.history);
@@ -1205,6 +1213,7 @@ mod tests {
             stop: None,
             pool: None,
             expect_all: false,
+            probe: false,
         };
         let (v, _) = w.search(&b, &acc, full, MIN, MAX, true).unwrap();
         let exact = w.exact(b.player_bb(), b.opponent_bb(), MIN, MAX, false);
