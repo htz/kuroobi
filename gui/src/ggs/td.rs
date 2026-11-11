@@ -261,7 +261,13 @@ fn td_apply_list(td: &mut TdView, rows: &[&str]) {
         f.splice(4..5, [played, rounds]);
         let t = td_entry(td, id);
         t.director = f[1].to_string();
-        t.n_players = f[3].parse().unwrap_or(t.n_players);
+        // The count includes the bye once the tournament runs; the names, once known, do not.
+        let listed = f[3].parse().unwrap_or(t.n_players);
+        t.n_players = if t.players.is_empty() {
+            listed
+        } else {
+            t.players.len()
+        };
         t.rounds_played = f[4].trim_end_matches('/').parse().unwrap_or(0);
         t.rounds = f[5].parse().unwrap_or(0);
         t.clock = f[7].to_string();
@@ -314,12 +320,14 @@ fn td_apply_finger(td: &mut TdView, login: &str, head: &str, rest: &[&str]) {
                     }
                 }
                 "players" => {
-                    let mut it = v.split_whitespace();
-                    t.n_players = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
-                    t.players = it
+                    // The director's count includes the bye it adds for an odd field.
+                    t.players = v
+                        .split_whitespace()
+                        .skip(1)
                         .filter(|p| *p != "(bye)")
                         .map(|p| p.trim_matches(|c| c == '(' || c == ')').to_string())
                         .collect();
+                    t.n_players = t.players.len();
                     t.joined = t.players.iter().any(|p| p == login);
                 }
                 _ => {}
@@ -410,6 +418,30 @@ mod tests {
         );
         let t = &td.tourneys[0];
         assert_eq!((t.state.as_str(), t.winner.as_str()), ("over", "kuroobi"));
+    }
+
+    #[test]
+    fn td_does_not_count_the_bye_as_a_player() {
+        let mut td = TdView::default();
+        td_apply(
+            &mut td,
+            "alice",
+            "finger: 2\nt alice finger: \nid        : 2\njoining   : closed\nrounds    : 1/2\nplayers   : 3 alice bob (bye) ",
+            true,
+            100,
+        );
+        td_apply(
+            &mut td,
+            "alice",
+            "tourneys: 1\n   id director  game #pl   round start             clock       type\n    2     root   /os   3   1/  2  0:58        0:30//0:10      s8r14",
+            true,
+            200,
+        );
+        let t = &td.tourneys[0];
+        assert_eq!(
+            (t.n_players, t.players.clone()),
+            (2, vec!["alice".to_string(), "bob".to_string()])
+        );
     }
 
     #[test]
