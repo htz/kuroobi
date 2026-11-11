@@ -41,6 +41,9 @@ const EVAL_ORDER_WEIGHT: f32 = 3.0;
 /// One mobility unit of the key; a corner's static bonus is worth one.
 const MOBILITY_UNIT: i32 = 1_000_000;
 const CORNERS: u64 = 0x8100_0000_0000_0081;
+/// From this depth a kid whose table entry already fails high cuts before any search, as in
+/// NTest: band at depth 24, 4 runs, 4.95-5.02 -> 4.83-4.97 s, values unchanged.
+const ETC_DEPTH: i32 = 6;
 const STATIC_BONUS: [i32; 64] = {
     let mut t = [0i32; 64];
     let mut i = 0;
@@ -576,6 +579,21 @@ impl Worker<'_> {
             list[n] = m.trailing_zeros() as u8;
             m &= m - 1;
             n += 1;
+        }
+        if !pv && depth >= ETC_DEPTH {
+            for &sq in &list[..n] {
+                let (nb, _) = kid_board(b, sq);
+                let kid = zobrist::board_hash(nb.player_bb(), nb.opponent_bb());
+                if let Some(e) = self.sh.table.get(kid) {
+                    if e.depth as i32 >= depth - 1
+                        && e.margin as i32 >= self.margin
+                        && -e.upper >= beta
+                    {
+                        self.store(h, alpha, beta, -e.upper, sq, depth);
+                        return Some((-e.upper, sq));
+                    }
+                }
+            }
         }
         let mut sorted = n;
         if tt_move < NO_MOVE && moves >> tt_move & 1 == 1 {
