@@ -1008,6 +1008,20 @@ settings:
     remove_title: "Remove {name}?"
     saved_help: "An account is saved when it logs in. Passwords stay on this Mac"
     servers: "Servers and accounts"
+  ai:
+    steps_claude: "Copy the command below and run it in a terminal\nRestart Claude Code (/mcp lists kuroobi-gui once it is registered)"
+    steps_codex: "Copy the settings below and add them to ~/.codex/config.toml\nRestart Codex CLI"
+    steps_cursor: "Copy the settings below and add them to mcpServers in ~/.cursor/mcp.json (save them as is if there is no such file)\nRestart Cursor"
+    steps_desktop: "In Claude Desktop, open claude_desktop_config.json from Settings > Developer > Edit Config\nCopy the settings below and add them to mcpServers (paste them as is if there is none)\nRestart Claude Desktop"
+    steps_gemini: "Copy the settings below and add them to mcpServers in ~/.gemini/settings.json\nRestart Gemini CLI"
+    steps_vscode: "Copy the settings below and add them to .vscode/mcp.json in the workspace (save them as is if there is no such file)\nStart kuroobi-gui with the Start link shown in the file"
+    accept: "Control by AI"
+    closed: "Not accepted"
+    copy: "Copy"
+    forced_off: "Turned off by the --no-control launch option"
+    listening: "Accepting ({path})"
+    mcp: "MCP registration"
+    taken: "Another KUROOBI launched from the same folder is accepting ({path})"
   applied: "Applied"
   board:
     coords: "Coordinates"
@@ -1097,6 +1111,7 @@ settings:
     save: "Save"
     test: "Test"
   tab:
+    ai: "AI control"
     engine: "Engine"
     view: "Display"
   tatami:

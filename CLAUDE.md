@@ -79,6 +79,29 @@ never reach the screen. `npm run check` fails on this.
 **Take window-scoped screenshots.** Full-screen or coordinate captures
 pick up unrelated windows in front; use the `window-screenshot` skill.
 
+**Drive the GUI through its control socket, not by clicking**: with
+`kuroobi-mcp`, built beside the GUI, as the `kuroobi-gui` MCP server in
+`.mcp.json` (`kuroobi-mcp --mcp`) or from the shell
+(`gui/target/release/kuroobi-mcp [--instance test] status`). The
+tools are named `namespace__operation`: `launch`, `quit` and `status` for
+the app itself; `ggs__` (GGS), `game__` (the local board and engine),
+`kifu__` and `engine__` for operations that mean the same with or without
+the window, run through the same commands the GUI's controls run; and
+`gui__` for what only the window has: `gui__show` / `gui__current` for its
+menus, `gui__text` and `gui__screenshot`. A tool is a use case an outside
+caller needs, not a widget: nothing that only changes what the screen shows
+(browsing the book, filters) beyond switching menus. Dots or colons may be refused by the AI APIs the tools
+are handed to. Each running GUI opens the socket
+beside its GGS data (`ggs_games/.control.sock`) unless Settings > AI
+control or `--no-control` turns it off. `--instance test` is
+`tmp/guitest`, whose `ggs_games` holds only local-server accounts; use it
+for anything that is not meant to reach the real GGS account.
+
+**Launch the real GUI only from `gui/`** (`launch` does). Weights and
+GGS data are found relative to the launch folder; a GUI built and launched
+in a worktree once found neither, logged in anyway and lost two games on
+time.
+
 **The design system lives in `design-system/`, the screen designs in
 `design/`** (how to build and publish each: its README). A change to a
 screen updates `design-system/project/screens.md` in the same commit as

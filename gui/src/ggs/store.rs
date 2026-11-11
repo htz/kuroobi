@@ -512,6 +512,13 @@ fn other_session_pid(path: &std::path::Path) -> Option<i32> {
     (pid != std::process::id() as i32 && unsafe { libc::kill(pid, 0) } == 0).then_some(pid)
 }
 
+/// Where the control socket for AI tools listens: beside this launch's GGS data, so a test GUI
+/// launched from another folder gets its own.
+pub fn control_socket_path() -> PathBuf {
+    let p = base_dir().join(".control.sock");
+    std::path::absolute(&p).unwrap_or(p)
+}
+
 pub fn session_locked_by_other() -> bool {
     other_session_pid(&session_lock_path()).is_some()
 }

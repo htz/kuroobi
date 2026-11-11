@@ -987,6 +987,20 @@ settings:
     remove_title: "{name} を削除しますか?"
     saved_help: "アカウントはログインに成功すると保存する。パスワードはこの Mac の中にだけ保存する"
     servers: "サーバーとアカウント"
+  ai:
+    steps_claude: "下のコマンドをコピーし、ターミナルで実行する\nClaude Code を起動し直す (/mcp で kuroobi-gui が出れば登録済み)"
+    steps_codex: "下の設定をコピーし、~/.codex/config.toml に書き足す\nCodex CLI を起動し直す"
+    steps_cursor: "下の設定をコピーし、~/.cursor/mcp.json の mcpServers に書き足す (ファイルが無ければそのまま保存)\nCursor を再起動する"
+    steps_desktop: "Claude Desktop の 設定 > 開発者 > 設定を編集 で claude_desktop_config.json を開く\n下の設定をコピーし、mcpServers に書き足す (無ければそのまま貼る)\nClaude Desktop を再起動する"
+    steps_gemini: "下の設定をコピーし、~/.gemini/settings.json の mcpServers に書き足す\nGemini CLI を起動し直す"
+    steps_vscode: "下の設定をコピーし、作業フォルダの .vscode/mcp.json に書き足す (ファイルが無ければそのまま保存)\nファイル上に出る「開始」で kuroobi-gui を起動する"
+    accept: "AI からの操作"
+    closed: "受け付けていない"
+    copy: "コピー"
+    forced_off: "起動オプション --no-control で止めている"
+    listening: "受け付け中 ({path})"
+    mcp: "MCP の登録"
+    taken: "同じ場所から起動した別の KUROOBI が受け付けている ({path})"
   applied: "反映しました"
   board:
     coords: "座標"
@@ -1076,6 +1090,7 @@ settings:
     save: "保存"
     test: "テスト"
   tab:
+    ai: "AI 連携"
     engine: "エンジン"
     view: "表示"
   tatami:

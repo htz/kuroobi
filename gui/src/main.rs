@@ -2,6 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod control;
 mod formula;
 mod ggs;
 mod i18n;
@@ -2095,6 +2096,21 @@ fn ggs_set_learn(app: State<App>, on: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn control_info() -> serde_json::Value {
+    control::info()
+}
+
+#[tauri::command]
+fn set_control(on: bool) -> Result<(), String> {
+    control::set_enabled(on)
+}
+
+#[tauri::command]
+fn control_reply(id: u64, ok: bool, value: serde_json::Value) {
+    control::reply(id, ok, value);
+}
+
+#[tauri::command]
 fn ggs_set_standby(app: State<App>, cfg: ggs::StandbyCfg) -> Result<(), String> {
     ggs_send(&app, ggs::Cmd::SetStandby(cfg))
 }
@@ -2203,6 +2219,7 @@ async fn ggs_save_kifu(
 }
 
 fn main() {
+    let no_control = std::env::args().any(|a| a == "--no-control");
     hold_off_app_nap();
     let initial = take_handoff_kifu()
         .as_deref()
@@ -2221,7 +2238,7 @@ fn main() {
             activity: Arc::new(Mutex::new(Activity::default())),
             cpu_meter: Mutex::new(None),
         })
-        .setup(|app| {
+        .setup(move |app| {
             let st = app.state::<App>();
             if std::env::var("KUROOBI_GGS_DEMO").is_ok() {
                 return Ok(());
@@ -2271,6 +2288,7 @@ fn main() {
                 }
             }
             *app.state::<App>().ggs.lock().unwrap() = Some(handle);
+            control::init(app.handle().clone(), no_control);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2360,10 +2378,18 @@ fn main() {
             ggs_autoview,
             env_overrides,
             ggs_save_kifu,
-            ggs_save_log
+            ggs_save_log,
+            control_info,
+            set_control,
+            control_reply
         ])
-        .run(tauri::generate_context!())
-        .expect("tauri run");
+        .build(tauri::generate_context!())
+        .expect("tauri build")
+        .run(|_, e| {
+            if let tauri::RunEvent::Exit = e {
+                control::stop();
+            }
+        });
 }
 
 #[cfg(test)]

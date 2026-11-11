@@ -4,7 +4,7 @@ import { useGame, type EngineSide } from './state';
 import { fmtSecs, secsText, useGgs } from './ggs';
 import { flipped, usePrefs } from './prefs';
 import type { GameView, FetchedGgf } from './types';
-import { api, ggsApi, jsLog, onApp } from './api';
+import { api, ggsApi, jsLog, onApp, serveControl, type ControlRequest } from './api';
 import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useLearnLog, useStartGame, type AskArgs } from './engine';
 import { connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
 import { AppFrame, BoardFit, Body, Busy, Confirm, Divider, Dock, Main, Toolbar, WindowBar, useToolbarCompact } from './components/layout';
@@ -13,13 +13,13 @@ import { ExportKifu, LoadKifu } from './Dialogs';
 import { EditBoard, EditDock, EditTools, boardText, useBoardEdit, useEditKeys } from './BoardEdit';
 import { Board, type Cell } from './components/board';
 import { EvalGraph, MoveScrub, ScoreRow, StoneDot, srcIsBook, srcLabel } from './components/data';
-import { Nav, NavRow, navLocal, ggsNav, Toasts, type NavId } from './components/ggs';
+import { Nav, NavRow, navLocal, ggsNav, Toasts, NAV_IDS, type NavId } from './components/ggs';
 import { Button, Progress, Segmented, Select, Toggle } from './components/primitives';
 import { BookDock, BookPane, BookTree, useBookBrowse } from './BookScreen';
 import { LearnLog } from './LearnLog';
 import { KifuViewer } from './KifuViewer';
 import { t, useLang, tErr } from './i18n';
-import { SettingsScreen, settingsTitle, useServers, type SettingsCat } from './SettingsScreen';
+import { SettingsScreen, SETTINGS_CATS, settingsTitle, useServers, type SettingsCat } from './SettingsScreen';
 import { AskSheet, askSheet, useAskSheet } from './AskSheet';
 import { onGgsFailure } from './ggsui';
 import { markApplied, useApplied } from './applied';
@@ -282,6 +282,25 @@ export function App() {
     g.say(tErr(e) + t('app.ggs.no_auto_login'));
   });
   useEffect(() => { api.engineReady().catch(sayNoEngine); }, []);
+  const screenFromControl = useEffectEvent((r: ControlRequest) => {
+    switch (r.action ?? 'navigate') {
+      case 'current': return { menu: navRaw, category: settingsCat };
+      case 'text': return document.body.innerText.replace(/\n{3,}/g, '\n\n').trim();
+      case 'navigate': break;
+      default: throw new Error(`unknown action ${r.action}`);
+    }
+    if (!r.menu || !NAV_IDS.includes(r.menu as NavId)) throw new Error(`unknown menu; one of ${NAV_IDS.join(', ')}`);
+    if (r.category) {
+      if (!SETTINGS_CATS.includes(r.category as SettingsCat)) throw new Error(`unknown category; one of ${SETTINGS_CATS.join(', ')}`);
+      setSettingsCat(r.category as SettingsCat);
+    }
+    setNav(r.menu as NavId);
+    return { menu: r.menu, category: r.category ?? null };
+  });
+  useEffect(() => {
+    const off = serveControl(screenFromControl);
+    return () => { void off.then((f) => f()); };
+  }, []);
   useEffect(() => { autoGraph.current = () => void graph.update(); }, [graph]);
   useEffect(() => { bookLine.current = book.goto; }, [book.goto]);
 

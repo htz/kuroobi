@@ -27,6 +27,11 @@ export function onApp(name: string, fn: () => void): Promise<() => void> {
   return ev.listen(name, () => fn());
 }
 
+/** The control socket that `kuroobi-mcp` (shell or MCP server) drives the app through. */
+export interface ControlInfo {
+  enabled: boolean; active: boolean; forced_off: boolean; socket: string; ctl: string;
+}
+
 export const api = {
   state: () => call<GameView>('state'),
   newGame: () => call<GameView>('new_game'),
@@ -44,6 +49,8 @@ export const api = {
   learnUndo: (at: number, kifu: string) => call<number>('learn_undo', { at, kifu }),
   hasBook: () => call<boolean>('has_book', {}),
   engineReady: () => call<void>('engine_ready', {}),
+  controlInfo: () => call<ControlInfo>('control_info', {}),
+  setControl: (on: boolean) => call<void>('set_control', { on }),
   bookNode: (kifu: string) => call<BookNode>('book_node', { kifu }),
   autoplay: () => call<string>('autoplay', {}),
   themeOverride: () => call<string>('theme_override', {}),
@@ -187,6 +194,30 @@ export async function onHints(
     'hints',
     (e) => fn(e.payload[0], e.payload[1], e.payload[2]),
   );
+}
+
+export type ControlRequest = { action?: string; menu?: string; category?: string };
+
+/**
+ * Serves the control socket (`gui/src/control.rs`): a `call` runs a command through the same
+ * `call` the screens use; a screen request goes to `screen`. Either way the answer goes back.
+ */
+export async function serveControl(screen: (r: ControlRequest) => unknown): Promise<() => void> {
+  const ev = window.__TAURI__?.event;
+  if (!ev) return () => { /* outside Tauri */ };
+  const answer = (id: number, run: () => unknown) => void Promise.resolve().then(run)
+    .then((value) => call('control_reply', { id, ok: true, value: value ?? null }))
+    .catch((e: unknown) => call('control_reply', { id, ok: false, value: String(e) }));
+  // Commands take camelCase keys from the screens; the list gives them as in Rust.
+  const camel = (o: Record<string, unknown>) => Object.fromEntries(
+    Object.entries(o).map(([k, v]) => [k.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()), v]));
+  const offs = await Promise.all([
+    ev.listen<{ id: number; command: string; args: Record<string, unknown> }>('control-call', (e) =>
+      answer(e.payload.id, () => call(e.payload.command, camel(e.payload.args ?? {})))),
+    ev.listen<ControlRequest & { id: number }>('control-screen', (e) =>
+      answer(e.payload.id, () => screen(e.payload))),
+  ]);
+  return () => offs.forEach((f) => f());
 }
 
 export async function onGgsSnapshot(fn: (s: GgsSnapshot) => void): Promise<() => void> {

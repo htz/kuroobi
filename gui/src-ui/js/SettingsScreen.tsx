@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, emitApp, ggsApi, onApp, type SavedServer } from './api';
+import { api, emitApp, ggsApi, onApp, type ControlInfo, type SavedServer } from './api';
 import type { GgsSnapshot } from './types';
 import type { Prefs } from './prefs';
 import type { Account } from './components/accounts';
@@ -15,10 +15,11 @@ import { openNewLogin } from './ggs/Login';
 import { markApplied } from './applied';
 import { whenFull } from './when';
 
-export type SettingsCat = 'engine' | 'view' | 'ggs-account' | 'ggs-play' | 'ggs-form';
+export const SETTINGS_CATS = ['engine', 'view', 'ai', 'ggs-account', 'ggs-play', 'ggs-form'] as const;
+export type SettingsCat = typeof SETTINGS_CATS[number];
 
 const groups = (): { title: string; items: [SettingsCat, string][] }[] => [
-  { title: t('settings.group.app'), items: [['engine', t('settings.tab.engine')], ['view', t('settings.tab.view')]] },
+  { title: t('settings.group.app'), items: [['engine', t('settings.tab.engine')], ['view', t('settings.tab.view')], ['ai', t('settings.tab.ai')]] },
   {
     title: 'GGS', items: [
       ['ggs-account', t('settings.cat.account')],
@@ -67,6 +68,7 @@ export function SettingsScreen({ cat, onCat, prefs, setPref, snap, onLogin, lear
         <div style={{ maxWidth: 'var(--w-settings)', display: 'flex', flexDirection: 'column' }}>
           {cat === 'engine' && <EngineSettings learn={learn} />}
           {cat === 'view' && <ViewSettings prefs={prefs} setPref={setPref} />}
+          {cat === 'ai' && <AiSettings />}
           {cat === 'ggs-account' && <GgsAccountSettings snap={snap} onLogin={onLogin} />}
           {cat === 'ggs-play' && (snap && snap.conn === 'online'
             ? <GgsPlaySettings snap={snap} /> : <Offline />)}
@@ -75,6 +77,73 @@ export function SettingsScreen({ cat, onCat, prefs, setPref, snap, onLogin, lear
         </div>
       </div>
     </div>
+  );
+}
+
+const MCP_CLIENTS = ['claude', 'desktop', 'cursor', 'codex', 'gemini', 'vscode'] as const;
+type McpClient = typeof MCP_CLIENTS[number];
+
+/** Tab label and numbered steps for registering the MCP server with each AI app. */
+function mcpClient(c: McpClient): { label: string; steps: string } {
+  switch (c) {
+    case 'claude': return { label: 'Claude Code', steps: t('settings.ai.steps_claude') };
+    case 'desktop': return { label: 'Claude Desktop', steps: t('settings.ai.steps_desktop') };
+    case 'cursor': return { label: 'Cursor', steps: t('settings.ai.steps_cursor') };
+    case 'codex': return { label: 'Codex CLI', steps: t('settings.ai.steps_codex') };
+    case 'gemini': return { label: 'Gemini CLI', steps: t('settings.ai.steps_gemini') };
+    case 'vscode': return { label: 'VS Code', steps: t('settings.ai.steps_vscode') };
+  }
+}
+
+/** The same server (`kuroobi-mcp --mcp`) in each app's registration format. */
+function mcpSnippet(c: McpClient, exe: string): string {
+  const entry = { command: exe, args: ['--mcp'] };
+  switch (c) {
+    case 'claude': return `claude mcp add kuroobi-gui -- ${JSON.stringify(exe)} --mcp`;
+    case 'codex': return `[mcp_servers.kuroobi-gui]\ncommand = ${JSON.stringify(exe)}\nargs = ["--mcp"]`;
+    case 'vscode': return JSON.stringify({ servers: { 'kuroobi-gui': { type: 'stdio', ...entry } } }, null, 2);
+    default: return JSON.stringify({ mcpServers: { 'kuroobi-gui': entry } }, null, 2);
+  }
+}
+
+/** Whether AI tools may drive the app, and how to register the MCP server. */
+function AiSettings() {
+  const [info, setInfo] = useState<ControlInfo | null>(null);
+  const [err, setErr] = useState('');
+  const load = useCallback(() => { void api.controlInfo().then(setInfo).catch((x) => setErr(tErr(x))); }, []);
+  useEffect(load, [load]);
+  const [client, setClient] = useState<McpClient>('claude');
+  if (!info) return null;
+  const snippet = mcpSnippet(client, info.ctl);
+  const state = info.forced_off ? t('settings.ai.forced_off')
+    : info.active ? t('settings.ai.listening', { path: info.socket })
+    : info.enabled ? t('settings.ai.taken', { path: info.socket }) : t('settings.ai.closed');
+  return (
+    <SettingGroup title={t('settings.tab.ai')}>
+      <SettingRow label={t('settings.ai.accept')} help={state} error={err || undefined}>
+        <SettingToggle checked={info.enabled} onChange={(on) => {
+          void api.setControl(on).then(() => { setErr(''); markApplied(); load(); })
+            .catch((x) => setErr(tErr(x)));
+        }} />
+      </SettingRow>
+      <SettingRow label={t('settings.ai.mcp')}>
+        {/* Six apps do not fit the row at the settings width; the tabs scroll instead of spilling over. */}
+        <div style={{ maxWidth: '100%', overflowX: 'auto' }}>
+          <Segmented value={client} onChange={setClient}
+                     options={MCP_CLIENTS.map((c) => ({ value: c, label: mcpClient(c).label }))} />
+        </div>
+        <ol style={{ margin: 0, paddingLeft: '1.4em', fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.6 }}>
+          {mcpClient(client).steps.split('\n').filter(Boolean).map((line) => <li key={line}>{line}</li>)}
+        </ol>
+        <pre style={{
+          margin: 0, fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', whiteSpace: 'pre-wrap',
+          wordBreak: 'break-all', userSelect: 'text',
+        }}>{snippet}</pre>
+        <Button onClick={() => void navigator.clipboard.writeText(snippet).then(markApplied)}>
+          {t('settings.ai.copy')}
+        </Button>
+      </SettingRow>
+    </SettingGroup>
   );
 }
 

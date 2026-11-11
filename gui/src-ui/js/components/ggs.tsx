@@ -9,10 +9,12 @@ import {
   numOk, poolChoices, isGroup, condValid, type Atom, type Cond, type FormulaOp, type Who,
 } from '../ggs';
 
-export type NavId =
-  | 'play' | 'study' | 'book' | 'settings'
-  | 'ggs-play' | 'ggs-lobby' | 'ggs-players' | 'ggs-results' | 'ggs-chat' | 'ggs-tourney' | 'ggs-console'
-  | 'ggs-login';
+export const NAV_IDS = [
+  'play', 'study', 'book', 'settings',
+  'ggs-play', 'ggs-lobby', 'ggs-players', 'ggs-results', 'ggs-chat', 'ggs-tourney', 'ggs-console',
+  'ggs-login',
+] as const;
+export type NavId = typeof NAV_IDS[number];
 
 export type NavItem = {
   id: NavId;

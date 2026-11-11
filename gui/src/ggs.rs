@@ -28,9 +28,9 @@ mod unfit;
 pub use demo::demo_snapshot;
 pub use results::GameResult;
 pub use store::{
-    account_password, auto_account, auto_key, clear_auto, forget_account, forget_server,
-    save_server, saved_accounts, saved_servers, session_locked_by_other, set_auto, SavedAccount,
-    SavedServer,
+    account_password, auto_account, auto_key, clear_auto, control_socket_path, forget_account,
+    forget_server, save_server, saved_accounts, saved_servers, session_locked_by_other, set_auto,
+    SavedAccount, SavedServer,
 };
 pub use unfit::{unfit_view, UnfitView};
 

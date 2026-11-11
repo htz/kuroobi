@@ -8,6 +8,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "Kuroobi GUI (Tauri)"
+default-run = "kuroobi-gui"
 
 [dependencies]
 kuroobi = { path = "..", default-features = false }
@@ -23,6 +24,7 @@ sys-locale = "0.3.2"
 [target.'cfg(target_os = "macos")'.dependencies]
 mach2 = "0.4"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSProcessInfo", "NSString"] }
+objc2 = "0.6"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

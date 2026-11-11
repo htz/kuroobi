@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kuroobi-gui": {
+      "command": "gui/target/release/kuroobi-mcp",
+      "args": ["--mcp"]
+    }
+  }
+}
