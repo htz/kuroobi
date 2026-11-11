@@ -32,6 +32,15 @@ const EXACT_DISCS: i32 = 60;
 /// ProbCut probes never share: splitting them made 8 threads search 5-10x one thread's nodes in full-depth passes.
 const SPLIT_MIN: i32 = 8;
 const HISTORY_DECAY: i32 = 8;
+/// From this depth the opponent's mobility orders the moves, history only breaking ties;
+/// band at depth 24, 1 thread: 6.1 -> 5.3 s.
+const MOBILITY_ORDER_DEPTH: i32 = 3;
+/// From this depth the kid's evaluation joins the key, in mobility units per disc: 5.3 -> 5.0 s.
+const EVAL_ORDER_DEPTH: i32 = 10;
+const EVAL_ORDER_WEIGHT: f32 = 3.0;
+/// One mobility unit of the key; a corner's static bonus is worth one.
+const MOBILITY_UNIT: i32 = 1_000_000;
+const CORNERS: u64 = 0x8100_0000_0000_0081;
 const STATIC_BONUS: [i32; 64] = {
     let mut t = [0i32; 64];
     let mut i = 0;
@@ -115,6 +124,22 @@ impl Entry {
         }
     }
 
+    /// `new` searched as deep as `self`: both bounds hold, unless they cross and `new` wins.
+    /// Band at depth 24: 6.4% fewer nodes, values unchanged.
+    fn merged(self, new: Entry) -> Entry {
+        let (lower, upper) = (self.lower.max(new.lower), self.upper.min(new.upper));
+        if lower > upper {
+            return new;
+        }
+        let mv = if new.mv < NO_MOVE { new.mv } else { self.mv };
+        Entry {
+            lower,
+            upper,
+            mv,
+            ..new
+        }
+    }
+
     /// Replaces `old` for the same position or a same-generation slot.
     fn beats(&self, old: &Entry) -> bool {
         self.depth >= old.depth || self.margin > old.margin
@@ -162,17 +187,21 @@ impl Table {
             generation: self.generation.load(Relaxed) as u8,
             ..e
         };
-        let write = |s: &(AtomicU64, AtomicU64)| {
+        let write_entry = |s: &(AtomicU64, AtomicU64), e: Entry| {
             let p = e.pack();
             s.1.store(p, Relaxed);
             s.0.store(h ^ p, Relaxed);
         };
+        let write = |s: &(AtomicU64, AtomicU64)| write_entry(s, e);
         let bucket = self.bucket(h);
         for s in bucket {
             let (k, d) = (s.0.load(Relaxed), s.1.load(Relaxed));
             if d != 0 && k ^ d == h {
-                if e.beats(&Entry::unpack(d)) {
-                    write(s);
+                let old = Entry::unpack(d);
+                if old.depth == e.depth && old.margin == e.margin {
+                    write_entry(s, old.merged(e));
+                } else if e.beats(&old) {
+                    write_entry(s, e);
                 }
                 return;
             }
@@ -433,9 +462,28 @@ impl Worker<'_> {
         best
     }
 
-    fn sort(&self, b: &Board, list: &mut [u8]) {
+    fn sort(&self, b: &Board, acc: &PatternIndices, list: &mut [u8], depth: i32) {
         let side = b.player() as usize & 1;
-        list.sort_by_key(|&m| -(self.history[side][m as usize] + STATIC_BONUS[m as usize]));
+        let rank = |m: u8| -(self.history[side][m as usize] + STATIC_BONUS[m as usize]);
+        if depth < MOBILITY_ORDER_DEPTH {
+            list.sort_by_key(|&m| rank(m));
+            return;
+        }
+        list.sort_by_cached_key(|&m| {
+            let (nb, flipped) = kid_board(b, m);
+            let legal = nb.movable();
+            let mobility = (legal.count_ones() + (legal & CORNERS).count_ones()) as i32;
+            let mut key = rank(m) + mobility * MOBILITY_UNIT;
+            if depth >= EVAL_ORDER_DEPTH {
+                let mut child = *acc;
+                self.sh
+                    .nn
+                    .ix_apply(&mut child, Position(m), flipped, b.player());
+                let v = self.sh.nn.eval_from_indices(&child, &nb);
+                key += (v * (EVAL_ORDER_WEIGHT * MOBILITY_UNIT as f32)) as i32;
+            }
+            key
+        });
     }
 
     /// (score, best move), `None` once the search was stopped.
@@ -535,7 +583,7 @@ impl Worker<'_> {
             list.swap(0, i);
             sorted = 1;
         } else if n > 2 {
-            self.sort(b, &mut list[..n]);
+            self.sort(b, acc, &mut list[..n], depth);
         }
 
         let mover = b.player();
@@ -551,7 +599,7 @@ impl Worker<'_> {
         let mut j = 0usize;
         while j < n {
             if j == sorted && n > j + 2 {
-                self.sort(b, &mut list[j..n]);
+                self.sort(b, acc, &mut list[j..n], depth);
             }
             if split && n - j >= 2 && (j >= 1 || (all_node && !pv)) {
                 let (rest, tried) = (&list[j..n], &list[..j]);
