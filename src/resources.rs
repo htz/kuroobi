@@ -73,8 +73,12 @@ impl Resources {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let mut out = String::from("# Locations of the files Kuroobi uses\n");
+        // Saved absolute: a relative path would mean another file when launched from elsewhere.
         let mut put = |k: &str, v: &Option<PathBuf>| {
             if let Some(p) = v {
+                let p = std::fs::canonicalize(p)
+                    .or_else(|_| std::path::absolute(p))
+                    .unwrap_or_else(|_| p.clone());
                 out.push_str(&format!("{k}={}\n", p.display()));
             }
         };
@@ -199,6 +203,20 @@ mod tests {
         assert_eq!(back.dir, r.dir);
         assert_eq!(back.book, r.book);
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn relative_paths_are_saved_absolute() {
+        let dir = std::env::temp_dir().join(format!("kuroobi-res-abs-{}", std::process::id()));
+        let path = dir.join("resources.conf");
+        let r = Resources {
+            dir: Some(PathBuf::from("weights")),
+            ..Default::default()
+        };
+        r.save(&path).unwrap();
+        let back = Resources::load(&path);
+        assert!(back.dir.unwrap().is_absolute());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

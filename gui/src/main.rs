@@ -392,6 +392,16 @@ fn resources() -> Resources {
     Resources::load(&resources_path())
 }
 
+/// Weights found by searching from the launch directory are pinned, so a launch from elsewhere finds them too.
+fn remember_found_weights() {
+    let mut r = resources();
+    let unset = r.dir.is_none() && r.weights.is_none() && r.nnue.is_none() && r.book.is_none();
+    if unset && std::env::var_os("KUROOBI_WEIGHTS_DIR").is_none() {
+        r.dir = Some(r.dir());
+        let _ = r.save(&resources_path());
+    }
+}
+
 fn ensure_engine_in(
     engine_slot: &Arc<Mutex<Option<Engine>>>,
     stop_slot: &Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
@@ -419,10 +429,16 @@ fn preload_engine(
     engine_slot: Arc<Mutex<Option<Engine>>>,
     stop_slot: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
     activity: Arc<Mutex<Activity>>,
+    on_loaded: impl FnOnce() + Send + 'static,
 ) {
     std::thread::spawn(move || {
-        let _guard = ActivityGuard::begin(&activity, "loading");
-        let _ = ensure_engine_in(&engine_slot, &stop_slot);
+        let loaded = {
+            let _guard = ActivityGuard::begin(&activity, "loading");
+            ensure_engine_in(&engine_slot, &stop_slot).is_ok()
+        };
+        if loaded {
+            on_loaded();
+        }
     });
 }
 
@@ -449,6 +465,17 @@ fn setup_error(e: String) -> String {
 
 fn ensure_engine(app: &State<App>) -> Result<(), String> {
     ensure_engine_in(&app.engine, &app.stop)
+}
+
+#[tauri::command]
+async fn engine_ready(app: State<'_, App>) -> Result<(), String> {
+    if std::env::var("KUROOBI_GGS_DEMO").is_ok() {
+        return Ok(());
+    }
+    let (eng, stop) = (app.engine.clone(), app.stop.clone());
+    tauri::async_runtime::spawn_blocking(move || ensure_engine_in(&eng, &stop))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -985,7 +1012,7 @@ async fn set_resource(
     })
     .await
     .map_err(|e| e.to_string());
-    preload_engine(eng, stop, act);
+    preload_engine(eng, stop, act, || {});
     dropped
 }
 
@@ -2199,16 +2226,28 @@ fn main() {
             if std::env::var("KUROOBI_GGS_DEMO").is_ok() {
                 return Ok(());
             }
-            preload_engine(st.engine.clone(), st.stop.clone(), st.activity.clone());
             let handle = ggs::spawn(app.handle().clone(), st.stop.clone(), st.activity.clone());
             let force = std::env::var("KUROOBI_GGS_AUTOCONNECT").is_ok();
             let demo = std::env::var("KUROOBI_AUTOPLAY").is_ok()
                 || std::env::var("KUROOBI_GGS_AUTOVIEW").is_ok();
-            if (force || !demo) && !ggs::session_locked_by_other() {
-                if let Some((server, login, pw)) = ggs::auto_account() {
-                    let _ = handle.tx.send(ggs::Cmd::Connect { login, pw, server });
-                }
-            }
+            let login = if (force || !demo) && !ggs::session_locked_by_other() {
+                ggs::auto_account()
+            } else {
+                None
+            };
+            let tx = handle.tx.clone();
+            // Auto-accept would take games it cannot play, so no weights means no auto login.
+            preload_engine(
+                st.engine.clone(),
+                st.stop.clone(),
+                st.activity.clone(),
+                move || {
+                    remember_found_weights();
+                    if let Some((server, login, pw)) = login {
+                        let _ = tx.send(ggs::Cmd::Connect { login, pw, server });
+                    }
+                },
+            );
             if force {
                 if let Ok(id) = std::env::var("KUROOBI_GGS_AUTOLOOK") {
                     let tx = handle.tx.clone();
@@ -2256,6 +2295,7 @@ fn main() {
             learn_log,
             learn_undo,
             has_book,
+            engine_ready,
             book_node,
             autoplay,
             theme_override,

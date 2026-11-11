@@ -276,6 +276,12 @@ export function App() {
     started.current = true;
     runAutoplay();
   }, []);
+  const sayNoEngine = useEffectEvent((e: unknown) => {
+    setSettingsCat('engine');
+    setNavRaw('settings');
+    g.say(tErr(e) + t('app.ggs.no_auto_login'));
+  });
+  useEffect(() => { api.engineReady().catch(sayNoEngine); }, []);
   useEffect(() => { autoGraph.current = () => void graph.update(); }, [graph]);
   useEffect(() => { bookLine.current = book.goto; }, [book.goto]);
 

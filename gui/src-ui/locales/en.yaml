@@ -40,6 +40,7 @@ app:
   ggs:
     connected: "Connected"
     fetch_failed: "Could not fetch the game record"
+    no_auto_login: " Stopped the automatic GGS login."
     offline: "Not connected"
     switch_account: "Switch account"
   learn:

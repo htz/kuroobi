@@ -327,6 +327,8 @@ Purpose: see and send raw traffic with GGS.
 
 Purpose: engine, display and GGS settings. A standalone screen (not a modal) opened from the Nav's "Settings", ⌘, or the book's "Open settings".
 
+When the engine cannot load its weights at launch, the app opens here on "Engine" by itself, shows the load error with "Stopped the automatic GGS login.", and skips the GGS auto login (`engine_ready`, `preload_engine` in `gui/src/main.rs`). Weights found by searching from the launch directory are saved as an absolute folder on the first successful load when no location is set yet, and every saved location is written absolute.
+
 **Use cases**: Settings-1 Specify the weights and book files / -2 Decide the search resources / -3 Change the look / -4 Manage servers and accounts / -5 Decide how GGS games and watching behave / -6 Decide the conditions for automatically accepting and declining / -7 Decide learning from finished games (import ON/OFF, number of learned book positions, go to the learning log).
 
 - **Toolbar** (`App`): the category name ("Engine", "Display", "GGS · Servers and accounts", etc.) and, for 2.5 s after a change, `--ok` "✓ Applied" at the right end (`js/applied.ts`). There is no save button; changes apply immediately.

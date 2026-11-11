@@ -43,6 +43,7 @@ export const api = {
   learnLog: () => call<LearnEntry[]>('learn_log', {}),
   learnUndo: (at: number, kifu: string) => call<number>('learn_undo', { at, kifu }),
   hasBook: () => call<boolean>('has_book', {}),
+  engineReady: () => call<void>('engine_ready', {}),
   bookNode: (kifu: string) => call<BookNode>('book_node', { kifu }),
   autoplay: () => call<string>('autoplay', {}),
   themeOverride: () => call<string>('theme_override', {}),

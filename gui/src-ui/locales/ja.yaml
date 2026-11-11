@@ -36,6 +36,7 @@ app:
   ggs:
     connected: "接続中"
     fetch_failed: "棋譜を取り出せません"
+    no_auto_login: "GGS への自動ログインを停止しました。"
     offline: "未接続"
     switch_account: "アカウントを切り替え"
   learn:
