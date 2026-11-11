@@ -27,6 +27,10 @@ const BACKUP_DEPTH: u32 = 60;
 
 const BACKUP_SHARE: f32 = 0.05;
 
+/// From here on the search reads the game out, so the book is not used. Learned entries hold
+/// game results, not solves: at 20 empties or fewer, 103 of 1844 entries' best move lost 854 discs.
+const BOOK_MIN_EMPTIES: u8 = 28;
+
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub depth: u32,
@@ -384,6 +388,9 @@ impl Engine {
 
     /// A book move, or `None` after seeding the search with the book's best line.
     fn book_move(&mut self, board: &Board) -> Option<MoveEval> {
+        if board.empty_count() <= BOOK_MIN_EMPTIES {
+            return None;
+        }
         let book = self.book.as_ref().filter(|_| self.config.use_book)?;
         let hit = if self.config.book_tolerance > 0.0 {
             self.book_rand = self
