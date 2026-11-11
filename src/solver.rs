@@ -23,6 +23,9 @@ const DEEP_ORDER_EMPTIES: u8 = 17;
 const DEEP2_ORDER_EMPTIES: u8 = 20;
 const DEEP3_ORDER_EMPTIES: u8 = 29;
 const MOBILITY_ORDER_WEIGHT: i32 = 12;
+/// The lookahead's leaves count their mover's mobility too, as NTest's ordering does:
+/// FFO 40-49, 3 runs, 10.65-10.79 -> 10.54-10.55 s; 1.0 / 1.5 / 2.0 were slower.
+const LEAF_MOBILITY_WEIGHT: f32 = 0.5;
 /// A child's legal set is never all ones, so this marks "not known yet".
 const NO_LEGAL_HINT: u64 = u64::MAX;
 
@@ -3215,12 +3218,14 @@ fn shallow_search(
     beta: f32,
 ) -> f32 {
     if depth == 0 {
-        return ev.eval_order_bb(
+        let v = ev.eval_order_bb(
             board.player_bb(),
             board.opponent_bb(),
             board.player(),
             indices,
         );
+        let (wm, _) = weighted_mobility(board.player_bb(), board.opponent_bb());
+        return v + wm as f32 * LEAF_MOBILITY_WEIGHT;
     }
     let moves = board.movable();
     if moves == 0 {
