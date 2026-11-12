@@ -2038,6 +2038,23 @@ fn ggs_set_formula(app: State<App>, kind: String, expr: String) -> Result<(), St
 }
 
 #[tauri::command]
+fn ggs_set_info(app: State<App>, text: String) -> Result<(), String> {
+    if text.contains(['\n', '\r']) || text.len() > 1024 {
+        return Err("err.info_invalid".into());
+    }
+    ggs_send(&app, ggs::Cmd::SetInfo(text.trim().to_string()))
+}
+
+#[tauri::command]
+fn ggs_change_password(app: State<App>, old: String, new: String, id: u64) -> Result<(), String> {
+    let bad = |p: &str| p.is_empty() || p.chars().any(char::is_whitespace);
+    if bad(&old) || bad(&new) {
+        return Err("err.password_spaces".into());
+    }
+    ggs_send(&app, ggs::Cmd::ChangePassword { old, new, id })
+}
+
+#[tauri::command]
 fn ggs_list_stored(app: State<App>) -> Result<(), String> {
     ggs_send(&app, ggs::Cmd::ListStored)
 }
@@ -2337,6 +2354,8 @@ fn main() {
             ggs_connect,
             ggs_accounts,
             ggs_connect_saved,
+            ggs_set_info,
+            ggs_change_password,
             ggs_forget_account,
             ggs_servers,
             ggs_save_server,

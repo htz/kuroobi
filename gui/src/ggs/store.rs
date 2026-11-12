@@ -243,6 +243,18 @@ pub(super) fn remember_account(server: &str, login: &str, pw: &str) {
     write_store(&s);
 }
 
+pub(super) fn update_password(server: &str, login: &str, pw: &str) {
+    let mut s = load_store();
+    if let Some(a) = s
+        .accounts
+        .iter_mut()
+        .find(|a| a.server == server && a.login == login)
+    {
+        a.password = pw.to_string();
+        write_store(&s);
+    }
+}
+
 /// The named servers: the public one first, then every server an account was saved on.
 pub fn saved_servers() -> Vec<SavedServer> {
     let s = load_store();

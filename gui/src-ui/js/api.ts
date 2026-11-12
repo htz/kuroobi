@@ -152,6 +152,8 @@ export const ggsApi = {
   accept: (id: string) => call('ggs_accept', { id }),
   decline: (id: string) => call('ggs_decline', { id }),
   finger: (name: string) => call('ggs_finger', { name }),
+  setInfo: (text: string) => call('ggs_set_info', { text }),
+  changePassword: (old: string, next: string, id: number) => call('ggs_change_password', { old, new: next, id }),
   /** Why the opponent's decline formula turns this request away, laid out; null when it does not (or not known yet). */
   unfit: (gtype: string, time: string, opponent: string, rated: boolean) =>
     call<UnfitView | null>('ggs_unfit', { gtype, time, opponent, rated }),

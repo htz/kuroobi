@@ -7,7 +7,7 @@ import { DEFAULT_DECLINE, fingerKey } from './ggs';
 import { t, tErr, useLang } from './i18n';
 import { Confirm, Field, ListRow, marked, Modal, Overlay } from './components/layout';
 import { ListHead } from './ggsui';
-import { Button, Segmented, Select, TextField } from './components/primitives';
+import { Button, Dot, Segmented, Select, TextField } from './components/primitives';
 import { Tag } from './components/ggs';
 import { EngineSettings, SettingGroup, SettingRow, SettingToggle, ViewSettings, type LearnSetting } from './Dialogs';
 import { FormulaField } from './GgsScreens';
@@ -15,13 +15,14 @@ import { openNewLogin } from './ggs/Login';
 import { markApplied } from './applied';
 import { whenFull } from './when';
 
-export const SETTINGS_CATS = ['engine', 'view', 'ai', 'ggs-account', 'ggs-play', 'ggs-form'] as const;
+export const SETTINGS_CATS = ['engine', 'view', 'ai', 'ggs-me', 'ggs-account', 'ggs-play', 'ggs-form'] as const;
 export type SettingsCat = typeof SETTINGS_CATS[number];
 
 const groups = (): { title: string; items: [SettingsCat, string][] }[] => [
   { title: t('settings.group.app'), items: [['engine', t('settings.tab.engine')], ['view', t('settings.tab.view')], ['ai', t('settings.tab.ai')]] },
   {
     title: 'GGS', items: [
+      ['ggs-me', t('settings.cat.me')],
       ['ggs-account', t('settings.cat.account')],
       ['ggs-play', t('settings.cat.play')],
       ['ggs-form', t('settings.cat.form')],
@@ -69,6 +70,7 @@ export function SettingsScreen({ cat, onCat, prefs, setPref, snap, onLogin, lear
           {cat === 'engine' && <EngineSettings learn={learn} />}
           {cat === 'view' && <ViewSettings prefs={prefs} setPref={setPref} />}
           {cat === 'ai' && <AiSettings />}
+          {cat === 'ggs-me' && (snap && snap.conn === 'online' ? <GgsMeSettings snap={snap} /> : <Offline />)}
           {cat === 'ggs-account' && <GgsAccountSettings snap={snap} onLogin={onLogin} />}
           {cat === 'ggs-play' && (snap && snap.conn === 'online'
             ? <GgsPlaySettings snap={snap} /> : <Offline />)}
@@ -83,15 +85,15 @@ export function SettingsScreen({ cat, onCat, prefs, setPref, snap, onLogin, lear
 const MCP_CLIENTS = ['claude', 'desktop', 'cursor', 'codex', 'gemini', 'vscode'] as const;
 type McpClient = typeof MCP_CLIENTS[number];
 
-/** Tab label and numbered steps for registering the MCP server with each AI app. */
-function mcpClient(c: McpClient): { label: string; steps: string } {
+/** Tab label, numbered steps, and the step that holds the snippet, for each AI app. */
+function mcpClient(c: McpClient): { label: string; steps: string; at: number } {
   switch (c) {
-    case 'claude': return { label: 'Claude Code', steps: t('settings.ai.steps_claude') };
-    case 'desktop': return { label: 'Claude Desktop', steps: t('settings.ai.steps_desktop') };
-    case 'cursor': return { label: 'Cursor', steps: t('settings.ai.steps_cursor') };
-    case 'codex': return { label: 'Codex CLI', steps: t('settings.ai.steps_codex') };
-    case 'gemini': return { label: 'Gemini CLI', steps: t('settings.ai.steps_gemini') };
-    case 'vscode': return { label: 'VS Code', steps: t('settings.ai.steps_vscode') };
+    case 'claude': return { label: 'Claude Code', steps: t('settings.ai.steps_claude'), at: 0 };
+    case 'desktop': return { label: 'Claude Desktop', steps: t('settings.ai.steps_desktop'), at: 1 };
+    case 'cursor': return { label: 'Cursor', steps: t('settings.ai.steps_cursor'), at: 0 };
+    case 'codex': return { label: 'Codex CLI', steps: t('settings.ai.steps_codex'), at: 0 };
+    case 'gemini': return { label: 'Gemini CLI', steps: t('settings.ai.steps_gemini'), at: 0 };
+    case 'vscode': return { label: 'VS Code', steps: t('settings.ai.steps_vscode'), at: 0 };
   }
 }
 
@@ -106,6 +108,30 @@ function mcpSnippet(c: McpClient, exe: string): string {
   }
 }
 
+function StepNumber({ n }: { n: number }) {
+  return (
+    <span style={{
+      flex: 'none', width: 20, height: 20, borderRadius: 'var(--r-pill)', background: 'var(--card)',
+      border: '1px solid var(--border)', display: 'grid', placeItems: 'center',
+      fontSize: 'var(--fs-6)', fontWeight: 600, fontVariantNumeric: 'tabular-nums',
+    }}>{n}</span>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const id = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(id);
+  }, [copied]);
+  return (
+    <Button size="row" onClick={() => void navigator.clipboard.writeText(text).then(() => setCopied(true))}>
+      {copied ? t('settings.ai.copied') : t('settings.ai.copy')}
+    </Button>
+  );
+}
+
 /** Whether AI tools may drive the app, and how to register the MCP server. */
 function AiSettings() {
   const [info, setInfo] = useState<ControlInfo | null>(null);
@@ -114,36 +140,63 @@ function AiSettings() {
   useEffect(load, [load]);
   const [client, setClient] = useState<McpClient>('claude');
   if (!info) return null;
+  const app = mcpClient(client);
   const snippet = mcpSnippet(client, info.ctl);
-  const state = info.forced_off ? t('settings.ai.forced_off')
-    : info.active ? t('settings.ai.listening', { path: info.socket })
-    : info.enabled ? t('settings.ai.taken', { path: info.socket }) : t('settings.ai.closed');
+  const [tone, state]: ['ok' | 'sub' | 'gold', string] = info.forced_off ? ['gold', t('settings.ai.forced_off')]
+    : info.active ? ['ok', t('settings.ai.listening')]
+    : info.enabled ? ['gold', t('settings.ai.taken')] : ['sub', t('settings.ai.closed')];
   return (
-    <SettingGroup title={t('settings.tab.ai')}>
-      <SettingRow label={t('settings.ai.accept')} help={state} error={err || undefined}>
-        <SettingToggle checked={info.enabled} onChange={(on) => {
-          void api.setControl(on).then(() => { setErr(''); markApplied(); load(); })
-            .catch((x) => setErr(tErr(x)));
-        }} />
-      </SettingRow>
-      <SettingRow label={t('settings.ai.mcp')}>
-        {/* Six apps do not fit the row at the settings width; the tabs scroll instead of spilling over. */}
-        <div style={{ maxWidth: '100%', overflowX: 'auto' }}>
-          <Segmented value={client} onChange={setClient}
-                     options={MCP_CLIENTS.map((c) => ({ value: c, label: mcpClient(c).label }))} />
+    <>
+      <SettingGroup title={t('settings.ai.control')}>
+        <SettingRow label={t('settings.ai.accept')} help={t('settings.ai.help')} error={err || undefined}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: 'var(--h-ctrl)' }}>
+            <SettingToggle checked={info.enabled} onChange={(on) => {
+              void api.setControl(on).then(() => { setErr(''); markApplied(); load(); })
+                .catch((x) => setErr(tErr(x)));
+            }} />
+            <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)', fontSize: 'var(--fs-5)' }}>
+              <Dot tone={tone} />{state}
+            </span>
+          </span>
+          {info.enabled && !info.forced_off && (
+            <span className="k-sel" style={{
+              fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', color: 'var(--sub)', wordBreak: 'break-all',
+            }}>{info.socket}</span>
+          )}
+        </SettingRow>
+      </SettingGroup>
+      <SettingGroup title={t('settings.ai.mcp')} aside={t('settings.ai.mcp_aside')}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', paddingTop: 'var(--sp-3)' }}>
+          <div style={{ maxWidth: '100%', overflowX: 'auto' }}>
+            <Segmented value={client} onChange={setClient}
+                       options={MCP_CLIENTS.map((c) => ({ value: c, label: mcpClient(c).label }))} />
+          </div>
+          <ol style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+            {app.steps.split('\n').filter(Boolean).map((line, i) => (
+              <li key={`${client}-${i}`} style={{ display: 'flex', gap: 'var(--sp-3)', alignItems: 'flex-start' }}>
+                <StepNumber n={i + 1} />
+                <div style={{
+                  flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)',
+                  fontSize: 'var(--fs-5)', lineHeight: '20px',
+                }}>
+                  <span>{line}</span>
+                  {i === app.at && <>
+                    <pre className="k-sel" style={{
+                      margin: 0, padding: 'var(--sp-2h) var(--sp-3)', overflowX: 'auto', background: 'var(--bg)',
+                      border: '1px solid var(--border)', borderRadius: 'var(--r-3)', fontFamily: 'var(--ff-mono)',
+                      fontSize: 'var(--fs-6)', lineHeight: 1.6, whiteSpace: 'pre', userSelect: 'text',
+                    }}>{snippet}</pre>
+                    <span style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <CopyButton key={client} text={snippet} />
+                    </span>
+                  </>}
+                </div>
+              </li>
+            ))}
+          </ol>
         </div>
-        <ol style={{ margin: 0, paddingLeft: '1.4em', fontSize: 'var(--fs-6)', color: 'var(--sub)', lineHeight: 1.6 }}>
-          {mcpClient(client).steps.split('\n').filter(Boolean).map((line) => <li key={line}>{line}</li>)}
-        </ol>
-        <pre style={{
-          margin: 0, fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', whiteSpace: 'pre-wrap',
-          wordBreak: 'break-all', userSelect: 'text',
-        }}>{snippet}</pre>
-        <Button onClick={() => void navigator.clipboard.writeText(snippet).then(markApplied)}>
-          {t('settings.ai.copy')}
-        </Button>
-      </SettingRow>
-    </SettingGroup>
+      </SettingGroup>
+    </>
   );
 }
 
@@ -178,6 +231,24 @@ export const serverName = (servers: SavedServer[], addr: string): string =>
 
 const changed = () => emitApp('servers-changed');
 
+/** The logged-in account: who and where, log out, profile text and password. */
+function GgsMeSettings({ snap }: { snap: GgsSnapshot }) {
+  const { servers } = useServers();
+  return (
+    <SettingGroup title={t('settings.account.account')}>
+      <SettingRow label={t('settings.account.logged_in')} help={t('settings.account.logout_help')}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-ctrl)' }}>
+          <b className="k-sel" style={{ fontWeight: 600 }}>{snap.login}</b>
+          <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{serverName(servers, snap.server)}</span>
+          <span className="k-sel" style={{ fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{snap.server}</span>
+        </span>
+        <Button variant="danger" onClick={() => void ggsApi.disconnect().then(changed)}>{t('ggs.settings.logout')}</Button>
+      </SettingRow>
+      <ProfileRows snap={snap} />
+    </SettingGroup>
+  );
+}
+
 function GgsAccountSettings({ snap, onLogin }: { snap: GgsSnapshot | null; onLogin: () => void }) {
   const { servers, accounts, auto } = useServers();
   const [edit, setEdit] = useState<SavedServer | 'new' | null>(null);
@@ -190,18 +261,7 @@ function GgsAccountSettings({ snap, onLogin }: { snap: GgsSnapshot | null; onLog
 
   return (
     <>
-      <SettingGroup title={t('settings.account.current')}>
-        <SettingRow label={t('settings.account.account')}
-                    help={online ? t('settings.account.logout_help') : undefined}>
-          {online ? <>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-ctrl)' }}>
-              <b className="k-sel" style={{ fontWeight: 600 }}>{snap!.login}</b>
-              <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{serverName(servers, snap!.server)}</span>
-              <span className="k-sel" style={{ fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{snap!.server}</span>
-            </span>
-            <Button variant="danger" onClick={() => void ggsApi.disconnect().then(changed)}>{t('ggs.settings.logout')}</Button>
-          </> : <span style={{ lineHeight: 'var(--h-ctrl)', color: 'var(--sub)' }}>{t('settings.account.none')}</span>}
-        </SettingRow>
+      <SettingGroup title={t('settings.account.login')}>
         <SettingRow label={t('settings.account.auto')} help={t('settings.account.auto_help')}>
           <Select value={autoKey} options={autoOpts}
                   onChange={(v) => {
@@ -298,6 +358,95 @@ function GgsAccountSettings({ snap, onLogin }: { snap: GgsSnapshot | null; onLog
                  }} />
       )}
     </>
+  );
+}
+
+/** The logged-in account's profile text (GGS `info`) and its password. */
+function ProfileRows({ snap }: { snap: GgsSnapshot }) {
+  const login = snap.login;
+  useEffect(() => { ggsApi.finger(login).catch(() => {}); }, [login]);
+  const saved = snap.fingers[login]?.fields.find(([k]) => k === 'info')?.[1];
+  const [info, setInfo] = useState<string | null>(null);
+  const [err, setErr] = useState('');
+  const [pw, setPw] = useState(false);
+  const text = info ?? saved ?? '';
+  const dirty = saved !== undefined && text.trim() !== saved;
+  const save = () => {
+    if (!dirty) return;
+    void ggsApi.setInfo(text).then(() => { setErr(''); setInfo(null); markApplied(); })
+      .catch((x) => setErr(tErr(x)));
+  };
+  return (
+    <>
+      <SettingRow label={t('settings.account.info')} error={err || undefined}>
+        <span style={{ display: 'flex', gap: 'var(--sp-2)', width: '100%', maxWidth: 'var(--w-control)' }}>
+          <span style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+            <TextField value={text} onChange={setInfo} placeholder={t('settings.account.info_placeholder')}
+                       onEnter={save} />
+          </span>
+          <Button disabled={!dirty} onClick={save}>
+            {t('settings.account.info_save')}
+          </Button>
+        </span>
+      </SettingRow>
+      <SettingRow label={t('settings.account.password')}>
+        <Button onClick={() => setPw(true)}>{t('settings.account.password_change')}</Button>
+      </SettingRow>
+      {pw && <PasswordDialog passw={snap.passw} onClose={() => setPw(false)} />}
+    </>
+  );
+}
+
+/** Changes the server's password and the one saved on this Mac together. */
+function PasswordDialog({ passw, onClose }: { passw: string; onClose: () => void }) {
+  const [cur, setCur] = useState('');
+  const [next, setNext] = useState('');
+  const [again, setAgain] = useState('');
+  const [wait, setWait] = useState<number | null>(null);
+  const [err, setErr] = useState('');
+  const outcome = wait !== null && passw.startsWith(`${wait}|`) ? passw.slice(String(wait).length + 1) : '';
+  const busy = wait !== null && outcome === '';
+  const bad = outcome === 'bad';
+  useEffect(() => {
+    if (outcome === 'ok') { markApplied(); onClose(); }
+  }, [outcome, onClose]);
+  useEffect(() => {
+    if (!busy) return;
+    const id = setTimeout(() => { setWait(null); setErr(t('settings.password.no_answer')); }, 15000);
+    return () => clearTimeout(id);
+  }, [busy]);
+  const spaces = /\s/.test(next);
+  const mismatch = again !== '' && again !== next;
+  const ready = cur !== '' && next !== '' && next === again && !spaces && !busy;
+  const submit = () => {
+    if (!ready) return;
+    const id = Date.now();
+    setErr(''); setWait(id);
+    ggsApi.changePassword(cur, next, id).catch((x) => { setWait(null); setErr(tErr(x)); });
+  };
+  return (
+    <Overlay onClose={onClose}>
+      <Modal title={t('settings.password.title')} onClose={onClose}
+             actions={<>
+               <span style={{ marginLeft: 'auto' }} />
+               <Button size="field" variant="ghost" onClick={onClose}>{t('dialog.cancel')}</Button>
+               <Button size="field" variant="primary" disabled={!ready} onClick={submit}>
+                 {busy ? t('settings.password.changing') : t('settings.password.ok')}
+               </Button>
+             </>}>
+        <Field label={t('settings.password.current')} error={bad ? t('settings.password.wrong') : undefined}>
+          <TextField value={cur} onChange={(v) => { setCur(v); if (bad) setWait(null); }} password invalid={bad} />
+        </Field>
+        <Field label={t('settings.password.new')} help={t('settings.password.new_help')}
+               error={spaces ? t('settings.password.spaces') : undefined}>
+          <TextField value={next} onChange={setNext} password invalid={spaces} />
+        </Field>
+        <Field label={t('settings.password.again')} error={mismatch ? t('settings.password.mismatch') : undefined}>
+          <TextField value={again} onChange={setAgain} password invalid={mismatch} onEnter={submit} />
+        </Field>
+        {err && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--bad)' }}>{err}</span>}
+      </Modal>
+    </Overlay>
   );
 }
 

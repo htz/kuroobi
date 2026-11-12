@@ -14,7 +14,13 @@ fn control_commands() {
         .map(|(l, _)| l)
         .expect("generate_handler! list");
     let mut out = String::from("pub const COMMANDS: &[(&str, &[(&str, &str)])] = &[\n");
-    for name in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+    // A password never passes through the socket an AI drives.
+    const SCREEN_ONLY: [&str; 1] = ["ggs_change_password"];
+    for name in list
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !SCREEN_ONLY.contains(s))
+    {
         let params = params_of(&src, name);
         let ps: Vec<String> = params
             .iter()

@@ -428,12 +428,14 @@ export function useDismiss(open: boolean, close: () => void, ...refs: RefObject<
 }
 
 /** A control with its name above it (forms in a narrow box: login, server editing). */
-export function Field({ label, help, children }: { label: string; help?: string; children: React.ReactNode }) {
+export function Field({ label, help, error, children }: {
+  label: string; help?: string; error?: string; children: React.ReactNode;
+}) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
       {label}
       {children}
-      {help && <span>{help}</span>}
+      {error ? <span style={{ color: 'var(--bad)' }}>{error}</span> : help && <span>{help}</span>}
     </label>
   );
 }

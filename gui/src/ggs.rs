@@ -95,6 +95,12 @@ pub enum Cmd {
     },
     ListStored,
     ListMatches,
+    SetInfo(String),
+    ChangePassword {
+        old: String,
+        new: String,
+        id: u64,
+    },
     ResumeStored(String),
     History(String),
     ChatSeen(u64),
@@ -329,6 +335,8 @@ pub struct Snapshot {
     pub notice: String,
     /// The server's refusal of the last aform/dform we sent ("dform|O2.e{REAL}!={INT}"), else empty.
     pub formula_refused: String,
+    /// The last password change's outcome as `id|ok` or `id|bad`; `id` comes from the screen.
+    pub passw: String,
     pub stored: Vec<StoredView>,
     pub history: HashMap<String, Vec<HistoryRow>>,
     pub chat: VecDeque<ChatMsg>,
@@ -834,6 +842,10 @@ fn report(
 struct Done(Box<kuroobi::engine::MoveEval>, Report);
 
 struct Ctx {
+    /// The new password and its request id while `passw` waits for the server.
+    passw_wait: Option<(String, u64)>,
+    /// A password changed in this session, used by the next reconnect.
+    pw_changed: Option<String>,
     app: tauri::AppHandle,
     stop: Option<kuroobi::midgame::StopHandle>,
     snap: Arc<Mutex<Snapshot>>,
@@ -1172,6 +1184,8 @@ fn new_ctx(
     let ctx = Ctx {
         app,
         stop: None,
+        passw_wait: None,
+        pw_changed: None,
         snap,
         engine: None,
         engine_cfg: EngineConfig {
@@ -1351,7 +1365,12 @@ fn dial(ctx: &mut Ctx) -> Option<(TcpStream, TcpStream)> {
 fn session(ctx: &mut Ctx, rx: &Receiver<Cmd>, login: &str, pw: &str) {
     let mut login_fails = 0u32;
     let mut cred_saved = false;
+    let mut pw = pw.to_string();
     loop {
+        if let Some(p) = ctx.pw_changed.take() {
+            pw = p;
+        }
+        ctx.passw_wait = None;
         {
             let mut s = ctx.snap.lock().unwrap();
             s.conn = "connecting".into();
@@ -1407,14 +1426,14 @@ fn session(ctx: &mut Ctx, rx: &Receiver<Cmd>, login: &str, pw: &str) {
                 break;
             }
             if !w.logged_in {
-                login_step(ctx, &mut w, login, pw, |c| write_line(&mut writer, &c));
+                login_step(ctx, &mut w, login, &pw, |c| write_line(&mut writer, &c));
                 if w.login_warned {
                     return;
                 }
                 continue;
             }
             while let Some(ln) = w.lines.pop_front() {
-                dispatch_line(ctx, &mut w, &ln, login, pw, &mut cred_saved, |c| {
+                dispatch_line(ctx, &mut w, &ln, login, &pw, &mut cred_saved, |c| {
                     write_line(&mut writer, &c)
                 });
             }
@@ -1626,6 +1645,16 @@ fn dispatch_line(
     if !*cred_saved && (ln == "READY" || ln.starts_with("/os")) {
         *cred_saved = true;
         remember_account(&server(), login, pw);
+    }
+
+    if let Some(done) = passw_outcome(ctx.passw_wait.is_some(), ln) {
+        let (new, id) = ctx.passw_wait.take().expect("waiting");
+        if done {
+            update_password(&server(), login, &new);
+            ctx.pw_changed = Some(new);
+        }
+        ctx.snap.lock().unwrap().passw = format!("{id}|{}", if done { "ok" } else { "bad" });
+        ctx.dirty = true;
     }
 
     if !w.td_block.is_empty() {
@@ -2027,6 +2056,16 @@ fn handle_cmd(
         }
         Cmd::SetLogChannel(_) => {}
         Cmd::ListStored => query(pending, "stored_list", "tell /os stored", send),
+        Cmd::SetInfo(text) => {
+            send(format!("info {text}"));
+            ask_finger(pending, login, send);
+        }
+        Cmd::ChangePassword { old, new, id } => {
+            // The server answers a right password with silence, so an echo marks the end.
+            send(format!("passw {new} {old}"));
+            send(format!("echo {PASSW_DONE}"));
+            ctx.passw_wait = Some((new, id));
+        }
         Cmd::ListMatches => query(pending, "match_list", "tell /os match", send),
         Cmd::ResumeStored(id) => {
             ctx.log("info", &format!("resuming adjourned game {id}"));
@@ -2400,6 +2439,21 @@ fn ggs_err_notice(msg: &str) -> String {
         _ => return format!("err.ggs_refused|msg={}", msg.replace('|', "/")),
     };
     format!("err.ggs.{key}")
+}
+
+const PASSW_DONE: &str = "kuroobi-passw-done";
+
+/// While a password change waits: `Some(false)` on the server's refusal, `Some(true)` at the echo after it.
+fn passw_outcome(waiting: bool, ln: &str) -> Option<bool> {
+    if !waiting {
+        None
+    } else if ln.contains("Password is incorrect") {
+        Some(false)
+    } else if ln.trim_start_matches(':').trim() == PASSW_DONE {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 fn write_line(writer: &mut TcpStream, cmd: &str) {
@@ -3633,6 +3687,17 @@ fn watch_notice(ln: &str) -> Option<(bool, &str, &str)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn passw_outcome_reads_refusal_and_echo() {
+        use super::passw_outcome;
+        assert_eq!(
+            passw_outcome(true, ": ERR Password is incorrect."),
+            Some(false)
+        );
+        assert_eq!(passw_outcome(true, ": kuroobi-passw-done"), Some(true));
+        assert_eq!(passw_outcome(true, "/os: + match .1 ..."), None);
+        assert_eq!(passw_outcome(false, ": kuroobi-passw-done"), None);
+    }
 
     #[test]
     fn reads_watch_notices_and_lists() {

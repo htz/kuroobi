@@ -152,7 +152,7 @@ fn tools() -> Vec<Tool> {
         ("game__apply", "Play the engine's move from game__think, or pass when no move is given.", json!({"move": s}), vec![]),
         ("gui__show", "Select a menu in the GUI, and for settings a category.", json!({
             "menu": {"type": "string", "description": "play, study, book, settings, ggs-play, ggs-lobby, ggs-players, ggs-results, ggs-chat, ggs-tourney, ggs-console, ggs-login"},
-            "category": {"type": "string", "description": "settings only: engine, view, ai, ggs-account, ggs-play, ggs-form"}}), vec!["menu"]),
+            "category": {"type": "string", "description": "settings only: engine, view, ai, ggs-me, ggs-account, ggs-play, ggs-form"}}), vec!["menu"]),
         ("gui__current", "The menu (and settings category) selected in the GUI now.", none(), vec![]),
         ("gui__text", "The text the GUI window shows now.", none(), vec![]),
         ("gui__screenshot", "A picture of the GUI window only (other windows never show in it).", none(), vec![]),

@@ -8,6 +8,7 @@ One input field with its name above it. Used for forms stacked vertically in a n
 - `label` (required): the field's name.
 - `children` (required): the input (`TextField`, `Select`, etc.).
 - `help`: a note below the field.
+- `error`: a message about this field's value, shown in `bad` in place of `help`. Mark the input itself too (`TextField`'s `invalid`).
 
 ## Rules
 - Spacing between name, field and note is `sp-1`. The name and note are `fs-6`, `sub`.
@@ -17,4 +18,4 @@ One input field with its name above it. Used for forms stacked vertically in a n
 ## Similar components
 - `SettingRow`: a settings row that lays out name, field and description side by side.
 
-Used in: `gui/src-ui/js/ggs/Login.tsx`, `SettingsScreen.tsx` (editing a server).
+Used in: `gui/src-ui/js/ggs/Login.tsx`, `SettingsScreen.tsx` (editing a server, changing the password).

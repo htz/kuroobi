@@ -205,17 +205,76 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </x-import>
 </sc-if>
 
-<sc-if value="{{showAccount}}" hint-placeholder-val="{{false}}">
-<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="ログイン中">
+<sc-if value="{{showAi}}" hint-placeholder-val="{{false}}">
+<!-- AI control: the switch with the socket state as a dot and words; the socket path below in mono -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="AI からの操作">
 <div style="display: flex; flex-direction: column">
 <div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
-<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">アカウント</span>
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">受け付ける</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<span style="display: flex; align-items: center; gap: var(--sp-3); height: var(--h-ctrl)"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{aiOn}}"></x-import>
+<span style="display: flex; align-items: center; gap: var(--sp-0); font-size: var(--fs-5)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="{{aiTone}}"></x-import>{{aiState}}</span></span>
+<span class="k-sel" style="font-family: var(--ff-mono); font-size: var(--fs-6); color: var(--sub); word-break: break-all">{{aiSocket}}</span>
+<span style="font-size: var(--fs-6); color: var(--sub)">Claude Code などの AI が、下で登録する kuroobi-mcp を通して対局・検討・GGS をこのアプリで操作する</span>
+</div>
+</div>
+</div>
+</x-import>
+<!-- MCP registration: no label column, so the six app tabs fit on one line; the step that adds the registration holds the snippet in a code box, with Copy below it at the right -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="MCP の登録" aside="使う AI アプリを選ぶ">
+<div style="display: flex; flex-direction: column; gap: var(--sp-3); padding-top: var(--sp-3)">
+<div style="max-width: 100%; overflow-x: auto"><x-import component-from-global-scope="KuroobiUI.Segmented" value="{{aiClient}}" options="{{aiClients}}"></x-import></div>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--sp-3)">
+<sc-for list="{{aiSteps}}" as="st" hint-placeholder-count="2">
+<li style="display: flex; gap: var(--sp-3); align-items: flex-start">
+<span style="flex: none; width: 20px; height: 20px; border-radius: var(--r-pill); background: var(--card); border: 1px solid var(--border); display: grid; place-items: center; font-size: var(--fs-6); font-weight: 600; font-variant-numeric: tabular-nums">{{st.n}}</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-2); font-size: var(--fs-5); line-height: 20px">
+<span>{{st.text}}</span>
+<sc-if value="{{st.code}}" hint-placeholder-val="{{false}}">
+<pre class="k-sel" style="margin: 0; padding: var(--sp-2h) var(--sp-3); overflow-x: auto; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-3); font-family: var(--ff-mono); font-size: var(--fs-6); line-height: 1.6; white-space: pre">{{aiSnippet}}</pre>
+<span style="display: flex; justify-content: flex-end"><x-import component-from-global-scope="KuroobiUI.Button" size="row">{{aiCopy}}</x-import></span>
+</sc-if>
+</div>
+</li>
+</sc-for>
+</ol>
+</div>
+</x-import>
+</sc-if>
+
+<!-- The logged-in account: who and where, log out, profile text, password. Not logged in: the offline note like the other GGS pages -->
+<sc-if value="{{showMe}}" hint-placeholder-val="{{false}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="アカウント">
+<div style="display: flex; flex-direction: column">
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">ログイン中</span>
 <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
 <span style="display: flex; align-items: center; gap: var(--sp-2); height: var(--h-ctrl)"><b class="k-sel" style="font-weight: 600">alice</b><span style="font-size: var(--fs-6); color: var(--sub)">ローカル</span><span class="k-sel" style="font-family: var(--ff-mono); font-size: var(--fs-6); color: var(--sub)">127.0.0.1:15000</span></span>
 <x-import component-from-global-scope="KuroobiUI.Button" variant="danger">ログアウト</x-import>
 <span style="font-size: var(--fs-6); color: var(--sub)">ログアウトすると、次の起動では自動ログインしない</span>
 </div>
 </div>
+<!-- Profile text (GGS info): one line, saved with "Save"; shown to everyone who opens the profile -->
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">自己紹介</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<span style="display: flex; gap: var(--sp-2); width: 100%; max-width: var(--w-control)"><span style="flex: 1; min-width: 0; display: flex"><x-import component-from-global-scope="KuroobiUI.TextField" value="KUROOBI — NNUE Othello engine (bot)" placeholder="プロフィールに出す一行"></x-import></span><x-import component-from-global-scope="KuroobiUI.Button">保存</x-import></span>
+</div>
+</div>
+<!-- Password: changes the server's and the one saved on this Mac together, so the next auto login keeps working -->
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">パスワード</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<x-import component-from-global-scope="KuroobiUI.Button">パスワードを変更…</x-import>
+</div>
+</div>
+</div>
+</x-import>
+</sc-if>
+
+<sc-if value="{{showAccount}}" hint-placeholder-val="{{false}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="ログイン">
+<div style="display: flex; flex-direction: column">
 <div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
 <span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">起動時のログイン</span>
 <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
@@ -343,6 +402,16 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <sc-if value="{{dlgOpen}}" hint-placeholder-val="{{false}}">
 <x-import component-from-global-scope="KuroobiUI.Confirm" title="{{dlgTitle}}" body="{{dlgBody}}" ok="{{dlgOk}}" danger="{{dlgDanger}}" on-ok="{{noop}}" on-cancel="{{noop}}"></x-import>
 </sc-if>
+<!-- Change password: current, new, new again. A field's error replaces its note (wrong current password, spaces, mismatch); a failure of the whole change shows below the fields; while the server answers, the button reads "Changing…" -->
+<sc-if value="{{pwDlg}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Overlay" on-close="{{noop}}">
+<x-import component-from-global-scope="KuroobiUI.Modal" title="パスワードを変更" on-close="{{noop}}" actions="{{pwActions}}">
+<x-import component-from-global-scope="KuroobiUI.Field" label="今のパスワード" error="{{pwWrong}}"><x-import component-from-global-scope="KuroobiUI.TextField" value="••••••••" invalid="{{pwBad}}"></x-import></x-import>
+<x-import component-from-global-scope="KuroobiUI.Field" label="新しいパスワード" help="空白は使えない"><x-import component-from-global-scope="KuroobiUI.TextField" value="••••••••••"></x-import></x-import>
+<x-import component-from-global-scope="KuroobiUI.Field" label="もう一度"><x-import component-from-global-scope="KuroobiUI.TextField" value="••••••••••"></x-import></x-import>
+</x-import>
+</x-import>
+</sc-if>
 <!-- Add/edit server: name, address, kind. If saving fails, the reason appears at the bottom left -->
 <sc-if value="{{serverDlg}}" hint-placeholder-val="{{false}}">
 <x-import component-from-global-scope="KuroobiUI.Overlay" on-close="{{noop}}">
@@ -355,7 +424,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"applied":{"editor":"select","options":["no","yes"],"default":"no"},"book":{"editor":"select","options":["loaded","missing"],"default":"loaded"},"dialog":{"editor":"select","options":["none","delete-account","reset-files","server"],"default":"none"},"cat":{"editor":"select","options":["engine","view","account","play","form"],"default":"account"},"$preview":{"width":1280,"height":800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"applied":{"editor":"select","options":["no","yes"],"default":"no"},"book":{"editor":"select","options":["loaded","missing"],"default":"loaded"},"dialog":{"editor":"select","options":["none","delete-account","reset-files","server","password","password-bad"],"default":"none"},"cat":{"editor":"select","options":["engine","view","ai","me","account","play","form"],"default":"account"},"ai":{"editor":"select","options":["listening","closed","taken"],"default":"listening"},"client":{"editor":"select","options":["claude","desktop","cursor","codex","gemini","vscode"],"default":"claude"},"copied":{"editor":"select","options":["no","yes"],"default":"no"},"$preview":{"width":1280,"height":800}}'>
 class Component extends DCLogic {
   renderVals() {
     const ui = window.KuroobiUI;
@@ -377,8 +446,10 @@ class Component extends DCLogic {
       { title: 'アプリ', items: [
         { id: 'engine', name: 'エンジン' },
         { id: 'view', name: '表示' },
+        { id: 'ai', name: 'AI 連携' },
       ].map(mark) },
       { title: 'GGS', items: [
+        { id: 'me', name: 'アカウント' },
         { id: 'account', name: 'サーバーとアカウント' },
       { id: 'play', name: '対局と観戦' },
       { id: 'form', name: '申し込みの条件' },
@@ -397,6 +468,15 @@ class Component extends DCLogic {
           'delete-account': ['kuroobi を削除しますか?', 'GGS 本番 の kuroobi を保存したアカウントから消します。サーバーのアカウントや、このアプリに残った対局の記録は消えません。', '削除する', true],
           'reset-files': ['ファイルの指定を既定に戻しますか？', '選んだ重みと定石の場所を忘れ、既定の探し方に戻します。ファイルそのものは消えません。', '戻す', false],
         }[this.props.dialog ?? 'none'];
+        const dl = this.props.dialog ?? 'none';
+        if (dl === 'password' || dl === 'password-bad') {
+          const h = window.React ? window.React.createElement : null;
+          return { dlgOpen: false, pwDlg: true, pwBad: dl === 'password-bad', pwWrong: dl === 'password-bad' ? '今のパスワードが違います' : '',
+            pwActions: h && ui ? h(window.React.Fragment, null,
+              h('span', { style: { marginLeft: 'auto' } }),
+              h(ui.Button, { size: 'field', variant: 'ghost' }, 'キャンセル'),
+              h(ui.Button, { size: 'field', variant: 'primary' }, '変更する')) : null };
+        }
         if ((this.props.dialog ?? 'none') === 'server') {
           const h = window.React ? window.React.createElement : null;
           return { dlgOpen: false, serverDlg: true, kindOpts: [{ value: 'public', label: '本番' }, { value: 'test', label: 'テスト' }],
@@ -409,8 +489,43 @@ class Component extends DCLogic {
       })(),
       showEngine: cat === 'engine',
       showView: cat === 'view',
+      showAi: cat === 'ai',
+      ...(() => {
+        const st = this.props.ai ?? 'listening';
+        const client = this.props.client ?? 'claude';
+        const exe = '/Users/htz/work/kuroobi/gui/target/release/kuroobi-mcp';
+        const json = (o) => JSON.stringify(o, null, 2);
+        const entry = { command: exe, args: ['--mcp'] };
+        const apps = {
+          claude: ['Claude Code', ['下のコマンドをターミナルで実行する', 'Claude Code を起動し直す (/mcp に kuroobi-gui が出れば登録済み)'], 0,
+            `claude mcp add kuroobi-gui -- "${exe}" --mcp`],
+          desktop: ['Claude Desktop', ['設定 > 開発者 > 設定を編集 で claude_desktop_config.json を開く', '下の設定を mcpServers に書き足す (無ければそのまま貼る)', 'Claude Desktop を再起動する'], 1,
+            json({ mcpServers: { 'kuroobi-gui': entry } })],
+          cursor: ['Cursor', ['下の設定を ~/.cursor/mcp.json の mcpServers に書き足す (ファイルが無ければそのまま保存)', 'Cursor を再起動する'], 0,
+            json({ mcpServers: { 'kuroobi-gui': entry } })],
+          codex: ['Codex CLI', ['下の設定を ~/.codex/config.toml に書き足す', 'Codex CLI を起動し直す'], 0,
+            `[mcp_servers.kuroobi-gui]\ncommand = "${exe}"\nargs = ["--mcp"]`],
+          gemini: ['Gemini CLI', ['下の設定を ~/.gemini/settings.json の mcpServers に書き足す', 'Gemini CLI を起動し直す'], 0,
+            json({ mcpServers: { 'kuroobi-gui': entry } })],
+          vscode: ['VS Code', ['下の設定を作業フォルダの .vscode/mcp.json に書き足す (ファイルが無ければそのまま保存)', 'ファイル上に出る「開始」で kuroobi-gui を起動する'], 0,
+            json({ servers: { 'kuroobi-gui': { type: 'stdio', ...entry } } })],
+        };
+        const [, steps, at, snippet] = apps[client];
+        return {
+          aiOn: st !== 'closed',
+          aiTone: { listening: 'ok', closed: 'sub', taken: 'gold' }[st],
+          aiState: { listening: '受け付け中', closed: '受け付けていない', taken: '同じ場所から起動した別の KUROOBI が受け付けている' }[st],
+          aiSocket: st === 'closed' ? '' : '~/kuroobi/ggs_games/.control.sock',
+          aiClient: client,
+          aiClients: Object.entries(apps).map(([value, a]) => ({ value, label: a[0] })),
+          aiSteps: steps.map((text, i) => ({ n: String(i + 1), text, code: i === at })),
+          aiSnippet: snippet,
+          aiCopy: this.props.copied === 'yes' ? 'コピーしました' : 'コピー',
+        };
+      })(),
+      showMe: cat === 'me',
       showAccount: cat === 'account',
-      catTitle: { engine: 'エンジン', view: '表示', account: 'GGS · サーバーとアカウント', play: 'GGS · 対局と観戦', form: 'GGS · 申し込みの条件' }[cat],
+      catTitle: { engine: 'エンジン', view: '表示', ai: 'AI 連携', me: 'GGS · アカウント', account: 'GGS · サーバーとアカウント', play: 'GGS · 対局と観戦', form: 'GGS · 申し込みの条件' }[cat],
       threadOpts: [['', '12 (自動)'], ['4', '4'], ['8', '8'], ['16', '16']],
       hashOpts: [['256', '256 MB'], ['512', '512 MB (既定)'], ['1024', '1 GB'], ['2048', '2 GB']],
       clockOpts: [['0', 'なし'], ['300', '5 分'], ['600', '10 分'], ['1200', '20 分']],
