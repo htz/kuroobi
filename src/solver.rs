@@ -1058,6 +1058,7 @@ pub struct Solver {
     stop: Option<StopHandle>,
     /// The warm-up rung a cut solve finished, which beats the midgame backup as its move.
     pub warm_rung: Option<(i32, Option<Position>)>,
+    only_rung: Option<f32>,
 }
 
 struct Worker<'a> {
@@ -1161,6 +1162,7 @@ impl Solver {
             budget_handles: Vec::new(),
             stop: None,
             warm_rung: None,
+            only_rung: None,
         }
     }
 
@@ -1215,6 +1217,14 @@ impl Solver {
 
     pub fn solve(&mut self, mode: EndSolverMode, board: &Board) -> EndSolverResult {
         self.solve_with_eval(mode, board, None)
+    }
+
+    /// The value of one selective rung alone (`t` as in `SELECTIVE_LADDER`), not an exact solve.
+    pub fn solve_selective(&mut self, board: &Board, t: f32, ev: &Linear) -> EndSolverResult {
+        self.only_rung = Some(t);
+        let r = self.solve_with_eval(EndSolverMode::Perfect, board, Some(ev));
+        self.only_rung = None;
+        r
     }
 
     /// With an evaluator, solves from `SELECTIVE_PASS_MIN_EMPTIES` up start from a selective warm-up.
@@ -1296,6 +1306,14 @@ impl Solver {
             w.stop = stop_ref;
             w.nnue = self.nnue.clone();
             let mut b = *board;
+            if let (Some(t), Some(e)) = (self.only_rung, ev) {
+                let guess = w.estimate_score(board, e);
+                w.selective = Some(Selectivity::new(t, board));
+                let s = w.aspiration_width(&mut b, guess, WARM_ASPIRATION_WIDTH, ev);
+                w.selective = None;
+                w.tt.demote_to_seed_shared();
+                return (s, w.nodes, w.best, w.into_scratch(), None);
+            }
             let mut warm = None;
             if let Some(e) = ev.filter(|_| board.empty_count() >= SELECTIVE_PASS_MIN_EMPTIES) {
                 let mut guess = w.estimate_score(board, e);
@@ -3399,6 +3417,44 @@ mod tests {
             }
         }
         assert!(wrong.is_empty(), "moves that miss their value: {wrong:?}");
+    }
+
+    #[test]
+    fn a_selective_solve_too_wide_to_cut_is_exact() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rand = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let ev = Linear::new(crate::pattern::LINEAR_PATTERNS);
+        let (mut sel, mut exact) = (Solver::new(16), Solver::new(16));
+        let mut checked = 0;
+        while checked < 40 {
+            let mut b = Board::new();
+            while b.empty_count() > 18 && b.movable() != 0 {
+                let moves = b.movable();
+                let mut m = moves;
+                for _ in 0..rand() % moves.count_ones() as u64 {
+                    m &= m - 1;
+                }
+                b.make_move(Position::from_index(m.trailing_zeros()).unwrap())
+                    .unwrap();
+            }
+            if b.empty_count() != 18 || b.movable() == 0 {
+                continue;
+            }
+            // sigma is at least 1, so a margin of t discs outruns any score.
+            let r = sel.solve_selective(&b, 130.0, &ev);
+            assert_eq!(
+                r.value,
+                exact.solve(EndSolverMode::Perfect, &b).value,
+                "{b}"
+            );
+            assert!(b.movable() & r.best_move.unwrap().to_bit() != 0, "{b}");
+            checked += 1;
+        }
     }
 
     #[test]

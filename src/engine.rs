@@ -531,6 +531,23 @@ impl Engine {
         }
     }
 
+    /// A selective endgame solve at ProbCut confidence `t` (in sigmas): a final disc difference, not an exact one.
+    pub fn solve_selective(&mut self, board: &Board, t: f32) -> MoveEval {
+        self.stop.reset();
+        self.progress.clear();
+        let (r, cut, _) = self.solve_within(board, None, Progress::SOLVE, |solver, linear| {
+            solver.solve_selective(board, t, linear)
+        });
+        MoveEval {
+            pos: r.best_move,
+            value: stone_scale(r.value as f32),
+            depth: board.empty_count() as u32,
+            cut,
+            mpc_t: Some(t),
+            ..Default::default()
+        }
+    }
+
     /// The line the tables still hold after `first`, `None` for a pass; it ends where an entry was overwritten.
     pub fn principal_variation(
         &self,

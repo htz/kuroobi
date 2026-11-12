@@ -19,7 +19,7 @@ repository root or pass the paths.
 |---|---|
 | Training | [`linear_train`](#linear_train) [`nnue_train`](#nnue_train) |
 | Assembling a model | [`linear_stage_merge`](#linear_stage_merge) [`nnue_mpccalib`](#nnue_mpccalib) |
-| Runtime resources | [`bookgen`](#bookgen) |
+| Training data and runtime resources | [`gendata`](#gendata) [`bookgen`](#bookgen) |
 | Playing | [`gtp`](#gtp) [`ggs`](#ggs) |
 
 
@@ -254,6 +254,46 @@ nnue_mpccalib --alpha --threads 8 --stride 7 --write \
 ```
 
 ## Data and the book
+
+### gendata
+
+**Generates self-play training records.** Each game opens with a few
+random moves, then the engine plays itself to the end; every searched
+position becomes one `.rec` record (see [learning.md](learning.md))
+carrying its search value and the game's final disc difference. Random
+moves are neither searched nor recorded. Each job also appends one line
+per game (moves, final disc difference for Black, random plies) to
+`games_NN.txt`.
+
+```sh
+gendata --out-dir data/records/selfplay/new --jobs 8 --games 10000
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--out-dir <dir>` | `out` | Where shards and transcripts go. A restart continues the numbering |
+| `--jobs <n>` | cores | Games played at once, each by its own engine |
+| `--threads <n>` | 1 | Search threads per job |
+| `--games <n>` / `--positions <n>` | unlimited | Stop after this many games or records |
+| `--random-plies <list>` | `12,14,16` | Random opening moves, taken in turn game by game |
+| `--depth <n>` | 16 | Midgame search depth |
+| `--no-mpc` | off | Midgame search without ProbCut |
+| `--solve-empties <n>` | 20 | Solve exactly from this many empties |
+| `--selective <list>` | `21:1.1,22:0.8,23:0.6,24:0.4` | `empties:t` pairs solved selectively at ProbCut confidence t (sigmas) instead of searched; `none` turns it off. Entries at or below `--solve-empties` are solved exactly |
+| `--hash-mid <n>` / `--hash-end <n>` | 22 / 22 | Midgame and endgame transposition table size (2^n), per job |
+| `--weights <path>` / `--nnue <path>` | `weights/linear.bin` / `weights/nnue.bin` | Evaluators |
+| `--shard-size <n>` | 100000 | Records per `shard_WW_NNNN.rec` |
+| `--seed <n>` | random | Seed for the random moves; the one used is printed at start |
+
+**Each record says what its value is**: `Midgame` with the search
+depth, `Selective` with t in tenths in the depth field, or `Exact`. The
+default selective entries are where a selective solve is both faster
+and closer to the exact value than the depth-16 search; the measurement
+is in the comment on `SELECTIVE_T`. Retune them when the depth or the
+weights change.
+
+Shards from different machines need different `--out-dir`s: the names
+only carry the job number.
 
 ### bookgen
 

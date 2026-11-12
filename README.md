@@ -167,7 +167,7 @@ estimate. Details in
 | [Search](docs/search.md) | Search on a clock, midgame search (PVS, ProbCut, parallel search), endgame exact solve, transposition tables |
 | [Learning](docs/learning.md) | Training data, linear and NNUE training, the GPU step |
 | [Where it stands](docs/benchmarks.md) | Match results, FFO benchmarks, parallel-scaling measurements, rejected changes |
-| [CLI tools](docs/cli.md) | Commands for training, assembling a model, building the book and playing |
+| [CLI tools](docs/cli.md) | Commands for self-play data, training, assembling a model, building the book and playing |
 | [GUI](docs/gui.md) | Play, study, book, GGS, and learning the book from real games |
 
 Whether a given change was adopted rests on measurement throughout:
@@ -202,7 +202,7 @@ src/
 ├── resources.rs       where weights and the book live (configurable)
 ├── engine.rs          session layer shared by the GUI and the CLI (move choice, analysis)
 ├── trainer.rs         training data I/O, symmetric forms, epoch stats
-└── bin/               CLI tools (training, stage merge, MPC calibration, book generation, GTP server, GGS client)
+└── bin/               CLI tools (self-play data, training, stage merge, MPC calibration, book generation, GTP server, GGS client)
 gui/                   GUI (Tauri + Vite/TypeScript)
 docs/                  implementation notes (linked from this README)
 tests/                 perft coverage, solver integration tests, time to stop

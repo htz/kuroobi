@@ -22,6 +22,7 @@ pub enum ScoreKind {
     #[default]
     Unknown = 0,
     Midgame = 1,
+    /// A selective endgame solve; `score_depth` holds its ProbCut t in tenths, not a depth.
     Selective = 2,
     Exact = 3,
 }
