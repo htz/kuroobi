@@ -1126,6 +1126,10 @@ struct Wire {
     raw: Vec<u8>,
     lines: VecDeque<String>,
     logged_in: bool,
+    login_sent: bool,
+    pw_sent: bool,
+    /// Commands from the screens while logging in; sent once the server says READY.
+    held: Vec<Cmd>,
     login_started: Instant,
     login_warned: bool,
     lost: bool,
@@ -1149,6 +1153,9 @@ impl Wire {
             raw: Vec::new(),
             lines: VecDeque::new(),
             logged_in: false,
+            login_sent: false,
+            pw_sent: false,
+            held: Vec::new(),
             login_started: Instant::now(),
             login_warned: false,
             lost: false,
@@ -1399,9 +1406,18 @@ fn session(ctx: &mut Ctx, rx: &Receiver<Cmd>, login: &str, pw: &str) {
         loop {
             // Stop at a quit so a Connect queued behind it reaches wait_for_connect.
             while !w.want_quit {
-                let Ok(cmd) = rx.try_recv() else {
+                let cmd = if w.logged_in && !w.held.is_empty() {
+                    w.held.remove(0)
+                } else if let Ok(cmd) = rx.try_recv() {
+                    cmd
+                } else {
                     break;
                 };
+                // Anything written before READY is read by the server as a login name or password.
+                if !w.logged_in && !matches!(cmd, Cmd::Connect { .. } | Cmd::Disconnect) {
+                    w.held.push(cmd);
+                    continue;
+                }
                 if handle_cmd(
                     ctx,
                     cmd,
@@ -1507,6 +1523,18 @@ fn on_lost(ctx: &mut Ctx, login_fails: &mut u32, logged_in: bool) -> bool {
 /// nothing), and retrying forever left the window stuck on it.
 const LOGIN_GIVE_UP: Duration = Duration::from_secs(20);
 
+/// Stop logging in for good: retrying a refused login only sends the password into the wrong prompt.
+fn login_refused(ctx: &mut Ctx, w: &mut Wire, body: &str) {
+    w.login_warned = true;
+    ctx.log("info", "the server refused the login; not retrying");
+    ctx.notify(
+        &crate::i18n::t("backend.notify.login_failed_title"),
+        &crate::i18n::t(body),
+    );
+    ctx.snap.lock().unwrap().conn = "disconnected".into();
+    ctx.emit(true);
+}
+
 fn login_step(ctx: &mut Ctx, w: &mut Wire, login: &str, pw: &str, mut send: impl FnMut(String)) {
     if !w.login_warned && w.login_started.elapsed() > LOGIN_GIVE_UP {
         w.login_warned = true;
@@ -1527,29 +1555,36 @@ fn login_step(ctx: &mut Ctx, w: &mut Wire, login: &str, pw: &str, mut send: impl
         ctx.emit(true);
         return;
     }
-    let tail = String::from_utf8_lossy(&w.raw).to_lowercase();
-    let tail2 = w
-        .lines
-        .iter()
-        .rev()
-        .take(3)
-        .map(|l| l.to_lowercase())
-        .collect::<Vec<_>>()
-        .join(" ");
+    // Answer each prompt in turn, once: a second prompt means the server turned us down.
     while let Some(l) = w.lines.pop_front() {
         ctx.log("in", &l);
-    }
-    if tail.contains("enter login") || tail2.contains("enter login") {
-        say(ctx, &mut send, login);
-        w.raw.clear();
-    } else if tail.contains("password") || tail2.contains("password") {
-        ctx.log("out", "********");
-        send(pw.to_string());
-        w.raw.clear();
-        w.logged_in = true;
-        ctx.snap.lock().unwrap().conn = "online".into();
-        greet(ctx, w, login, &mut send);
-        ctx.emit(true);
+        let low = l.to_lowercase();
+        if low.contains("password is incorrect") {
+            login_refused(ctx, w, "backend.notify.wrong_password_body");
+            return;
+        } else if low.contains("enter login") {
+            if w.login_sent {
+                login_refused(ctx, w, "backend.notify.login_refused_body");
+                return;
+            }
+            say(ctx, &mut send, login);
+            w.login_sent = true;
+        } else if low.contains("enter your password") {
+            if !w.login_sent || w.pw_sent {
+                login_refused(ctx, w, "backend.notify.login_refused_body");
+                return;
+            }
+            ctx.log("out", "********");
+            send(pw.to_string());
+            w.pw_sent = true;
+        } else if l.trim() == "READY" && w.pw_sent {
+            w.raw.clear();
+            w.logged_in = true;
+            ctx.snap.lock().unwrap().conn = "online".into();
+            greet(ctx, w, login, &mut send);
+            ctx.emit(true);
+            return;
+        }
     }
     ctx.emit(false);
 }
