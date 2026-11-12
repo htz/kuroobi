@@ -985,6 +985,7 @@ players:
   result_loss: "lost {d}"
   result_win: "won {d}"
   search: "Search by name"
+  switch_notify: "Notify (log-ins and games)"
   tab_summary: "Summary"
   top_title: "Top players ({pool})"
   watch: "Watch"

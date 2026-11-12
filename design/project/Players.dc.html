@@ -282,7 +282,7 @@ class Component extends DCLogic {
         ['20:31', 'saio', '対局終了 vs Thor · 負け −6', false, false],
         ['20:02', 'ymatioun', 'ログイン', false, false],
       ].map(([at, name, what, unread, live]) => ({ at, name, what, unread: unread && list !== 'notices', live, weight: unread ? 600 : 400, color: what.startsWith('ログアウト') ? 'var(--sub)' : 'var(--text)' })),
-      selLists: [['通知', true], ['自動観戦', true], ['無視', false]].map(([label, on]) => ({ label, on })),
+      selLists: [['通知 (ログインと対局)', true], ['自動観戦', true], ['無視', false]].map(([label, on]) => ({ label, on })),
       isOnline: list === 'online', isTop: list === 'top', isNoHit: list === 'nohit',
       query: list === 'nohit' ? 'zzz' : '',
       listTitle: list === 'top' ? 'ランダムの上位' : '接続中',

@@ -148,7 +148,7 @@ function ListSwitches({ snap, name }: { snap: GgsSnapshot; name: string }) {
       {LISTS.map((l) => (
         <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: 'var(--h-field)',
                               borderBottom: '1px solid var(--border-weak)', fontSize: 'var(--fs-5)' }}>
-          <span style={{ flex: 1, minWidth: 0 }}>{listLabel(l)}</span>
+          <span style={{ flex: 1, minWidth: 0 }}>{l === 'notify' ? t('players.switch_notify') : listLabel(l)}</span>
           <Toggle checked={onList(snap, l, name)} onChange={(on) => act(ggsApi.setList(l, name, on))} />
         </div>
       ))}

@@ -965,6 +965,7 @@ players:
   result_loss: "負け {d}"
   result_win: "勝ち {d}"
   search: "名前で検索"
+  switch_notify: "通知 (ログインと対局)"
   tab_summary: "概要"
   top_title: "{pool}の上位"
   watch: "観戦"
