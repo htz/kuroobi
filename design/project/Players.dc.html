@@ -44,6 +44,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </div>
 </x-import>
 <div style="flex: 1; min-height: 0; overflow: hidden; padding: var(--sp-4) var(--sp-1) 0; display: flex; flex-direction: column; gap: var(--sp-2)">
+<sc-if value="{{showRates}}" hint-placeholder-val="{{true}}">
 <x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="alice のレート">
 <div style="display: flex; flex-direction: column; gap: var(--sp-1); padding: 0 var(--sp-3)">
 <sc-for list="{{myRates}}" as="r" hint-placeholder-count="2">
@@ -51,6 +52,8 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </sc-for>
 </div>
 </x-import>
+</sc-if>
+<sc-if value="{{notNotices}}" hint-placeholder-val="{{true}}">
 <x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="{{listTitle}}" aside="{{userCount}}" grow="{{yes}}">
 <sc-if value="{{isOnline}}" hint-placeholder-val="{{true}}">
 <div style="height: 100%; display: flex; flex-direction: column">
@@ -60,7 +63,9 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
 <sc-for list="{{users}}" as="u" hint-placeholder-count="14">
 <div class="{{u.cls}}" style="display: flex; align-items: center; gap: var(--sp-3); height: var(--h-field); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); white-space: nowrap; background: {{u.ground}}; box-shadow: {{u.mark}}">
-<span class="k-sel" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: {{u.weight}}">{{u.name}}</span>
+<span style="flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-0); overflow: hidden"><span class="k-sel" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: {{u.weight}}">{{u.name}}</span>
+<!-- Lists the player is on, as Tags beside the name -->
+<sc-for list="{{u.tags}}" as="tg" hint-placeholder-count="0"><x-import component-from-global-scope="KuroobiUI.Tag" tone="{{tg.tone}}">{{tg.label}}</x-import></sc-for></span>
 <span style="width: 112px; text-align: right; overflow: hidden; text-overflow: ellipsis">{{u.rr}} <span style="color: var(--sub); font-size: var(--fs-6)">{{u.dr}}</span></span>
 <span style="width: 112px; text-align: right; overflow: hidden; text-overflow: ellipsis; color: var(--sub)">{{u.r8}} <span style="font-size: var(--fs-6)">{{u.d8}}</span></span>
 <span style="width: 72px; text-align: right; font-size: var(--fs-6); color: {{u.openColor}}">{{u.open}}</span>
@@ -98,6 +103,23 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </div>
 </sc-if>
 </x-import>
+</sc-if>
+<!-- Notices: what the players on the notify list did (log in / out, games start / end), newest first. Unread rows carry an accent dot; opening this view marks them read. A row opens that player's details; a game that is still on also gets "Watch" -->
+<sc-if value="{{isNotices}}" hint-placeholder-val="{{false}}">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="通知" aside="{{noticeCount}}" grow="{{yes}}">
+<div class="k-scroll" style="height: 100%; display: flex; flex-direction: column">
+<sc-for list="{{notices}}" as="n" hint-placeholder-count="6">
+<div class="k-row" style="flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--h-field); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); white-space: nowrap">
+<span style="width: 6px; flex: none; display: flex"><sc-if value="{{n.unread}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Dot" tone="accent"></x-import></sc-if></span>
+<span style="width: 40px; flex: none; font-size: var(--fs-6); color: var(--sub); font-variant-numeric: tabular-nums">{{n.at}}</span>
+<span class="k-sel" style="width: 120px; flex: none; overflow: hidden; text-overflow: ellipsis; font-weight: {{n.weight}}">{{n.name}}</span>
+<span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: {{n.color}}">{{n.what}}</span>
+<sc-if value="{{n.live}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Button" size="row" variant="ghost">観戦</x-import></sc-if>
+</div>
+</sc-for>
+</div>
+</x-import>
+</sc-if>
 </div>
 </x-import>
 </x-import>
@@ -129,6 +151,15 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <div style="display: flex; gap: var(--sp-2)">
 <x-import component-from-global-scope="KuroobiUI.Button" variant="primary">対局を申し込む</x-import>
 <x-import component-from-global-scope="KuroobiUI.Button">チャット</x-import>
+</div>
+<!-- The lists this player is on, switched here: notify (log in / out and games, shown under Notices), watch automatically (GGS track), ignore (their chat and requests no longer reach you). The player list shows the same as Tags beside the name -->
+<div style="display: flex; flex-direction: column; border-top: 1px solid var(--border-weak)">
+<sc-for list="{{selLists}}" as="l" hint-placeholder-count="3">
+<div style="display: flex; align-items: center; gap: var(--sp-3); height: var(--h-field); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5)">
+<span style="flex: 1; min-width: 0">{{l.label}}</span>
+<x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{l.on}}"></x-import>
+</div>
+</sc-for>
 </div>
 <div style="display: flex; flex-direction: column; gap: var(--sp-1); border-top: 1px solid var(--border-weak); padding-top: var(--sp-3)">
 <div style="display: flex; align-items: center; height: var(--h-ctrl); white-space: nowrap">
@@ -185,7 +216,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </x-import>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"list":{"editor":"select","options":["online","top","nohit"],"default":"online"},"tab":{"editor":"select","options":["summary","history","profile"],"default":"summary"},"detail":{"editor":"select","options":["closed","open"],"default":"closed"},"$preview":{"width":1280,"height":800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"list":{"editor":"select","options":["online","top","nohit","notices"],"default":"online"},"tab":{"editor":"select","options":["summary","history","profile"],"default":"summary"},"detail":{"editor":"select","options":["closed","open"],"default":"closed"},"$preview":{"width":1280,"height":800}}'>
 class Component extends DCLogic {
   renderVals() {
     const ui = window.KuroobiUI;
@@ -220,6 +251,7 @@ class Component extends DCLogic {
       rr: rr == null ? '—' : rr.toFixed(1), dr: dr == null ? '' : '±' + dr,
       open: openText[open][0], openColor: openText[open][1],
       state: stateText[state][0], stateColor: stateText[state][1],
+      tags: ({ ymatioun: [['通知', 'sub'], ['自動観戦', 'sub']], saio: [['通知', 'sub']], mosquito: [['無視', 'bad']] }[name] || []).map(([label, tone]) => ({ label, tone })),
       cls: name === sel ? 'k-row k-on' : 'k-row',
       ground: name === sel ? 'var(--card)' : 'transparent',
       mark: name === sel ? 'inset 2px 0 0 var(--accent)' : 'none',
@@ -235,10 +267,22 @@ class Component extends DCLogic {
     return {
       yes: true,
       navLocal: ui ? ui.navLocal() : [],
-      ggsItems: ui ? ui.ggsNav('online', { 'ggs-lobby': { count: 2, alert: true }, 'ggs-play': { count: 1 }, 'ggs-chat': { count: 3, alert: true } }).filter((it) => it.id !== 'ggs-standby') : [],
+      ggsItems: ui ? ui.ggsNav('online', { 'ggs-lobby': { count: 2, alert: true }, 'ggs-play': { count: 1 }, 'ggs-chat': { count: 3, alert: true }, 'ggs-players': { count: list === 'notices' ? 0 : 3, alert: true } }).filter((it) => it.id !== 'ggs-standby') : [],
       searchW: 180,
-      modeOptions: [{ value: 'who', label: '接続中' }, { value: 'top', label: '上位' }],
-      modeVal: list === 'top' ? 'top' : 'who',
+      modeOptions: [{ value: 'who', label: '接続中' }, { value: 'top', label: '上位' },
+        { value: 'notices', label: window.React && ui && list !== 'notices' ? window.React.createElement(window.React.Fragment, null, '通知', window.React.createElement(ui.Badge, null, 3)) : '通知' }],
+      modeVal: list === 'top' ? 'top' : list === 'notices' ? 'notices' : 'who',
+      isNotices: list === 'notices', notNotices: list !== 'notices', showRates: list !== 'notices',
+      noticeCount: '6 件',
+      notices: [
+        ['21:40', 'ymatioun', '対局開始 vs saio', true, true],
+        ['21:38', 'Rhapsody', 'ログイン', true, false],
+        ['21:12', 'ymatioun', '対局終了 vs viper · 勝ち +12', true, false],
+        ['20:55', 'saio', 'ログアウト', false, false],
+        ['20:31', 'saio', '対局終了 vs Thor · 負け −6', false, false],
+        ['20:02', 'ymatioun', 'ログイン', false, false],
+      ].map(([at, name, what, unread, live]) => ({ at, name, what, unread: unread && list !== 'notices', live, weight: unread ? 600 : 400, color: what.startsWith('ログアウト') ? 'var(--sub)' : 'var(--text)' })),
+      selLists: [['通知', true], ['自動観戦', true], ['無視', false]].map(([label, on]) => ({ label, on })),
       isOnline: list === 'online', isTop: list === 'top', isNoHit: list === 'nohit',
       query: list === 'nohit' ? 'zzz' : '',
       listTitle: list === 'top' ? 'ランダムの上位' : '接続中',

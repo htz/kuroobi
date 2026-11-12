@@ -34,6 +34,13 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
 <span style="font-size: var(--fs-3); font-weight: 600; white-space: nowrap">{{curName}}</span>
 <x-import component-from-global-scope="KuroobiUI.Tag" tone="sub">{{curReach}}</x-import>
+<!-- A conversation with one player can ignore them (their chat and requests stop reaching you); the same switch as in the player's details. Channels have none -->
+<sc-if value="{{isPerson}}" hint-placeholder-val="{{false}}">
+<span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-2)">
+<sc-if value="{{ignored}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Tag" tone="bad">無視中</x-import></sc-if>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="ghost">{{ignoreLabel}}</x-import>
+</span>
+</sc-if>
 </x-import>
 <div style="flex: 1; min-height: 0; display: flex">
 <!-- Conversation list -->
@@ -113,7 +120,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </x-import>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"thread":{"editor":"select","options":["channel","new"],"default":"channel"},"picker":{"editor":"boolean","default":true},"$preview":{"width":1280,"height":800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"thread":{"editor":"select","options":["channel","new"],"default":"channel"},"ignored":{"editor":"boolean","default":false},"picker":{"editor":"boolean","default":true},"$preview":{"width":1280,"height":800}}'>
 class Component extends DCLogic {
   renderVals() {
     const ui = window.KuroobiUI;
@@ -170,6 +177,9 @@ class Component extends DCLogic {
       navLocal: ui ? ui.navLocal() : [],
       ggsItems: ui ? ui.ggsNav('online', { 'ggs-lobby': { count: 2, alert: true }, 'ggs-play': { count: 1 }, 'ggs-chat': { count: 3, alert: true } }).filter((it) => it.id !== 'ggs-standby') : [],
       curName: this.props.thread === 'new' ? 'Zaxxon' : '全体チャット',
+      isPerson: this.props.thread === 'new',
+      ignored: !!this.props.ignored,
+      ignoreLabel: this.props.ignored ? '無視をやめる' : '無視する',
       curReach: this.props.thread === 'new' ? '本人にだけ届く' : '全員に届く',
       noRows: this.props.thread === 'new', hasRows: this.props.thread !== 'new',
       threads,

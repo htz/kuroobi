@@ -75,12 +75,16 @@ export function navBadges(snap: GgsSnapshot | null, chatUnread: number) {
         ? ('bad' as const) : undefined,
     },
     'ggs-chat': { count: chatUnread || undefined, alert: true },
+    'ggs-players': { count: snap ? unreadNotices(snap) || undefined : undefined, alert: true },
     'ggs-tourney': {
       dot: snap?.td.tourneys.some((x) => x.joined && x.state !== 'over' && x.state !== 'cancelled')
         ? ('gold' as const) : undefined,
     },
   };
 }
+
+export const unreadNotices = (snap: GgsSnapshot): number =>
+  snap.notices.filter((n) => n.seq > snap.notices_seen).length;
 
 export const ggsPlaying = (snap: GgsSnapshot | null): boolean =>
   snap?.matches.some((m) => m.my_color && !m.over) ?? false;

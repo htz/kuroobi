@@ -96,6 +96,13 @@ pub enum Cmd {
     ListStored,
     ListMatches,
     SetInfo(String),
+    /// `list` is `notify`, `track` or `ignore`.
+    SetList {
+        list: String,
+        name: String,
+        on: bool,
+    },
+    NoticesSeen(u64),
     ChangePassword {
         old: String,
         new: String,
@@ -145,6 +152,20 @@ pub struct RankRow {
     pub wins: u64,
     pub draws: u64,
     pub losses: u64,
+}
+
+/// Something a player on our notify list did: `login`, `logout`, `start` or `end` of a game.
+#[derive(Clone, Serialize, Default)]
+pub struct Notice {
+    pub seq: u64,
+    /// Unix milliseconds.
+    pub at: u64,
+    pub name: String,
+    pub kind: String,
+    pub opp: String,
+    pub id: String,
+    /// Disc diff from `name`'s side, on `end`.
+    pub diff: Option<f64>,
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -337,6 +358,12 @@ pub struct Snapshot {
     pub formula_refused: String,
     /// The last password change's outcome as `id|ok` or `id|bad`; `id` comes from the screen.
     pub passw: String,
+    /// Our own notify, track and ignore lists, as our fingers last showed them.
+    pub notify: Vec<String>,
+    pub track: Vec<String>,
+    pub ignore: Vec<String>,
+    pub notices: Vec<Notice>,
+    pub notices_seen: u64,
     pub stored: Vec<StoredView>,
     pub history: HashMap<String, Vec<HistoryRow>>,
     pub chat: VecDeque<ChatMsg>,
@@ -1647,6 +1674,7 @@ fn greet(ctx: &mut Ctx, w: &mut Wire, login: &str, send: &mut impl FnMut(String)
     }
     let open = ctx.snap.lock().unwrap().open;
     say(ctx, send, format!("tell /os open {}", u8::from(open)));
+    ask_finger(&mut w.pending, login, |c| say(ctx, send, c));
     ask_who(&mut w.pending, |c| say(ctx, send, c));
     for t in ["8", "8r"] {
         query(
@@ -1690,6 +1718,13 @@ fn dispatch_line(
         }
         ctx.snap.lock().unwrap().passw = format!("{id}|{}", if done { "ok" } else { "bad" });
         ctx.dirty = true;
+    }
+
+    if let Some((on, name)) = presence_line(ln) {
+        if ctx.snap.lock().unwrap().notify.iter().any(|n| n == name) {
+            let kind = if on { "login" } else { "logout" };
+            push_notice(ctx, name, kind, "", "", None);
+        }
     }
 
     if !w.td_block.is_empty() {
@@ -2091,6 +2126,24 @@ fn handle_cmd(
         }
         Cmd::SetLogChannel(_) => {}
         Cmd::ListStored => query(pending, "stored_list", "tell /os stored", send),
+        Cmd::SetList { list, name, on } => {
+            let sign = if on { '+' } else { '-' };
+            let cmds: &[&str] = match list.as_str() {
+                "notify" => &["notify", "tell /os notify"],
+                "track" => &["tell /os track"],
+                "ignore" => &["ignore", "tell /os ignore"],
+                _ => &[],
+            };
+            for c in cmds {
+                send(format!("{c} {sign} {name}"));
+            }
+            ask_finger(pending, login, send);
+        }
+        Cmd::NoticesSeen(seq) => {
+            let mut s = ctx.snap.lock().unwrap();
+            s.notices_seen = s.notices_seen.max(seq);
+            ctx.dirty = true;
+        }
         Cmd::SetInfo(text) => {
             send(format!("info {text}"));
             ask_finger(pending, login, send);
@@ -2214,6 +2267,9 @@ fn handle_os_line(
                     }
                 }
                 let mine = mrest.contains(login);
+                if !mine {
+                    notice_match(ctx, mrest, true);
+                }
                 if mine {
                     ctx.notify(&crate::i18n::t("backend.notify.game_start_title"), mrest);
                 }
@@ -2275,6 +2331,9 @@ fn handle_os_line(
         let rest = rest.trim_start();
         if let Some(mrest) = rest.strip_prefix("match ") {
             let was_mine = mrest.contains(login);
+            if !was_mine {
+                notice_match(ctx, mrest, false);
+            }
             if was_mine {
                 let id = mrest.split_whitespace().next().unwrap_or("");
                 let mut s = ctx.snap.lock().unwrap();
@@ -2474,6 +2533,60 @@ fn ggs_err_notice(msg: &str) -> String {
         _ => return format!("err.ggs_refused|msg={}", msg.replace('|', "/")),
     };
     format!("err.ggs.{key}")
+}
+
+/// `: + bob 1` / `: - bob 1`: someone on our server notify list logged in or out (the last field is their level).
+fn presence_line(ln: &str) -> Option<(bool, &str)> {
+    let mut t = ln.strip_prefix(": ")?.split_whitespace();
+    let on = match t.next()? {
+        "+" => true,
+        "-" => false,
+        _ => return None,
+    };
+    let name = t.next()?;
+    t.next()?.parse::<u32>().ok()?;
+    t.next().is_none().then_some((on, name))
+}
+
+const NOTICES_KEPT: usize = 200;
+
+fn push_notice(ctx: &mut Ctx, name: &str, kind: &str, opp: &str, id: &str, diff: Option<f64>) {
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    let mut s = ctx.snap.lock().unwrap();
+    let seq = s.notices.last().map_or(s.notices_seen, |n| n.seq) + 1;
+    s.notices.push(Notice {
+        seq,
+        at,
+        name: name.to_string(),
+        kind: kind.to_string(),
+        opp: opp.to_string(),
+        id: id.to_string(),
+        diff,
+    });
+    let over = s.notices.len().saturating_sub(NOTICES_KEPT);
+    s.notices.drain(..over);
+    drop(s);
+    ctx.dirty = true;
+}
+
+/// A game of someone on our notify list started or ended (`/os: + match` / `/os: - match`).
+fn notice_match(ctx: &mut Ctx, mrest: &str, start: bool) {
+    let (names, _, _) = match_line_parts(mrest);
+    let id = mrest.split_whitespace().next().unwrap_or("").to_string();
+    // The end line's disc diff is from the first player's side.
+    let diff = (!start)
+        .then(|| mrest.split_whitespace().last()?.parse::<f64>().ok())
+        .flatten();
+    let listed: Vec<String> = ctx.snap.lock().unwrap().notify.clone();
+    for (i, n) in names.iter().enumerate() {
+        if listed.iter().any(|l| l == n) {
+            let opp = names.get(1 - i.min(1)).cloned().unwrap_or_default();
+            let d = diff.map(|d| if i == 0 { d } else { -d });
+            push_notice(ctx, n, if start { "start" } else { "end" }, &opp, &id, d);
+        }
+    }
 }
 
 const PASSW_DONE: &str = "kuroobi-passw-done";
@@ -3722,6 +3835,16 @@ fn watch_notice(ln: &str) -> Option<(bool, &str, &str)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn presence_line_reads_only_log_in_and_out() {
+        use super::presence_line;
+        assert_eq!(presence_line(": + bob 1"), Some((true, "bob")));
+        assert_eq!(presence_line(": - bob 1"), Some((false, "bob")));
+        assert_eq!(presence_line(": - bob"), None);
+        assert_eq!(presence_line(": + bob _client"), None);
+        assert_eq!(presence_line(": + bob .chat"), None);
+    }
+
     #[test]
     fn passw_outcome_reads_refusal_and_echo() {
         use super::passw_outcome;

@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react';
 import { ggsApi } from '../api';
-import type { GgsSnapshot, UserRow } from '../types';
+import type { GgsSnapshot, Notice, UserRow } from '../types';
 import { discDiff, fingerGroups, fingerKey, fingerValue, gtypeLabel, onlineRows, parseCond, presence } from '../ggs';
 import { t } from '../i18n';
 import { Caption, Drawer, Section, Toolbar } from '../components/layout';
-import { Button, Segmented, Select, TextField } from '../components/primitives';
+import { Badge, Button, Dot, Segmented, Select, TextField, Toggle } from '../components/primitives';
 import { FormulaView, Tag, type NavId } from '../components/ggs';
 import { RateChart, ResultHead, ResultRow } from '../components/data';
 import { askSheet } from '../AskSheet';
 import { openChat } from './Chat';
 import { act, Blank, Cell, HeadRow, Line, ListHead, ListNote, Page, RankRates, rateLabel, Rows, Sections, Table } from '../ggsui';
 import { secsOfText, whenFull, whenShort } from '../when';
+import { unreadNotices } from '../adapt';
 
 const fmt = (r: number | null, d: number | null) =>
   r == null ? '—' : `${r.toFixed(1)}${d != null ? ` ±${Math.round(d)}` : ''}`;
@@ -29,7 +30,7 @@ export function Players({ snap, onNav, onKifu }: {
   snap: GgsSnapshot; onNav: (id: NavId) => void;
   onKifu: (title: string, kifu: string, archive?: string) => void;
 }) {
-  const [mode, setMode] = useState<'who' | 'top'>('who');
+  const [mode, setMode] = useState<'who' | 'top' | 'notices'>('who');
   const [pool, setPool] = useState<'8r' | '8'>('8r');
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
@@ -44,7 +45,12 @@ export function Players({ snap, onNav, onKifu }: {
 
   const all = mode === 'who'
     ? [...onlineRows(snap)].sort((a, b) => (b.rating_r ?? -1) - (a.rating_r ?? -1))
-    : snap.ranking;
+    : mode === 'top' ? snap.ranking : [];
+  const unread = unreadNotices(snap);
+  const lastSeq = snap.notices.at(-1)?.seq ?? 0;
+  useEffect(() => {
+    if (mode === 'notices' && lastSeq > snap.notices_seen) void ggsApi.noticesSeen(lastSeq).catch(() => {});
+  }, [mode, lastSeq, snap.notices_seen]);
   const rows = all.filter((u) => !query || u.name.toLowerCase().includes(query.toLowerCase()));
   const pages = Math.max(1, Math.ceil(rows.length / perPage));
   const cur = Math.min(page, pages - 1);
@@ -52,7 +58,7 @@ export function Players({ snap, onNav, onKifu }: {
 
   return (
     <>
-      <Toolbar end={<>
+      <Toolbar end={mode !== 'notices' && <>
                  <Button disabled={cur === 0} onClick={() => setPage(cur - 1)}>{t('ggs.prev')}</Button>
                  <span style={{ fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>
                    {rows.length ? `${cur + 1} / ${pages}` : '0 / 0'}
@@ -65,19 +71,23 @@ export function Players({ snap, onNav, onKifu }: {
         <TextField value={query} onChange={(v) => { setQuery(v); setPage(0); }} placeholder={t('players.search')} width={180} />
         <Segmented value={mode} onChange={(m) => {
           setMode(m); setPage(0);
-          if (m === 'who') act(ggsApi.who()); else act(ggsApi.top(pool, 100));
-        }} options={[{ value: 'who', label: t('ggs.users.online') }, { value: 'top', label: t('ggs.users.top') }]} />
+          if (m === 'who') act(ggsApi.who()); else if (m === 'top') act(ggsApi.top(pool, 100));
+        }} options={[{ value: 'who', label: t('ggs.users.online') }, { value: 'top', label: t('ggs.users.top') },
+                     { value: 'notices', label: <>{t('players.notices')}{unread > 0 && mode !== 'notices' && <Badge>{unread}</Badge>}</> }]} />
         {mode === 'top' && (
           <Segmented value={pool} onChange={(p) => { setPool(p); act(ggsApi.top(p, 100)); }}
                      options={[{ value: '8r', label: t('ggs.pool.random') }, { value: '8', label: t('ggs.pool.normal') }]} />
         )}
         <Button variant="ghost" onClick={() => {
-          if (mode === 'who') act(ggsApi.who()); else act(ggsApi.top(pool, 100));
+          if (mode === 'who') act(ggsApi.who()); else if (mode === 'top') act(ggsApi.top(pool, 100));
           for (const p of ['8r', '8']) act(ggsApi.rank(p, snap.login));
         }}>{t('ggs.refresh')}</Button>
       </Toolbar>
       <Page row>
         <Sections>
+          {mode === 'notices'
+            ? <NoticeList snap={snap} onPick={setSel} onNav={onNav} />
+            : <>
           <Section title={t('ggs.users.rating_of', { name: snap.login })}>
             {!snap.my_ranks.length && <ListNote>{t('ggs.no_records')}</ListNote>}
             <RankRates ranks={snap.my_ranks} />
@@ -102,6 +112,7 @@ export function Players({ snap, onNav, onKifu }: {
                   </Rows>}
             </Table>
           </Section>
+            </>}
         </Sections>
         {sel && (
           <Drawer label={t('players.detail')} onClose={() => setSel(null)}
@@ -115,6 +126,80 @@ export function Players({ snap, onNav, onKifu }: {
         )}
       </Page>
     </>
+  );
+}
+
+const LISTS = ['notify', 'track', 'ignore'] as const;
+type ListKind = typeof LISTS[number];
+const listLabel = (l: ListKind) => t(`players.list_${l}`);
+const onList = (snap: GgsSnapshot, l: ListKind, name: string) => snap[l].includes(name);
+
+/** The lists a player is on, beside their name. */
+function ListTags({ snap, name }: { snap: GgsSnapshot; name: string }) {
+  return <>{LISTS.filter((l) => onList(snap, l, name)).map((l) => (
+    <Tag key={l} tone={l === 'ignore' ? 'bad' : 'sub'}>{listLabel(l)}</Tag>
+  ))}</>;
+}
+
+/** Switches for the notify, track (watch automatically) and ignore lists. */
+function ListSwitches({ snap, name }: { snap: GgsSnapshot; name: string }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', borderTop: '1px solid var(--border-weak)' }}>
+      {LISTS.map((l) => (
+        <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: 'var(--h-field)',
+                              borderBottom: '1px solid var(--border-weak)', fontSize: 'var(--fs-5)' }}>
+          <span style={{ flex: 1, minWidth: 0 }}>{listLabel(l)}</span>
+          <Toggle checked={onList(snap, l, name)} onChange={(on) => act(ggsApi.setList(l, name, on))} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function resultText(d: number): string {
+  const n = Math.abs(Math.round(d * 10) / 10);
+  return d > 0 ? t('players.result_win', { d: `+${n}` }) : d < 0 ? t('players.result_loss', { d: `−${n}` }) : t('players.result_draw');
+}
+
+function noticeText(n: Notice): string {
+  switch (n.kind) {
+    case 'login': return t('players.notice_login');
+    case 'logout': return t('players.notice_logout');
+    case 'start': return t('players.notice_start', { opp: n.opp });
+    case 'end': return n.diff == null ? t('players.notice_end', { opp: n.opp })
+      : t('players.notice_end_diff', { opp: n.opp, result: resultText(n.diff) });
+  }
+}
+
+/** What the players on the notify list did, newest first; unread ones carry a dot. */
+function NoticeList({ snap, onPick, onNav }: { snap: GgsSnapshot; onPick: (name: string) => void; onNav: (id: NavId) => void }) {
+  // Read marks move only when this view opens, so the dots of this visit stay until it is left.
+  const [seen] = useState(snap.notices_seen);
+  const rows = [...snap.notices].reverse();
+  return (
+    <Section title={t('players.notices')} aside={t('players.notice_count', { n: rows.length })} grow>
+      {!rows.length
+        ? <Blank title={t('players.notices_none')} body={t('players.notices_none_help')} />
+        : <Rows>
+            {rows.map((n) => {
+              const live = n.kind === 'start' && snap.ongoing.some((o) => o.id === n.id);
+              const unread = n.seq > seen;
+              return (
+                <Line key={n.seq} onClick={() => onPick(n.name)}>
+                  <span style={{ width: 6, flex: 'none', display: 'flex' }}>{unread && <Dot />}</span>
+                  <Cell w={40} sub>{whenShort(Math.floor(n.at / 1000))}</Cell>
+                  <Cell w={120} bold={unread} sel>{n.name}</Cell>
+                  <Cell sub={n.kind === 'logout'}>{noticeText(n)}</Cell>
+                  {live && (
+                    <Button size="row" variant="ghost" onClick={() => { act(ggsApi.watch(n.id, true)); onNav('ggs-play'); }}>
+                      {t('players.watch')}
+                    </Button>
+                  )}
+                </Line>
+              );
+            })}
+          </Rows>}
+    </Section>
   );
 }
 
@@ -150,7 +235,10 @@ function PlayerLine({ snap, u, mode, rank, picked, onPick }: {
     return (
       <Line onClick={onPick} picked={picked}>
         <Cell w={40} align="right"><b style={{ color: rank === 1 ? 'var(--gold)' : 'var(--sub)' }}>{rank}</b></Cell>
-        <Cell bold={me} sel>{u.name}</Cell>
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-0)', overflow: 'hidden' }}>
+          <span className="k-sel" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: me ? 600 : undefined }}>{u.name}</span>
+          <ListTags snap={snap} name={u.name} />
+        </span>
         <Cell w={112} align="right">{fmt(u.rating, u.dev)}</Cell>
         {stateCell}
       </Line>
@@ -158,7 +246,10 @@ function PlayerLine({ snap, u, mode, rank, picked, onPick }: {
   }
   return (
     <Line onClick={onPick} picked={picked}>
-      <Cell bold={me} sel>{u.name}</Cell>
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-0)', overflow: 'hidden' }}>
+        <span className="k-sel" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: me ? 600 : undefined }}>{u.name}</span>
+        <ListTags snap={snap} name={u.name} />
+      </span>
       <Cell w={112} align="right">{fmt(u.rating_r, u.dev_r)}</Cell>
       <Cell w={112} align="right" sub>{fmt(u.rating, u.dev)}</Cell>
       <Cell w={72} align="right">
@@ -283,6 +374,7 @@ function PlayerDetail({ snap, name, tab, onNav, onKifu }: {
             <Button onClick={() => { openChat(name); onNav('ggs-chat'); }}>{t('ggs.nav.chat')}</Button>
           </div>
         )}
+        {name !== snap.login && <ListSwitches snap={snap} name={name} />}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', borderTop: '1px solid var(--border-weak)', paddingTop: 'var(--sp-3)' }}>
           <div style={{ display: 'flex', alignItems: 'center', height: 'var(--h-ctrl)', whiteSpace: 'nowrap' }}>
             <Caption>{t('players.rate_trend')}</Caption>

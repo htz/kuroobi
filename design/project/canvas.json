@@ -883,6 +883,24 @@
    "x": 14960,
    "y": 0,
    "page": "settings"
+  },
+  "PlayersNotices.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Players · Notices",
+   "w": 1280,
+   "x": 8160,
+   "y": 0,
+   "page": "players"
+  },
+  "ChatIgnored.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Chat · Ignoring a player",
+   "w": 1280,
+   "x": 2720,
+   "y": 0,
+   "page": "chat"
   }
  },
  "createdOnFiles": {
@@ -932,7 +950,7 @@
    "y": 0,
    "w": 520,
    "size": "s",
-   "text": "Players use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-People-1 See your own rating\n• GGS-People-2 Find an opponent\n• GGS-People-3 Look up an opponent\n• GGS-People-4 Ask for a game or talk to them\n• GGS-People-5 See the game record of a game in the history",
+   "text": "Players use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-People-1 See your own rating\n• GGS-People-2 Find an opponent\n• GGS-People-3 Look up an opponent\n• GGS-People-4 Ask for a game or talk to them\n• GGS-People-5 See the game record of a game in the history\n• GGS-People-6 Keep track of chosen players: notices when they log in or out and when their games start or end (in the app only, no desktop notifications; an unread count on the Players menu), watch their games automatically, or ignore them; switched in the details (ignore also in a chat with them), shown as Tags in the list",
    "page": "players"
   },
   "uc-results-0": {
@@ -1099,7 +1117,7 @@
    "y": -260,
    "w": 240,
    "page": "players",
-   "maxW": 8080,
+   "maxW": 9440,
    "text": "Players"
   },
   "title-results": {
@@ -1246,7 +1264,9 @@
   "SettingsAi.dc.html",
   "SettingsAiClosed.dc.html",
   "SettingsPassword.dc.html",
-  "SettingsMe.dc.html"
+  "SettingsMe.dc.html",
+  "PlayersNotices.dc.html",
+  "ChatIgnored.dc.html"
  ],
  "pages": [
   {

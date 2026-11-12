@@ -83,6 +83,16 @@ interface Offer {
   since_ms: number;
 }
 
+export interface Notice {
+  seq: number;
+  at: number;
+  name: string;
+  kind: 'login' | 'logout' | 'start' | 'end';
+  opp: string;
+  id: string;
+  diff: number | null;
+}
+
 interface OngoingView {
   id: string;
   watching: boolean;
@@ -254,6 +264,11 @@ export interface GgsSnapshot {
   /** The server refused our last aform/dform: "dform|O2.e{REAL}!={INT}", else empty. */
   formula_refused: string;
   passw: string;
+  notify: string[];
+  track: string[];
+  ignore: string[];
+  notices: Notice[];
+  notices_seen: number;
   stored: StoredView[];
   history: Record<string, HistoryRow[]>;
   chat: ChatMsg[];

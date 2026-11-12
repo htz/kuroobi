@@ -6,7 +6,7 @@ import { t, dateLocale, useLang } from '../i18n';
 import { Caption, ListRow, popoverStyle, Toolbar, TwoLines, useDismiss } from '../components/layout';
 import { Badge, Button, TextField } from '../components/primitives';
 import { Bubble, DayMark, Tag } from '../components/ggs';
-import { Blank, ListPane, Page, reportGgsFailure, ListNote } from '../ggsui';
+import { act, Blank, ListPane, Page, reportGgsFailure, ListNote } from '../ggsui';
 import { clock, whenChat } from '../when';
 
 let wanted = '';
@@ -114,7 +114,12 @@ export function Chat({ snap }: { snap: GgsSnapshot }) {
 
   return (
     <>
-      <Toolbar>
+      <Toolbar end={!cur.startsWith('.') && <>
+        {snap.ignore.includes(cur) && <Tag tone="bad">{t('ggs.chat.ignoring')}</Tag>}
+        <Button variant="ghost" onClick={() => act(ggsApi.setList('ignore', cur, !snap.ignore.includes(cur)))}>
+          {snap.ignore.includes(cur) ? t('ggs.chat.unignore') : t('ggs.chat.ignore')}
+        </Button>
+      </>}>
         <b style={{ fontSize: 'var(--fs-3)', fontWeight: 600, whiteSpace: 'nowrap' }}>{title(cur)}</b>
         <Tag tone="sub">{cur === '.chat' ? t('ggs.chat.to_everyone') : t('ggs.chat.to_person')}</Tag>
       </Toolbar>

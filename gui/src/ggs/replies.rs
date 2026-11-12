@@ -385,6 +385,39 @@ fn capture_finger(ctx: &mut Ctx, buf: &[String], name: &str) {
     ctx.dirty = true;
 }
 
+fn refresh_lists(ctx: &mut Ctx, name: &str, login: &str) {
+    if name != login {
+        return;
+    }
+    let mut s = ctx.snap.lock().unwrap();
+    let fields = s
+        .fingers
+        .get(login)
+        .map(|f| f.fields.clone())
+        .unwrap_or_default();
+    (s.notify, s.track, s.ignore) = own_lists(&fields);
+    drop(s);
+    ctx.dirty = true;
+}
+
+/// Our notify, track and ignore lists from our two fingers: `notify(-)` (server) and
+/// `notify (+)` (/os) both count; `*` (everyone) and the `(n)` counts are dropped.
+pub(super) fn own_lists(fields: &[(String, String)]) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let names = |list: &str| {
+        let mut v: Vec<String> = fields
+            .iter()
+            .filter(|(k, _)| k.split(['(', ' ']).next() == Some(list))
+            .flat_map(|(_, val)| val.split_whitespace())
+            .map(|n| n.split('(').next().unwrap_or("").to_string())
+            .filter(|n| !n.is_empty() && n != "*")
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    (names("notify"), names("track"), names("ignore"))
+}
+
 /// The answer to `watch .7 .9`: `/os: watch 2`, then `|.7        2 : root tdir` per match.
 pub(super) fn watch_list(buf: &[String]) -> Vec<(String, Vec<String>)> {
     buf.iter()
@@ -476,13 +509,31 @@ pub(super) fn finish_capture(ctx: &mut Ctx, kind: &str, buf: &[String], login: &
         capture_rank(ctx, buf, login, rest);
     } else if let Some(name) = kind.strip_prefix("osfinger:") {
         capture_osfinger(ctx, buf, name);
+        refresh_lists(ctx, name, login);
     } else if let Some(name) = kind.strip_prefix("finger:") {
         capture_finger(ctx, buf, name);
+        refresh_lists(ctx, name, login);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn own_lists_merge_server_and_os() {
+        let f = |k: &str, v: &str| (k.to_string(), v.to_string());
+        let fields = vec![
+            f("notify(-)", "bob"),
+            f("ignore(-)", "mosquito"),
+            f("notify (+)", "* bob saio"),
+            f("track  (-)", "bob"),
+            f("ignore (-)", ""),
+        ];
+        let (n, t, i) = super::own_lists(&fields);
+        assert_eq!(n, ["bob", "saio"]);
+        assert_eq!(t, ["bob"]);
+        assert_eq!(i, ["mosquito"]);
+    }
+
     use super::*;
 
     #[test]

@@ -2038,6 +2038,22 @@ fn ggs_set_formula(app: State<App>, kind: String, expr: String) -> Result<(), St
 }
 
 #[tauri::command]
+fn ggs_set_list(app: State<App>, list: String, name: String, on: bool) -> Result<(), String> {
+    if !["notify", "track", "ignore"].contains(&list.as_str()) {
+        return Err(format!("err.bad_list|list={list}"));
+    }
+    if name.is_empty() || name.chars().any(char::is_whitespace) {
+        return Err("err.bad_name".into());
+    }
+    ggs_send(&app, ggs::Cmd::SetList { list, name, on })
+}
+
+#[tauri::command]
+fn ggs_notices_seen(app: State<App>, seq: u64) -> Result<(), String> {
+    ggs_send(&app, ggs::Cmd::NoticesSeen(seq))
+}
+
+#[tauri::command]
 fn ggs_set_info(app: State<App>, text: String) -> Result<(), String> {
     if text.contains(['\n', '\r']) || text.len() > 1024 {
         return Err("err.info_invalid".into());
@@ -2355,6 +2371,8 @@ fn main() {
             ggs_accounts,
             ggs_connect_saved,
             ggs_set_info,
+            ggs_set_list,
+            ggs_notices_seen,
             ggs_change_password,
             ggs_forget_account,
             ggs_servers,

@@ -153,6 +153,8 @@ export const ggsApi = {
   decline: (id: string) => call('ggs_decline', { id }),
   finger: (name: string) => call('ggs_finger', { name }),
   setInfo: (text: string) => call('ggs_set_info', { text }),
+  setList: (list: 'notify' | 'track' | 'ignore', name: string, on: boolean) => call('ggs_set_list', { list, name, on }),
+  noticesSeen: (seq: number) => call('ggs_notices_seen', { seq }),
   changePassword: (old: string, next: string, id: number) => call('ggs_change_password', { old, new: next, id }),
   /** Why the opponent's decline formula turns this request away, laid out; null when it does not (or not known yet). */
   unfit: (gtype: string, time: string, opponent: string, rated: boolean) =>

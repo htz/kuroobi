@@ -81,6 +81,7 @@ const PASS: &[(&str, &str, &[&str], &str)] = &[
     ("ggs__set_watch_analysis", "ggs_set_watch_analysis", &["on:b"], "Whether watched games are analysed."),
     ("ggs__set_log_channel", "ggs_set_log_channel", &["channel:s"], "The channel the search log is told to (empty: none)."),
     ("ggs__set_learn", "ggs_set_learn", &["on:b"], "Whether finished GGS games are learned into the book."),
+    ("ggs__set_list", "ggs_set_list", &["list:s", "name:s", "on:b"], "Put a player on or off a list: notify (log-ins and games, shown in ggs__state notices), track (watch their games automatically) or ignore (their chat and requests stop)."),
     ("game__state", "state", &[], "The local board: position, moves, whose turn, result."),
     ("game__new", "new_game", &[], "Start a new local game."),
     ("game__undo", "undo", &[], "Take back a move."),
