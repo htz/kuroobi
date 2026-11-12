@@ -61,6 +61,7 @@ const PASS: &[(&str, &str, &[&str], &str)] = &[
     ("ggs__accept", "ggs_accept", &["id:s"], "Accept a match request (the id from ggs__state offers)."),
     ("ggs__decline", "ggs_decline", &["id:s"], "Decline a match request."),
     ("ggs__accept_requests", "ggs_set_open", &["on:b"], "Whether others may send match requests."),
+    ("ggs__open_requests", "ggs_set_open_requests", &["on:b"], "Whether requests addressed to anyone reach us (listed as open offers in ggs__state)."),
     ("ggs__set_formula", "ggs_set_formula", &["kind:s", "expr:s"], "The conditions for automatically accepting (kind aform) or declining (kind dform) requests."),
     ("ggs__matches", "ggs_list_matches", &[], "Ask for the matches in progress on the server (they appear in ggs__state)."),
     ("ggs__match", "ggs_match_cmd", &["id:s", "verb:s", "arg:s"], "A command on one of our matches, e.g. verb resign / adjourn / abort."),

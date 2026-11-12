@@ -280,6 +280,7 @@ export interface GgsSnapshot {
   engine: EngineCfgView;
   auto_play: boolean;
   open: boolean;
+  open_requests: boolean;
   watch_analysis: boolean;
   log_channel: string;
   thinking: string | null;

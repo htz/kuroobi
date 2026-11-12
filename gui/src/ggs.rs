@@ -79,6 +79,7 @@ pub enum Cmd {
     ReloadThreads,
     SetAutoPlay(bool),
     SetOpen(bool),
+    SetOpenRequests(bool),
     SetWatchAnalysis(bool),
     SetLogChannel(String),
     SetUseBook(bool),
@@ -379,6 +380,8 @@ pub struct Snapshot {
     pub auto_play: bool,
     /// The server's `open` flag: whether anyone may send us a request at all.
     pub open: bool,
+    /// The server's `request` flag: whether requests addressed to anyone reach us.
+    pub open_requests: bool,
     pub watch_analysis: bool,
     /// Empty means the search log goes nowhere.
     pub log_channel: String,
@@ -441,6 +444,7 @@ pub fn spawn(
         },
         auto_play: true,
         open: true,
+        open_requests: true,
         watch_analysis: true,
         results: Arc::new(load_history()),
         ..Default::default()
@@ -1329,6 +1333,7 @@ fn set_pref(ctx: &mut Ctx, cmd: &Cmd) -> bool {
     match *cmd {
         Cmd::SetAutoPlay(b) => ctx.snap.lock().unwrap().auto_play = b,
         Cmd::SetOpen(b) => ctx.snap.lock().unwrap().open = b,
+        Cmd::SetOpenRequests(b) => ctx.snap.lock().unwrap().open_requests = b,
         Cmd::SetUseBook(b) => ctx.set_use_book(b),
         Cmd::SetWatchAnalysis(b) => ctx.snap.lock().unwrap().watch_analysis = b,
         Cmd::SetLearn(b) => ctx.snap.lock().unwrap().engine.learn = b,
@@ -1672,8 +1677,12 @@ fn greet(ctx: &mut Ctx, w: &mut Wire, login: &str, send: &mut impl FnMut(String)
     if !chan.is_empty() {
         say(ctx, send, format!("chann + {chan}"));
     }
-    let open = ctx.snap.lock().unwrap().open;
+    let (open, open_requests) = {
+        let s = ctx.snap.lock().unwrap();
+        (s.open, s.open_requests)
+    };
     say(ctx, send, format!("tell /os open {}", u8::from(open)));
+    say(ctx, send, request_cmd(open_requests));
     ask_finger(&mut w.pending, login, |c| say(ctx, send, c));
     ask_who(&mut w.pending, |c| say(ctx, send, c));
     for t in ["8", "8r"] {
@@ -2024,7 +2033,12 @@ fn handle_cmd(
             };
             send(cmd)
         }
-        Cmd::Accept(id) => send(format!("tell /os accept {id}")),
+        Cmd::Accept(id) => {
+            send(format!("tell /os accept {id}"));
+            // The server tells everyone else that a request to anyone is gone, but not the one who took it.
+            ctx.snap.lock().unwrap().offers.retain(|o| o.id != id);
+            ctx.dirty = true;
+        }
         Cmd::Decline(id) => send(format!("tell /os decline {id}")),
         Cmd::Finger(name) => ask_finger(pending, &name, send),
         Cmd::Who => ask_who(pending, send),
@@ -2102,12 +2116,20 @@ fn handle_cmd(
         }
         Cmd::SetAutoPlay(_)
         | Cmd::SetOpen(_)
+        | Cmd::SetOpenRequests(_)
         | Cmd::SetUseBook(_)
         | Cmd::SetWatchAnalysis(_)
         | Cmd::SetLearn(_) => {
             set_pref(ctx, &cmd);
             if let Cmd::SetOpen(b) = cmd {
                 send(format!("tell /os open {}", u8::from(b)));
+            }
+            if let Cmd::SetOpenRequests(b) = cmd {
+                send(request_cmd(b).to_string());
+                if !b {
+                    let mut s = ctx.snap.lock().unwrap();
+                    s.offers.retain(|o| !is_open_request(o, login));
+                }
             }
             ctx.dirty = true;
         }
@@ -2496,6 +2518,19 @@ fn stop_auto_match_unfit(ctx: &mut Ctx, why: Option<&formula::Outline>) -> bool 
 }
 
 /// Our own request to `opp` (not one sent to us, nor one to anybody).
+fn request_cmd(on: bool) -> &'static str {
+    if on {
+        "tell /os request +"
+    } else {
+        "tell /os request -"
+    }
+}
+
+/// Someone else's request to anyone (`/os: +  .28 2003.8 bob 01:00//02:00 8 U *  *`).
+fn is_open_request(o: &Offer, login: &str) -> bool {
+    !o.incoming && o.names.len() == 1 && o.names[0] != login
+}
+
 fn ask_to(o: &Offer, login: &str, opp: &str) -> bool {
     !o.incoming
         && o.names.first().is_some_and(|n| n == login)

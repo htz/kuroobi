@@ -886,7 +886,6 @@ learn:
     games: "{n} 局の合計"
     games_hidden: "{n} 局の合計 (他 {hidden} 局)"
 lobby:
-  open_game: "開く"
   cancel: "取り消す"
   closed: "申し込みを受け付けていません"
   count: "{n} 件"
@@ -897,6 +896,9 @@ lobby:
   no_games: "対局している人はいません"
   no_open: "募集はありません"
   nothing: "ありません"
+  open_game: "開く"
+  open_off: "相手を指定しない申し込みを受け取っていません"
+  open_receive: "受け取る"
   open_requests: "募集中"
   player: "対局者"
   todo: "対応待ち"
@@ -1068,6 +1070,8 @@ settings:
     slow: "ゆっくり"
   form:
     aside: "アプリを閉じてもサーバー側で有効"
+    open_requests: "相手を指定しない申し込み"
+    open_requests_show: "ロビーに出す"
   ggs:
     offline: "GGS にログインすると変更できます"
   group:

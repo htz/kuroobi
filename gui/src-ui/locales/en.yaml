@@ -901,7 +901,6 @@ learn:
     games_hidden: "{n} games in total ({hidden} more hidden)"
     games_hidden_one: "{n} game in total ({hidden} more hidden)"
 lobby:
-  open_game: "Open"
   cancel: "Withdraw"
   closed: "Not accepting requests"
   count: "{n}"
@@ -912,6 +911,9 @@ lobby:
   no_games: "No games in progress"
   no_open: "No open requests"
   nothing: "Nothing"
+  open_game: "Open"
+  open_off: "Requests to anyone are not received"
+  open_receive: "Receive"
   open_requests: "Open requests"
   player: "Player"
   todo: "Waiting for you"
@@ -1089,6 +1091,8 @@ settings:
     slow: "Slow"
   form:
     aside: "Kept by the server even when the app is closed"
+    open_requests: "Requests to anyone"
+    open_requests_show: "Show in the Lobby"
   ggs:
     offline: "Log in to GGS to change these"
   group:

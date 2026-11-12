@@ -179,6 +179,7 @@ export const ggsApi = {
   chatSeen: (at: number) => call('ggs_chat_seen', { at }),
   setAutoPlay: (on: boolean) => call('ggs_set_auto_play', { on }),
   setOpen: (on: boolean) => call('ggs_set_open', { on }),
+  setOpenRequests: (on: boolean) => call('ggs_set_open_requests', { on }),
   setWatchAnalysis: (on: boolean) => call('ggs_set_watch_analysis', { on }),
   setLogChannel: (channel: string) => call('ggs_set_log_channel', { channel }),
   setUseBook: (on: boolean) => call('ggs_set_use_book', { on }),

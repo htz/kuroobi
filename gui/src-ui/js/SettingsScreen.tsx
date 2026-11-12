@@ -570,6 +570,7 @@ function GgsFormSettings({ snap }: { snap: GgsSnapshot }) {
   const done = !!pending && !refused && flat(now) === flat(pending.expr);
   useEffect(() => { if (done) markApplied(); }, [done]);
   return (
+    <>
     <SettingGroup title={t('settings.cat.form')} aside={t('settings.form.aside')}>
       {(refused || err) && (
         <span style={{ fontSize: 'var(--fs-6)', color: 'var(--bad)' }}>
@@ -583,5 +584,12 @@ function GgsFormSettings({ snap }: { snap: GgsSnapshot }) {
                     preset={{ src: DEFAULT_DECLINE, label: t('ggs.settings.default_decline'),
                               note: t('ggs.settings.default_decline_note') }} />
     </SettingGroup>
+    <SettingGroup title={t('settings.form.open_requests')}>
+      <SettingRow label={t('settings.form.open_requests_show')}>
+        <SettingToggle checked={snap.open_requests}
+                       onChange={(on) => void ggsApi.setOpenRequests(on).then(markApplied)} />
+      </SettingRow>
+    </SettingGroup>
+    </>
   );
 }

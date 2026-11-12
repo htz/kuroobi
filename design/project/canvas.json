@@ -901,6 +901,15 @@
    "x": 2720,
    "y": 0,
    "page": "chat"
+  },
+  "MainOpenOff.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Lobby · Not receiving open requests",
+   "w": 1280,
+   "x": 5440,
+   "y": 0,
+   "page": "lobby"
   }
  },
  "createdOnFiles": {
@@ -926,7 +935,7 @@
    "y": 0,
    "w": 520,
    "size": "s",
-   "text": "Lobby use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Lobby-1 Answer a request that arrived\n• GGS-Lobby-2 Resume an adjourned game\n• GGS-Lobby-3 Withdraw a request sent\n• GGS-Lobby-4 Start watching\n• GGS-Lobby-5 Accept an open request\n• GGS-Lobby-6 Ask for a game\n• GGS-Lobby-7 Switch accepting requests on and off",
+   "text": "Lobby use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Lobby-1 Answer a request that arrived\n• GGS-Lobby-2 Resume an adjourned game\n• GGS-Lobby-3 Withdraw a request sent\n• GGS-Lobby-4 Start watching\n• GGS-Lobby-5 Accept an open request\n• GGS-Lobby-6 Ask for a game\n• GGS-Lobby-7 Switch accepting requests on and off\n• GGS-Lobby-8 Choose whether requests addressed to anyone are received (Settings > GGS > Request rules, or \"Receive\" in Open requests)",
    "page": "lobby"
   },
   "uc-lobby-920": {
@@ -934,7 +943,7 @@
    "y": 920,
    "w": 520,
    "size": "s",
-   "text": "Request sheet use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Ask-1 Ask for one game\n• GGS-Ask-2 Start auto match\n• GGS-Ask-3 Change or stop the auto match conditions",
+   "text": "Request sheet use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Ask-1 Ask for one game\n• GGS-Ask-2 Start auto match\n• GGS-Ask-3 Change or stop the auto match conditions\n• GGS-Lobby-8 Choose whether requests addressed to anyone are received (Settings > GGS > Request rules, or \"Receive\" in Open requests)",
    "page": "lobby"
   },
   "uc-watch-0": {
@@ -1266,7 +1275,8 @@
   "SettingsPassword.dc.html",
   "SettingsMe.dc.html",
   "PlayersNotices.dc.html",
-  "ChatIgnored.dc.html"
+  "ChatIgnored.dc.html",
+  "MainOpenOff.dc.html"
  ],
  "pages": [
   {

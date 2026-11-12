@@ -137,7 +137,15 @@ export function Lobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) =
               </Section>
             </div>
             <div style={{ flex: 2, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-              <Section title={t('lobby.open_requests')} aside={t('lobby.count', { n: open.length })} grow>
+              <Section title={t('lobby.open_requests')} aside={snap.open_requests ? t('lobby.count', { n: open.length }) : <span />} grow>
+                {!snap.open_requests ? (
+                  <div style={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'center', padding: 'var(--sp-5)', textAlign: 'center' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', alignItems: 'center' }}>
+                      <span style={{ fontSize: 'var(--fs-5)', color: 'var(--sub)' }}>{t('lobby.open_off')}</span>
+                      <Button size="row" onClick={() => act(ggsApi.setOpenRequests(true))}>{t('lobby.open_receive')}</Button>
+                    </div>
+                  </div>
+                ) : (
                 <Table>
                   {!open.length && <ListNote>{t('lobby.no_open')}</ListNote>}
                   <Rows>
@@ -157,6 +165,7 @@ export function Lobby({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId) =
                     ))}
                   </Rows>
                 </Table>
+                )}
               </Section>
             </div>
           </div>

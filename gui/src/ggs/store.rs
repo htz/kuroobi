@@ -391,6 +391,7 @@ fn settings_path() -> PathBuf {
 struct SavedSettings {
     auto_play: bool,
     open: bool,
+    open_requests: bool,
     watch_analysis: bool,
     log_channel: String,
     use_book: bool,
@@ -402,6 +403,7 @@ impl Default for SavedSettings {
         SavedSettings {
             auto_play: true,
             open: true,
+            open_requests: true,
             watch_analysis: true,
             log_channel: String::new(),
             use_book: true,
@@ -416,6 +418,7 @@ pub(super) fn save_settings(ctx: &Ctx) {
     let v = SavedSettings {
         auto_play: s.auto_play,
         open: s.open,
+        open_requests: s.open_requests,
         watch_analysis: s.watch_analysis,
         log_channel: s.log_channel.clone(),
         use_book: e.use_book,
@@ -450,6 +453,7 @@ pub(super) fn restore_settings(ctx: &mut Ctx) {
     s.engine.learn = v.learn;
     s.auto_play = v.auto_play;
     s.open = v.open;
+    s.open_requests = v.open_requests;
     s.watch_analysis = v.watch_analysis;
     if valid_log_channel(&v.log_channel) {
         s.log_channel = v.log_channel;

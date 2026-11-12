@@ -102,6 +102,16 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <div style="flex: 2; min-width: 0; display: flex; flex-direction: column">
 <x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="募集中" aside="{{openCount}}" grow="{{yes}}">
 <div style="height: 100%; display: flex; flex-direction: column">
+<!-- Not receiving open requests (Settings > GGS > Request rules): a note and "Receive" in place of the rows -->
+<sc-if value="{{openOff}}" hint-placeholder-val="{{false}}">
+<div style="flex: 1; min-height: 0; display: grid; place-items: center; padding: var(--sp-5); text-align: center">
+<div style="display: flex; flex-direction: column; gap: var(--sp-2); align-items: center">
+<span style="font-size: var(--fs-5); color: var(--sub)">相手を指定しない申し込みを受け取っていません</span>
+<x-import component-from-global-scope="KuroobiUI.Button" size="row">受け取る</x-import>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{openOn}}" hint-placeholder-val="{{true}}">
 <div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
 <sc-for list="{{opens}}" as="p" hint-placeholder-count="3">
 <div class="k-row" style="display: flex; align-items: center; gap: var(--sp-3); height: var(--h-row2); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); white-space: nowrap">
@@ -113,6 +123,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </div>
 </sc-for>
 </div>
+</sc-if>
 </div>
 </x-import>
 </div>
@@ -153,7 +164,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </x-import>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"reconnecting":{"editor":"boolean","default":false},"accepting":{"editor":"boolean","default":true},"accountMenu":{"editor":"boolean","default":false},"$preview":{"width":1280,"height":800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"reconnecting":{"editor":"boolean","default":false},"accepting":{"editor":"boolean","default":true},"accountMenu":{"editor":"boolean","default":false},"receive":{"editor":"boolean","default":true},"$preview":{"width":1280,"height":800}}'>
 class Component extends DCLogic {
   renderVals() {
     const ui = window.KuroobiUI;
@@ -231,7 +242,8 @@ class Component extends DCLogic {
       games,
       gameCount: games.length + ' 局',
       opens,
-      openCount: opens.length + ' 件',
+      openCount: this.props.receive === false ? '' : opens.length + ' 件',
+      openOn: this.props.receive !== false, openOff: this.props.receive === false,
     };
   }
 }

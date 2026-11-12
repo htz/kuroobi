@@ -2106,6 +2106,11 @@ fn ggs_set_open(app: State<App>, on: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn ggs_set_open_requests(app: State<App>, on: bool) -> Result<(), String> {
+    ggs_send(&app, ggs::Cmd::SetOpenRequests(on))
+}
+
+#[tauri::command]
 fn ggs_set_watch_analysis(app: State<App>, on: bool) -> Result<(), String> {
     ggs_send(&app, ggs::Cmd::SetWatchAnalysis(on))
 }
@@ -2404,6 +2409,7 @@ fn main() {
             ggs_chat_seen,
             ggs_set_auto_play,
             ggs_set_open,
+            ggs_set_open_requests,
             ggs_set_watch_analysis,
             ggs_set_log_channel,
             ggs_set_use_book,
