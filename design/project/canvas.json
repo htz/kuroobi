@@ -910,6 +910,33 @@
    "x": 5440,
    "y": 0,
    "page": "lobby"
+  },
+  "TourneyCreate.dc.html": {
+   "x": 13600,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Tournaments · Create",
+   "expand": "fill",
+   "page": "tourney"
+  },
+  "TourneyCreateUnregistered.dc.html": {
+   "x": 14960,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Tournaments · Create (unregistered account: cannot join it)",
+   "expand": "fill",
+   "page": "tourney"
+  },
+  "TourneyCreateRefused.dc.html": {
+   "x": 16320,
+   "y": 0,
+   "w": 1280,
+   "h": 800,
+   "title": "Tournaments · Create (refused by the director program)",
+   "expand": "fill",
+   "page": "tourney"
   }
  },
  "createdOnFiles": {
@@ -983,7 +1010,7 @@
    "y": 0,
    "w": 520,
    "size": "s",
-   "text": "Tournaments use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Tourney-1 Find a tournament\n• GGS-Tourney-2 Join or withdraw\n• GGS-Tourney-3 See the progress, standings and crosstable\n• GGS-Tourney-4 Open the board of your own game\n• GGS-Tourney-5 Check or change the auto match",
+   "text": "Tournaments use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Tourney-1 Find a tournament\n• GGS-Tourney-2 Join or withdraw\n• GGS-Tourney-3 See the progress, standings and crosstable\n• GGS-Tourney-4 Open the board of your own game\n• GGS-Tourney-5 Check or change the auto match\n• GGS-Tourney-6 Create a tournament",
    "page": "tourney"
   },
   "uc-console-0": {
@@ -1153,7 +1180,7 @@
    "y": -260,
    "w": 240,
    "page": "tourney",
-   "maxW": 13520,
+   "maxW": 17600,
    "text": "Tournaments"
   },
   "title-console": {
@@ -1276,7 +1303,10 @@
   "SettingsMe.dc.html",
   "PlayersNotices.dc.html",
   "ChatIgnored.dc.html",
-  "MainOpenOff.dc.html"
+  "MainOpenOff.dc.html",
+  "TourneyCreate.dc.html",
+  "TourneyCreateUnregistered.dc.html",
+  "TourneyCreateRefused.dc.html"
  ],
  "pages": [
   {

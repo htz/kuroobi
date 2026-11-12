@@ -149,6 +149,9 @@ fn tools() -> Vec<Tool> {
         ("ggs__tourney", "One tournament now: state, round, next start, players, rankings and schedule text, and our matches in it with their disc differences.", json!({"id": {"type": "integer"}}), vec!["id"]),
         ("ggs__tourney_join", "Join a tournament (before it starts).", json!({"id": {"type": "integer"}}), vec!["id"]),
         ("ggs__tourney_withdraw", "Withdraw from a tournament (before it starts).", json!({"id": {"type": "integer"}}), vec!["id"]),
+        ("ggs__tourney_create", "Create a tournament on the director (/td); whoever creates it directs it, and everyone is told at once. style r (round robin) or s (Swiss); gtype as in a request (s8r14, 8, ...); clock as GGS writes it (05:00//02:00); rounds 1 or more; start_minutes 1-30.",
+         json!({"style": {"type": "string", "enum": ["r", "s"]}, "gtype": {"type": "string"}, "clock": {"type": "string"}, "rounds": {"type": "integer"}, "start_minutes": {"type": "integer"}}),
+         vec!["style", "gtype", "clock", "rounds", "start_minutes"]),
         ("ggs__results", "Finished games, newest first.", json!({"limit": {"type": "integer", "description": "default 20"}}), vec![]),
         ("game__play", "Play a move on the local board.", json!({"move": {"type": "string", "description": "e.g. f5"}}), vec!["move"]),
         ("game__apply", "Play the engine's move from game__think, or pass when no move is given.", json!({"move": s}), vec![]),
@@ -404,6 +407,27 @@ fn run_tool(name: &str, mut args: Map<String, Value>) -> Result<Value, String> {
         }
         "ggs__tourney_join" => td(i, &format!("join {}", arg(&args, "id")?)),
         "ggs__tourney_withdraw" => td(i, &format!("withdraw {}", arg(&args, "id")?)),
+        "ggs__tourney_create" => {
+            let word = |k: &str| -> Result<String, String> {
+                let v = arg(&args, k)?;
+                let w = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+                if w.is_empty() || w.contains(char::is_whitespace) {
+                    return Err(format!("`{k}` must be one word"));
+                }
+                Ok(w)
+            };
+            td(
+                i,
+                &format!(
+                    "new {} /os {} {} {} {}",
+                    word("style")?,
+                    word("gtype")?,
+                    word("clock")?,
+                    word("rounds")?,
+                    word("start_minutes")?
+                ),
+            )
+        }
         "game__play" => command(i, "play", json!({"sq": square(arg(&args, "move")?)?})),
         "game__apply" => {
             let sq = match args.get("move") {

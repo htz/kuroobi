@@ -8,6 +8,7 @@ import { Button, Dot, Progress, Segmented, TextField } from '../components/primi
 import { Tag, type NavId } from '../components/ggs';
 import { askSheet } from '../AskSheet';
 import { focusGame } from './Lobby';
+import { TourneyCreate } from './TourneyCreate';
 import { act, Band, Blank, Cell, HeadRow, Line, ListHead, ListNote, ListPane, Page, Rows, TitleBit, useNow } from '../ggsui';
 
 const td = (cmd: string) => act(ggsApi.raw(`tell /td ${cmd}`));
@@ -29,12 +30,18 @@ const tdErrors: [RegExp, string][] = [
   [/already in the tournament/, 'ggs.tourney.err.already'],
   [/after tournament starts|tournament is over/, 'ggs.tourney.err.started'],
   [/registered/, 'ggs.tourney.err.unregistered'],
+  [/is closed/, 'ggs.tourney.err.closed'],
 ];
 
 const stateTone = (x: TourneyView): 'accent' | 'ok' | 'sub' =>
   x.state === 'running' ? 'accent' : x.state === 'break' || x.state === 'announced' ? 'ok' : 'sub';
 const beforeStart = (x: TourneyView): boolean => x.state === 'announced' || x.state === '';
 const finished = (x: TourneyView): boolean => x.state === 'over' || x.state === 'cancelled';
+const fingerOf = (x: TourneyView, k: string): string | undefined => parseFinger(x.info).get(k);
+const isSwiss = (x: TourneyView): boolean => (fingerOf(x, 'style') ?? x.desc).includes('swiss');
+/** Swiss pairs round by round, so the director takes entrants until it ends; a round robin only before the start. */
+const canJoin = (x: TourneyView): boolean =>
+  !x.joined && !finished(x) && fingerOf(x, 'joining') !== 'closed' && (beforeStart(x) || isSwiss(x));
 
 type RankRow = { pts: string; w: number; d: number; l: number; disc: string; name: string; tb: string };
 function parseRankings(text: string): RankRow[] {
@@ -79,12 +86,17 @@ export function Tourney({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId)
   // Countdowns are in seconds.
   const now = useNow(true, 1000) / 1000;
   const [sel, setSel] = useState<number | null>(null);
+  const [creating, setCreating] = useState(false);
   useEffect(() => { td('t'); }, []);
   const all = snap.td.tourneys;
   const live = all.filter((x) => !finished(x));
+  // Whether a running tournament still takes entrants is in its finger (style, joining).
+  const unknown = live.filter((y) => !y.info).map((y) => y.id).join(' ');
+  useEffect(() => { for (const id of unknown.split(' ').filter(Boolean)) td(`f ${id}`); }, [unknown]);
   const past = all.filter(finished);
   const x = all.find((y) => y.id === sel) ?? live[0] ?? past[0];
-  const err = snap.td.reply?.err && now - snap.td.reply.at <= 60 ? snap.td.reply : null;
+  // A refused `new` shows in the create dialog instead.
+  const err = snap.td.reply?.err && snap.td.reply.cmd !== 'new' && now - snap.td.reply.at <= 60 ? snap.td.reply : null;
   const errText = err ? (() => { const k = tdErrors.find(([re]) => re.test(err.text))?.[1]; return k ? t(k) : t('ggs.tourney.err.other', { text: err.text }); })() : '';
   const myLive = x ? snap.td.games.find((g) => g.tid === x.id && g.diff == null) : undefined;
 
@@ -99,7 +111,7 @@ export function Tourney({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId)
       <ListRow key={y.id} height="row2" on={on} onClick={() => setSel(y.id)}>
         <TwoLines top={<><b style={{ fontWeight: 600 }}>{t('ggs.tourney.name', { id: y.id })}</b>{y.joined && <Dot tone="gold" />}</>}
                   bottom={sub.filter(Boolean).join(' · ')} />
-        {beforeStart(y) && !y.joined && (
+        {canJoin(y) && (
           <span onClick={(e) => e.stopPropagation()}>
             <Button size="row" variant="primary" onClick={() => td(`join ${y.id}`)}>{t('ggs.tourney.join')}</Button>
           </span>
@@ -113,9 +125,9 @@ export function Tourney({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId)
     <>
       <Toolbar end={<>
         {myLive && <Button variant="primary" onClick={() => { focusGame(myLive.id); onNav('ggs-play'); }}>{t('ggs.tourney.open_game')}</Button>}
-        {x && beforeStart(x) && (x.joined
-          ? <Button onClick={() => td(`withdraw ${x.id}`)}>{t('ggs.tourney.withdraw')}</Button>
-          : <Button variant="primary" onClick={() => td(`join ${x.id}`)}>{t('ggs.tourney.join')}</Button>)}
+        {x && beforeStart(x) && x.joined && <Button onClick={() => td(`withdraw ${x.id}`)}>{t('ggs.tourney.withdraw')}</Button>}
+        {x && canJoin(x) && <Button variant="primary" onClick={() => td(`join ${x.id}`)}>{t('ggs.tourney.join')}</Button>}
+        <Button onClick={() => setCreating(true)}>{t('tourney.create.open')}</Button>
         <Button variant="ghost" onClick={() => { td('t'); if (x) { td(`f ${x.id}`); td(`r ${x.id}`); td(`st ${x.id}`); } }}>{t('ggs.refresh')}</Button>
       </>}>
         {x ? <>
@@ -137,6 +149,10 @@ export function Tourney({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId)
           <TourneyDetail key={x.id} snap={snap} x={x} now={now} errText={errText} />
         )}
       </Page>
+      {creating && (
+        <TourneyCreate snap={snap} onClose={() => setCreating(false)}
+                       onCreated={(id) => { setSel(id); setCreating(false); }} />
+      )}
     </>
   );
 }
@@ -188,10 +204,11 @@ function TourneyDetail({ snap, x, now, errText }: {
 
   const clock = x.clock || info.get('clock') || '';
   const director = x.director || info.get('director') || '';
+  const swiss = isSwiss(x);
   const rules: [string, string][] = [
     [t('ggs.field.format'), type ? gtypeLabel(type) : '—'],
     [t('ggs.field.time_control'), clock ? clock.replace(/\/\//, ' +').replace(/\//g, ' ') : '—'],
-    [t('tourney.pairing'), x.rounds ? t('ggs.tourney.rrobin', { n: x.rounds }) : '—'],
+    [t('tourney.pairing'), x.rounds ? t(swiss ? 'ggs.tourney.swiss' : 'ggs.tourney.rrobin', { n: x.rounds }) : '—'],
     ...(info.get('breaks') ? [[t('tourney.breaks'), info.get('breaks')!.trim()] as [string, string]] : []),
     [t('tourney.entrants'), t('ggs.tourney.players', { n: x.n_players || x.players.length })],
     ...(director ? [[t('tourney.director'), director] as [string, string]] : []),

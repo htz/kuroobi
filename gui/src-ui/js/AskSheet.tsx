@@ -47,7 +47,7 @@ const writeLast = (v: Last) => {
 };
 
 /** A registered account has a name and an email on the server; rated games need one. */
-function registered(snap: GgsSnapshot): boolean {
+export function registered(snap: GgsSnapshot): boolean {
   const f = snap.fingers[snap.login];
   if (!f) return true;
   return f.fields.some(([k, v]) => k.toLowerCase().startsWith('email') && v.trim() !== '' && v.trim() !== '-');

@@ -39,6 +39,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <sc-if value="{{isRunning}}" hint-placeholder-val="{{true}}"><x-import component-from-global-scope="KuroobiUI.Button" variant="primary">盤を開く</x-import></sc-if>
 <sc-if value="{{canJoin}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Button" variant="primary">参加</x-import></sc-if>
 <sc-if value="{{canWithdraw}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Button">辞退</x-import></sc-if>
+<x-import component-from-global-scope="KuroobiUI.Button">大会を作る</x-import>
 <x-import component-from-global-scope="KuroobiUI.Button" variant="ghost">更新</x-import>
 </div>
 </x-import>
@@ -56,6 +57,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </span>
 <span style="font-size: var(--fs-6); color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{x.sub}}</span>
 </div>
+<!-- "Join": before the start, or a Swiss tournament until it ends (it pairs round by round, so a late entrant joins from the next round); not when joining is closed -->
 <sc-if value="{{x.canJoin}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Button" size="row" variant="primary">参加</x-import></sc-if>
 <x-import component-from-global-scope="KuroobiUI.Tag" tone="{{x.tone}}">{{x.state}}</x-import>
 </div>
@@ -226,9 +228,27 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <span>GGS <b style="color: var(--text); font-weight: 600">接続中</b> (alice)</span>
 </div>
 </x-import>
+<!-- Create a tournament: the director is whoever creates it, and GGS announces it to everyone at once. Pairing, format and clock as in a request;
+     rounds 1 or more (a round robin stops once every pair has met twice); start 1–30 min later. "Join it too" sends join right after the reply;
+     an unregistered account cannot join, so the switch is off and dimmed. The director's reply error shows at the bottom left -->
+<sc-if value="{{createDlg}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Overlay" on-close="{{noop}}">
+<x-import component-from-global-scope="KuroobiUI.Modal" title="大会を作る" on-close="{{noop}}" actions="{{createActions}}">
+<x-import component-from-global-scope="KuroobiUI.Field" label="組み方"><x-import component-from-global-scope="KuroobiUI.Segmented" value="r" options="{{styleOpts}}" fill="{{yes}}"></x-import></x-import>
+<x-import component-from-global-scope="KuroobiUI.Field" label="形式"><x-import component-from-global-scope="KuroobiUI.Select" value="s8r14" options="{{gtypes}}"></x-import></x-import>
+<x-import component-from-global-scope="KuroobiUI.Field" label="持ち時間"><x-import component-from-global-scope="KuroobiUI.Select" value="5" options="{{clocks}}"></x-import></x-import>
+<x-import component-from-global-scope="KuroobiUI.Field" label="ラウンド数" help="総当たりは全員と 2 回ずつ当たると終わる"><x-import component-from-global-scope="KuroobiUI.TextField" value="10" numeric="{{yes}}" align="right" width="{{80}}"></x-import></x-import>
+<x-import component-from-global-scope="KuroobiUI.Field" label="開始まで (分)" help="1〜30 分。作るとすぐ全員に告知される"><x-import component-from-global-scope="KuroobiUI.TextField" value="10" numeric="{{yes}}" align="right" width="{{80}}"></x-import></x-import>
+<span style="display: flex; flex-direction: column; gap: var(--sp-1); opacity: {{joinDim}}">
+<span style="display: flex; align-items: center; height: var(--h-ctrl)"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{createJoin}}" label="自分も参加する"></x-import></span>
+<sc-if value="{{createUnreg}}" hint-placeholder-val="{{false}}"><span style="font-size: var(--fs-6); color: var(--sub)">登録されていないアカウントは参加できない</span></sc-if>
+</span>
+</x-import>
+</x-import>
+</sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"stage":{"editor":"select","options":["running","before","joined","finished","filtered","pair","error"],"default":"running"},"view":{"editor":"select","options":["cross","games"],"default":"cross"},"players":{"editor":"select","options":["8","100"],"default":"8"},"$preview":{"width":1280,"height":800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"stage":{"editor":"select","options":["running","before","joined","finished","filtered","pair","error"],"default":"running"},"view":{"editor":"select","options":["cross","games"],"default":"cross"},"players":{"editor":"select","options":["8","100"],"default":"8"},"dialog":{"editor":"select","options":["none","create","create-unregistered","create-refused"],"default":"none"},"$preview":{"width":1280,"height":800}}'>
 class Component extends DCLogic {
   renderVals() {
     const ui = window.KuroobiUI;
@@ -249,7 +269,8 @@ class Component extends DCLogic {
     const groups = [
       { title: '開催中・開催予定', items: [
         { id: 14, name: '大会 14', state: '対局中', tone: 'accent', joined: true, sub: 'ラウンド 37/70 · 8 人' },
-        { id: 13, name: '大会 13', state: '休憩中', tone: 'ok', sub: '次のラウンドまで 1:40 · 8 人' },
+        // Tournament 13 is Swiss: joining stays open until it ends, so "Join" shows after the start too
+        { id: 13, name: '大会 13', state: '休憩中', tone: 'ok', canJoin: true, sub: '次のラウンドまで 1:40 · 24 人' },
         { id: 15, name: '大会 15', state: '開始前', tone: 'ok', canJoin: true, sub: '開始まで 12:30 · 6 人' },
       ].map(row) },
       { title: '終わった大会', items: [
@@ -332,7 +353,26 @@ class Component extends DCLogic {
     const filterDone = (stage0 === 'pair' ? pairGames : ymat).filter(([r]) => r < cur).length;
     const pickA = stage === 'filtered' ? (stage0 === 'pair' ? 'alice' : 'ymatioun') : '';
     const pickB = stage0 === 'pair' ? 'ymatioun' : '';
+    const dl = this.props.dialog ?? 'none';
+    const h = window.React ? window.React.createElement : null;
+    const create = dl === 'none' ? { createDlg: false } : {
+      createDlg: true, createUnreg: dl === 'create-unregistered', createJoin: dl !== 'create-unregistered',
+      joinDim: dl === 'create-unregistered' ? 0.4 : 1,
+      styleOpts: [{ value: 'r', label: '総当たり' }, { value: 's', label: 'スイス式' }],
+      gtypes: [
+        ['s8r14', '同期・ランダム14手'], ['s8r16', '同期・ランダム16手'], ['s8r18', '同期・ランダム18手'],
+        ['s8r20', '同期・ランダム20手'], ['s8', '同期・通常開局'], ['8', '通常 (1局)'], ['8r16', '通常・ランダム16手'],
+      ],
+      clocks: [['1', '1 分 · 延長 30 秒'], ['3', '3 分 · 延長 30 秒'], ['5', '5 分 · 延長 2 分'], ['10', '10 分 · 延長 2 分'], ['15', '15 分 · 延長 2 分'], ['custom', 'カスタム…']],
+      createActions: h && ui ? h(window.React.Fragment, null,
+        h('span', { style: { flex: 1, minWidth: 0, fontSize: 'var(--fs-6)', lineHeight: 1.35, color: 'var(--bad)' } },
+          dl === 'create-refused' ? '大会を作れませんでした (minutes to start must be between 0 and 30)' : ''),
+        h(ui.Button, { size: 'field', variant: 'ghost' }, 'キャンセル'),
+        h(ui.Button, { size: 'field', variant: 'primary' }, '作る')) : null,
+    };
     return {
+      ...create,
+      noop: () => {},
       yes: true,
       navLocal: ui ? ui.navLocal() : [],
       ggsItems: ui ? ui.ggsNav('online', { 'ggs-lobby': { count: 2, alert: true }, 'ggs-play': { count: 1 }, 'ggs-tourney': { dot: 'gold' } }).filter((it) => it.id !== 'ggs-standby') : [],
