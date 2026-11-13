@@ -1059,6 +1059,9 @@ pub struct Solver {
     /// The warm-up rung a cut solve finished, which beats the midgame backup as its move.
     pub warm_rung: Option<(i32, Option<Position>)>,
     only_rung: Option<f32>,
+    center: Option<i32>,
+    center_width: Option<i32>,
+    exact_from: Option<i32>,
 }
 
 struct Worker<'a> {
@@ -1163,6 +1166,9 @@ impl Solver {
             stop: None,
             warm_rung: None,
             only_rung: None,
+            center: None,
+            center_width: None,
+            exact_from: None,
         }
     }
 
@@ -1224,6 +1230,43 @@ impl Solver {
         self.only_rung = Some(t);
         let r = self.solve_with_eval(EndSolverMode::Perfect, board, Some(ev));
         self.only_rung = None;
+        r
+    }
+
+    /// `solve_selective` with its first window centred on `center` instead of the evaluator's guess.
+    pub fn solve_selective_around(
+        &mut self,
+        board: &Board,
+        t: f32,
+        ev: &Linear,
+        center: i32,
+    ) -> EndSolverResult {
+        self.center = Some(center);
+        let r = self.solve_selective(board, t, ev);
+        self.center = None;
+        r
+    }
+
+    /// `solve_selective_around` with a first window of `width` either side instead of the warm-up's.
+    pub fn solve_selective_around_width(
+        &mut self,
+        board: &Board,
+        t: f32,
+        ev: &Linear,
+        center: i32,
+        width: i32,
+    ) -> EndSolverResult {
+        self.center_width = Some(width);
+        let r = self.solve_selective_around(board, t, ev, center);
+        self.center_width = None;
+        r
+    }
+
+    /// An exact solve that skips the selective warm-up, starting its window at `from`.
+    pub fn solve_exact_from(&mut self, board: &Board, ev: &Linear, from: i32) -> EndSolverResult {
+        self.exact_from = Some(from);
+        let r = self.solve_with_eval(EndSolverMode::Perfect, board, Some(ev));
+        self.exact_from = None;
         r
     }
 
@@ -1307,15 +1350,19 @@ impl Solver {
             w.nnue = self.nnue.clone();
             let mut b = *board;
             if let (Some(t), Some(e)) = (self.only_rung, ev) {
-                let guess = w.estimate_score(board, e);
+                let guess = self.center.unwrap_or_else(|| w.estimate_score(board, e));
                 w.selective = Some(Selectivity::new(t, board));
-                let s = w.aspiration_width(&mut b, guess, WARM_ASPIRATION_WIDTH, ev);
+                let width = self.center_width.unwrap_or(WARM_ASPIRATION_WIDTH);
+                let s = w.aspiration_width(&mut b, guess, width, ev);
                 w.selective = None;
                 w.tt.demote_to_seed_shared();
                 return (s, w.nodes, w.best, w.into_scratch(), None);
             }
             let mut warm = None;
-            if let Some(e) = ev.filter(|_| board.empty_count() >= SELECTIVE_PASS_MIN_EMPTIES) {
+            if let Some(g) = self.exact_from {
+                w.warm_score = Some(g - (g & 1));
+            } else if let Some(e) = ev.filter(|_| board.empty_count() >= SELECTIVE_PASS_MIN_EMPTIES)
+            {
                 let mut guess = w.estimate_score(board, e);
                 for t in SELECTIVE_LADDER {
                     w.selective = Some(Selectivity::new(t, board));
