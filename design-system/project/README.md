@@ -1,4 +1,4 @@
-KUROOBI is an Othello engine and the desktop app that runs it (macOS, Tauri + React). The app has two halves, "play, study and grow the book locally" and "play and watch on GGS (an online game server)", and both are drawn with the same components and tokens. The components of this system are the real ones in `window.KuroobiUI` (the app's `gui/src-ui/js/components`, bundled as is).
+KUROOBI is an Othello engine and the desktop app that runs it (macOS, Tauri + React). The app has two halves, "play, study and grow the book locally" and "play and watch on GGS (an online game server)", and both are drawn with the same components and tokens. The components of this system are the real ones in `window.KuroobiUI` (the app's `crates/gui/src-ui/js/components`, bundled as is).
 
 ## Wording
 

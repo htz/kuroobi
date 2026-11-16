@@ -18,4 +18,4 @@ One table row. A button that lays out its children to match the widths and align
 ## Similar components
 - `ResultRow`: fixed columns with result colours, disc difference and date. `MatchRow`: a two-line row with tags.
 
-Used in: `gui/src-ui/js/LearnLog.tsx` (learning log), `components/data.tsx` (inside `KifuTable`).
+Used in: `crates/gui/src-ui/js/LearnLog.tsx` (learning log), `components/data.tsx` (inside `KifuTable`).

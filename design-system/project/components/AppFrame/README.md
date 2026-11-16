@@ -15,4 +15,4 @@ The outer frame of the whole app. A vertical box filling the window; it draws th
 ## Similar components
 - `Body` is the horizontal row inside AppFrame (Nav | Main | Dock). AppFrame is the whole vertical stack.
 
-Used in: `gui/src-ui/js/App.tsx` (the outer frame of every screen).
+Used in: `crates/gui/src-ui/js/App.tsx` (the outer frame of every screen).

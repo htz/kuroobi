@@ -18,4 +18,4 @@ A drawer that shows the details of a selected row, overlaid on the screen from t
 - Clicks inside an overlay (the request sheet, game record viewer, confirmation) or a toast are not outside. While an overlay is shown, neither clicking outside nor Esc closes it (Esc closes the overlay instead).
 - The heading is `h-bar`. Buttons inside are as wide as their text (not stretched to full width).
 
-Used in: `gui/src-ui/js/ggs/Players.tsx` (player details: Summary / Game history / Profile), `gui/src-ui/js/ggs/Results.tsx` (this game).
+Used in: `crates/gui/src-ui/js/ggs/Players.tsx` (player details: Summary / Game history / Profile), `crates/gui/src-ui/js/ggs/Results.tsx` (this game).

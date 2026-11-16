@@ -17,4 +17,4 @@ A yes / no confirmation shown before an action that cannot be undone. Shows a `M
 - The confirmation always appears frontmost. Even when asking over another overlay (game record viewer, game record loading), the app draws the confirmation last. Esc closes only the topmost confirmation.
 - Do not hand-build a confirmation box per screen.
 
-Used in: `gui/src-ui/js/App.tsx` (new game, replacing the game record, a different move, undoing learning, switching between analysis and play), `gui/src-ui/js/Dialogs.tsx` (resetting a file location to the default), `gui/src-ui/js/GgsScreens.tsx` (resign, adjourn), `gui/src-ui/js/SettingsScreen.tsx` (deleting a server or account), `gui/src-ui/js/ggs/Login.tsx` (deleting an account).
+Used in: `crates/gui/src-ui/js/App.tsx` (new game, replacing the game record, a different move, undoing learning, switching between analysis and play), `crates/gui/src-ui/js/Dialogs.tsx` (resetting a file location to the default), `crates/gui/src-ui/js/GgsScreens.tsx` (resign, adjourn), `crates/gui/src-ui/js/SettingsScreen.tsx` (deleting a server or account), `crates/gui/src-ui/js/ggs/Login.tsx` (deleting an account).

@@ -19,4 +19,4 @@ A group with a heading. Places content below a small caps-style heading and an u
 ## Similar components
 - When the content is empty, put one line of `Empty` inside the `Section`. When the whole screen is empty, use `EmptyState`.
 
-Used in: `gui/src-ui/js/PlayDock.tsx`, `Dialogs.tsx`, `BookScreen.tsx`, `LearnLog.tsx`, `ggs/Lobby.tsx`, `ggs/Players.tsx`, `ggs/Results.tsx`.
+Used in: `crates/gui/src-ui/js/PlayDock.tsx`, `Dialogs.tsx`, `BookScreen.tsx`, `LearnLog.tsx`, `ggs/Lobby.tsx`, `ggs/Players.tsx`, `ggs/Results.tsx`.

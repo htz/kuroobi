@@ -22,4 +22,4 @@ The control strip at the top of a screen. Screen-specific buttons and switches g
 ## Similar components
 - `WindowBar` is the window strip with only the screen name. `StatusBar` is the status display at the bottom and holds no controls.
 
-Used in: `gui/src-ui/js/App.tsx` (top of play, study, book and settings), `GgsScreens.tsx` and each screen under `ggs/` (each GGS screen draws its own).
+Used in: `crates/gui/src-ui/js/App.tsx` (top of play, study, book and settings), `GgsScreens.tsx` and each screen under `ggs/` (each GGS screen draws its own).

@@ -1,0 +1,13 @@
+[package]
+name = "gtp"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A GTP server around the kuroobi engine on stdin/stdout"
+
+[[bin]]
+name = "kuroobi-gtp"
+path = "src/main.rs"
+
+[dependencies]
+kuroobi = { path = "../..", default-features = false }

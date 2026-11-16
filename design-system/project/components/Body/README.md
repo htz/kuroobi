@@ -14,4 +14,4 @@ A horizontal box that fills the remaining height between `WindowBar` and `Status
 ## Similar components
 - `AppFrame` is the whole vertical stack; `Main` is the middle column inside Body.
 
-Used in: `gui/src-ui/js/App.tsx` (every screen).
+Used in: `crates/gui/src-ui/js/App.tsx` (every screen).

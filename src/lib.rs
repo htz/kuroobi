@@ -30,7 +30,6 @@ pub mod game;
 pub mod learn;
 pub mod linear;
 pub mod midgame;
-pub mod net;
 pub mod nnue;
 pub mod pattern;
 pub mod pattern_index;

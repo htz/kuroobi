@@ -10,12 +10,18 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::Emitter;
 
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::{Board, Position};
 
-use crate::{append_line, now_secs, resources};
+use crate::env::{append_line, now_secs, resources};
+pub use crate::valid_log_channel;
+use crate::Host;
+use crate::{
+    base_id, coord, is_pass, move_text, my_stone_diff, parse_clock, parse_request, play_arg,
+    search_log, Searched,
+};
+use play::{confidence_pct, report, Done, EngineWorker, Job, Pending, WORKER_GIVE_UP};
 
 mod chat;
 mod demo;
@@ -424,11 +430,53 @@ pub struct Handle {
     pub snapshot: Arc<Mutex<Snapshot>>,
 }
 
+/// How a launch runs the client. The default is the GUI's.
+#[derive(Clone)]
+pub struct Options {
+    /// Read and write the settings, the account store and the session lock shared with other
+    /// launches. A CLI run leaves them alone, so it can sit beside the GUI.
+    pub persist: bool,
+    /// The engine as given, instead of the configured resources and thread count.
+    pub engine: Option<EngineConfig>,
+    /// Play at `engine`'s depth instead of by the clock.
+    pub fixed_level: bool,
+    /// Used only when `persist` is off; otherwise the saved settings decide.
+    pub use_book: bool,
+    pub learn: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            persist: true,
+            engine: None,
+            fixed_level: false,
+            use_book: true,
+            learn: true,
+        }
+    }
+}
+
+static OPTIONS: std::sync::OnceLock<Options> = std::sync::OnceLock::new();
+
+fn opts() -> &'static Options {
+    OPTIONS.get_or_init(Options::default)
+}
+
 pub fn spawn(
-    app: tauri::AppHandle,
+    host: Arc<dyn Host>,
     local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
-    local_activity: Arc<Mutex<crate::Activity>>,
 ) -> Handle {
+    spawn_with(host, local_stop, Options::default())
+}
+
+/// One client per process: the server, the account and the options are process-wide.
+pub fn spawn_with(
+    host: Arc<dyn Host>,
+    local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
+    options: Options,
+) -> Handle {
+    let _ = OPTIONS.set(options);
     let (tx, rx) = mpsc::channel::<Cmd>();
     let snapshot = Arc::new(Mutex::new(Snapshot {
         conn: "disconnected".into(),
@@ -450,7 +498,7 @@ pub fn spawn(
         ..Default::default()
     }));
     let snap2 = snapshot.clone();
-    std::thread::spawn(move || run(app, rx, snap2, local_stop, local_activity));
+    std::thread::spawn(move || run(host, rx, snap2, local_stop));
     Handle { tx, snapshot }
 }
 
@@ -498,10 +546,6 @@ struct MatchState {
     order: u64,
     over: bool,
     result: String,
-}
-
-fn is_pass(mv: &str) -> bool {
-    mv.eq_ignore_ascii_case("pa") || mv.eq_ignore_ascii_case("pass")
 }
 
 impl MatchState {
@@ -661,15 +705,6 @@ impl MatchState {
     }
 }
 
-fn my_stone_diff(score: f32, first_name: &str, login: &str) -> i32 {
-    let v = score.round() as i32;
-    if first_name == login {
-        v
-    } else {
-        -v
-    }
-}
-
 fn mirror_hint(matches: &HashMap<String, MatchState>, mid: &str) -> Option<Position> {
     let (base, side) = mid.rsplit_once('.')?;
     let other = format!("{base}.{}", if side == "0" { "1" } else { "0" });
@@ -682,65 +717,7 @@ fn mirror_hint(matches: &HashMap<String, MatchState>, mid: &str) -> Option<Posit
     Position::from_kifu(&you.moves.get(&n)?.to_ascii_lowercase()).ok()
 }
 
-struct Request {
-    verb: &'static str,
-    id: String,
-    who: String,
-}
-
-fn parse_request(ln: &str, login: &str) -> Option<Request> {
-    let rest = ln.strip_prefix("/os: ")?;
-    let verb = ["undo", "abort"]
-        .into_iter()
-        .find(|v| rest.starts_with(&format!("{v} ")))?;
-    let mut it = rest[verb.len() + 1..].split_whitespace();
-    let id = it.next()?;
-    let who = it.next()?;
-    if it.next() != Some("is") || who == login || !id.starts_with('.') {
-        return None;
-    }
-    Some(Request {
-        verb,
-        id: id.to_string(),
-        who: who.to_string(),
-    })
-}
-
-fn parse_clock(s: &str) -> (Option<u64>, Option<u64>, Option<u64>) {
-    let mut out = [None, None, None];
-    for (i, part) in s.split('/').take(3).enumerate() {
-        let p = part.trim().split(',').next().unwrap_or("").trim();
-        let (p, neg) = match p.strip_prefix('-') {
-            Some(rest) => (rest.trim(), true),
-            None => (p, false),
-        };
-        if p.is_empty()
-            || !p
-                .chars()
-                .next()
-                .map(|c| c.is_ascii_digit())
-                .unwrap_or(false)
-        {
-            continue;
-        }
-        let secs = p
-            .split(':')
-            .try_fold(0u64, |acc, seg| Some(acc * 60 + seg.parse::<u64>().ok()?));
-        if let Some(secs) = secs {
-            out[i] = Some(if neg { 0 } else { secs });
-        }
-    }
-    (out[0], out[1], out[2])
-}
-
-pub(crate) const LEARN_DEPTH: u32 = 18;
-
-fn base_id(id: &str) -> &str {
-    match id.rsplit_once('.') {
-        Some((head, tail)) if tail.len() == 1 && head.contains('.') => head,
-        _ => id,
-    }
-}
+pub const LEARN_DEPTH: u32 = 18;
 
 fn boards_of(matches: &HashMap<String, MatchState>, id: &str) -> Vec<String> {
     matches
@@ -797,87 +774,12 @@ fn finish_match(
     out
 }
 
-fn play_arg(mstr: &str, value: f32, took: Option<std::time::Duration>) -> String {
-    if mstr == "pa" {
-        return mstr.to_string();
-    }
-    let v = if value.is_finite() { value } else { 0.0 };
-    match took {
-        Some(t) => format!("{mstr}/{v:.2}/{:.2}", t.as_secs_f64()),
-        None => format!("{mstr}/{v:.2}"),
-    }
-}
-
-fn coord(p: Position) -> String {
-    p.to_kifu().to_uppercase()
-}
-
-struct EngineWorker {
-    tx: std::sync::mpsc::Sender<Job>,
-    rx: std::sync::mpsc::Receiver<Done>,
-    stop: kuroobi::midgame::StopHandle,
-    busy: bool,
-    mid: Option<String>,
-    pending_hash: u64,
-    pending: Option<Pending>,
-    sent_at: Option<(Instant, Duration)>,
-    stopped_at: Option<Instant>,
-    progress: std::sync::Arc<kuroobi::engine::Progress>,
-    threads: usize,
-    sent_ms: u64,
-    sent_empties: u8,
-}
-
-const WORKER_GIVE_UP: Duration = Duration::from_secs(10);
-
-struct Pending {
-    board: Board,
-    clock: Duration,
-    hash: u64,
-    hint: Option<Position>,
-    queued: Instant,
-}
-
-enum Job {
-    Think {
-        board: Board,
-        clock: Duration,
-        hint: Option<Position>,
-    },
-    NewGame,
-    SetUseBook(bool),
-    SetThreads(usize),
-}
-
-struct Report {
-    nodes: u64,
-    pv: Vec<Option<Position>>,
-}
-
-/// Edax's log shows eight plies.
-const PV_LEN: usize = 8;
-
-fn report(
-    engine: &kuroobi::engine::Engine,
-    board: &Board,
-    mv: &kuroobi::engine::MoveEval,
-    nodes: u64,
-) -> Report {
-    let pv = match mv.pos {
-        Some(p) if !mv.from_book => engine.principal_variation(board, p, PV_LEN),
-        _ => vec![mv.pos],
-    };
-    Report { nodes, pv }
-}
-
-struct Done(Box<kuroobi::engine::MoveEval>, Report);
-
 struct Ctx {
     /// The new password and its request id while `passw` waits for the server.
     passw_wait: Option<(String, u64)>,
     /// A password changed in this session, used by the next reconnect.
     pw_changed: Option<String>,
-    app: tauri::AppHandle,
+    host: Arc<dyn Host>,
     stop: Option<kuroobi::midgame::StopHandle>,
     snap: Arc<Mutex<Snapshot>>,
     engine: Option<Engine>,
@@ -894,9 +796,8 @@ struct Ctx {
     watchers: HashMap<String, std::collections::BTreeSet<String>>,
     /// Match ids whose observers have been asked for since we joined them.
     watch_asked: std::collections::HashSet<String>,
-    learn_jobs: VecDeque<(String, kuroobi::learn::BackupJob, crate::LearnEntry)>,
+    learn_jobs: VecDeque<(String, kuroobi::learn::BackupJob, crate::env::LearnEntry)>,
     local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
-    local_activity: Arc<Mutex<crate::Activity>>,
     pending_watch: HashMap<String, Instant>,
     workers: Vec<EngineWorker>,
     /// A login asked for while a session was up; the session ends and this one starts.
@@ -930,7 +831,7 @@ impl Ctx {
             return Some(i);
         }
         if self.workers.len() < MAX_WORKERS {
-            match EngineWorker::spawn(self.engine_cfg.clone()) {
+            match spawn_worker(self.engine_cfg.clone()) {
                 Ok(mut w) => {
                     w.mid = Some(mid.to_string());
                     self.workers.push(w);
@@ -960,7 +861,7 @@ impl Ctx {
             self.log("info", &format!("engine init failed: {e}"));
         }
         while self.workers.len() < MAX_WORKERS {
-            match EngineWorker::spawn(self.engine_cfg.clone()) {
+            match spawn_worker(self.engine_cfg.clone()) {
                 Ok(w) => self.workers.push(w),
                 Err(e) => {
                     self.log("info", &format!("cannot spawn search worker: {e}"));
@@ -1012,87 +913,9 @@ impl Ctx {
     }
 }
 
-impl EngineWorker {
-    fn spawn(cfg: EngineConfig) -> Result<EngineWorker, String> {
-        let res = resources();
-        let mut cfg = with_resources(cfg, &res);
-        cfg.midgame_hash_bits = res.hash_mid_bits();
-        cfg.solver_hash_bits = res.hash_end_bits();
-        let engine = Engine::new(cfg)?;
-        let stop = engine.stop_handle();
-        let progress = engine.progress();
-        let (jtx, jrx) = std::sync::mpsc::channel::<Job>();
-        let (dtx, drx) = std::sync::mpsc::channel::<Done>();
-        std::thread::spawn(move || {
-            let mut engine = engine;
-            while let Ok(job) = jrx.recv() {
-                match job {
-                    Job::Think { board, clock, hint } => {
-                        if let Some(h) = hint {
-                            engine.hint_move(&board, h);
-                        }
-                        let nf0 = kuroobi::engine::NON_FINITE_VALUES
-                            .load(std::sync::atomic::Ordering::Relaxed);
-                        let n0 = engine.nodes();
-                        let mv = engine.play_clock(&board, clock);
-                        let nodes = engine.nodes() - n0;
-                        let nf1 = kuroobi::engine::NON_FINITE_VALUES
-                            .load(std::sync::atomic::Ordering::Relaxed);
-                        if nf1 != nf0 {
-                            eprintln!(
-                                "!! search returned a non-finite value (empties {} depth {} cut {})",
-                                board.empty_count(),
-                                mv.depth,
-                                mv.cut
-                            );
-                        }
-                        engine.progress().clear();
-                        let r = report(&engine, &board, &mv, nodes);
-                        if dtx.send(Done(Box::new(mv), r)).is_err() {
-                            return;
-                        }
-                    }
-                    Job::NewGame => engine.clear_tables(),
-                    Job::SetUseBook(b) => engine.set_use_book(b),
-                    Job::SetThreads(n) => engine.set_threads(n),
-                }
-            }
-        });
-        Ok(EngineWorker {
-            tx: jtx,
-            rx: drx,
-            stop,
-            busy: false,
-            mid: None,
-            pending_hash: 0,
-            pending: None,
-            sent_at: None,
-            stopped_at: None,
-            progress,
-            threads: 0,
-            sent_ms: 0,
-            sent_empties: 0,
-        })
-    }
-
-    fn send(&mut self, job: Job) {
-        let counts = matches!(job, Job::Think { .. });
-        if self.tx.send(job).is_ok() && counts {
-            self.busy = true;
-        }
-    }
-}
-
 impl Ctx {
     fn notify(&self, title: &str, body: &str) {
-        use tauri_plugin_notification::NotificationExt;
-        let _ = self
-            .app
-            .notification()
-            .builder()
-            .title(title)
-            .body(body)
-            .show();
+        self.host.notify(title, body);
     }
     fn log(&mut self, dir: &'static str, text: &str) {
         let p = std::env::var("KUROOBI_GGS_WIRE")
@@ -1133,7 +956,7 @@ impl Ctx {
             return;
         }
         self.last_sent = sent;
-        let _ = self.app.emit("ggs", &s);
+        self.host.publish(&s);
         self.last_emit = Instant::now();
         self.dirty = false;
     }
@@ -1213,25 +1036,25 @@ fn say(ctx: &mut Ctx, send: &mut impl FnMut(String), cmd: impl Into<String>) {
 }
 
 fn new_ctx(
-    app: tauri::AppHandle,
+    host: Arc<dyn Host>,
     snap: Arc<Mutex<Snapshot>>,
     local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
-    local_activity: Arc<Mutex<crate::Activity>>,
 ) -> Ctx {
     let res = resources();
+    let engine_cfg = opts().engine.clone().unwrap_or_else(|| EngineConfig {
+        threads: res.threads.unwrap_or_else(crate::env::auto_threads),
+        midgame_hash_bits: res.hash_mid_bits(),
+        solver_hash_bits: res.hash_end_bits(),
+        ..Default::default()
+    });
     let ctx = Ctx {
-        app,
+        host,
         stop: None,
         passw_wait: None,
         pw_changed: None,
         snap,
         engine: None,
-        engine_cfg: EngineConfig {
-            threads: res.threads.unwrap_or_else(crate::auto_threads),
-            midgame_hash_bits: res.hash_mid_bits(),
-            solver_hash_bits: res.hash_end_bits(),
-            ..Default::default()
-        },
+        engine_cfg,
         seq: 0,
         last_emit: Instant::now(),
         last_sent: 0,
@@ -1243,7 +1066,6 @@ fn new_ctx(
         watch_asked: std::collections::HashSet::new(),
         learn_jobs: VecDeque::new(),
         local_stop,
-        local_activity,
         pending_watch: HashMap::new(),
         reconnect: None,
         workers: Vec::new(),
@@ -1263,14 +1085,18 @@ fn new_ctx(
 }
 
 fn run(
-    app: tauri::AppHandle,
+    host: Arc<dyn Host>,
     rx: Receiver<Cmd>,
     snap: Arc<Mutex<Snapshot>>,
     local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
-    local_activity: Arc<Mutex<crate::Activity>>,
 ) {
-    let mut ctx = new_ctx(app, snap, local_stop, local_activity);
-    restore_settings(&mut ctx);
+    let mut ctx = new_ctx(host, snap, local_stop);
+    if opts().persist {
+        restore_settings(&mut ctx);
+    } else {
+        ctx.set_use_book(opts().use_book);
+        ctx.snap.lock().unwrap().engine.learn = opts().learn;
+    }
 
     loop {
         ctx.emit(true);
@@ -1344,6 +1170,9 @@ fn set_pref(ctx: &mut Ctx, cmd: &Cmd) -> bool {
 }
 
 fn claim_session(ctx: &mut Ctx) -> bool {
+    if !opts().persist {
+        return true;
+    }
     let Err(pid) = try_lock_session() else {
         return true;
     };
@@ -1387,7 +1216,7 @@ fn dial(ctx: &mut Ctx) -> Option<(TcpStream, TcpStream)> {
             stream
                 .set_read_timeout(Some(Duration::from_millis(250)))
                 .ok();
-            if let Err(e) = kuroobi::net::keep_alive(&stream) {
+            if let Err(e) = crate::net::keep_alive(&stream) {
                 ctx.log("info", &format!("TCP keep-alive not set: {e}"));
             }
             let writer = stream.try_clone().expect("clone");
@@ -1716,13 +1545,17 @@ fn dispatch_line(
 
     if !*cred_saved && (ln == "READY" || ln.starts_with("/os")) {
         *cred_saved = true;
-        remember_account(&server(), login, pw);
+        if opts().persist {
+            remember_account(&server(), login, pw);
+        }
     }
 
     if let Some(done) = passw_outcome(ctx.passw_wait.is_some(), ln) {
         let (new, id) = ctx.passw_wait.take().expect("waiting");
         if done {
-            update_password(&server(), login, &new);
+            if opts().persist {
+                update_password(&server(), login, &new);
+            }
             ctx.pw_changed = Some(new);
         }
         ctx.snap.lock().unwrap().passw = format!("{id}|{}", if done { "ok" } else { "bad" });
@@ -1931,7 +1764,7 @@ fn service(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
     expire_watches(ctx);
 
     let own_match = w.matches.values().any(|m| m.my_color.is_some());
-    if own_match && !w.had_own_match && ctx.local_activity.lock().unwrap().local.is_some() {
+    if own_match && !w.had_own_match && ctx.host.local_search_running() {
         if let Some(h) = ctx.local_stop.lock().unwrap().as_ref() {
             h.stop();
         }
@@ -2646,7 +2479,23 @@ fn write_line(writer: &mut TcpStream, cmd: &str) {
 }
 
 /// The thread count resolved and the files the resource settings point at.
+fn spawn_worker(cfg: EngineConfig) -> Result<EngineWorker, String> {
+    let cfg = if opts().engine.is_some() {
+        cfg
+    } else {
+        let res = resources();
+        let mut cfg = with_resources(cfg, &res);
+        cfg.midgame_hash_bits = res.hash_mid_bits();
+        cfg.solver_hash_bits = res.hash_end_bits();
+        cfg
+    };
+    EngineWorker::spawn(cfg, opts().fixed_level)
+}
+
 fn with_resources(mut cfg: EngineConfig, res: &kuroobi::resources::Resources) -> EngineConfig {
+    if opts().engine.is_some() {
+        return cfg;
+    }
     cfg.threads = resolve_threads(cfg.threads);
     cfg.weights = res.weights_path();
     cfg.nnue = res.nnue_path();
@@ -2656,14 +2505,17 @@ fn with_resources(mut cfg: EngineConfig, res: &kuroobi::resources::Resources) ->
 
 fn resolve_threads(n: usize) -> usize {
     if n == 0 {
-        crate::auto_threads()
+        crate::env::auto_threads()
     } else {
         n
     }
 }
 
 fn apply_threads(ctx: &mut Ctx) {
-    let n = resources().threads.unwrap_or_else(crate::auto_threads);
+    if opts().engine.is_some() {
+        return;
+    }
+    let n = resources().threads.unwrap_or_else(crate::env::auto_threads);
     ctx.engine_cfg.threads = n;
     if let Some(e) = ctx.engine.as_mut() {
         e.set_threads(n);
@@ -2992,13 +2844,6 @@ fn play_hash(board: &Board, moves: usize) -> u64 {
         .wrapping_add((moves as u64).wrapping_mul(0x9e37_79b9))
 }
 
-fn move_text(pos: Option<Position>) -> String {
-    match pos {
-        Some(p) => coord(p),
-        None => "pa".to_string(),
-    }
-}
-
 fn move_source(mv: &kuroobi::engine::MoveEval) -> &'static str {
     if mv.from_book && mv.learned {
         "book (learned)"
@@ -3007,109 +2852,6 @@ fn move_source(mv: &kuroobi::engine::MoveEval) -> &'static str {
     } else {
         "search"
     }
-}
-
-/// GGS caps channel names at 8 characters including the dot; empty turns the log off.
-pub fn valid_log_channel(chan: &str) -> bool {
-    chan.is_empty()
-        || chan.strip_prefix('.').is_some_and(|name| {
-            (1..=7).contains(&name.len())
-                && name
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        })
-}
-
-struct Searched {
-    empties: u8,
-    threads: usize,
-    nodes: u64,
-    took: Duration,
-    pv: Vec<Option<Position>>,
-    black: bool,
-}
-
-fn count(n: f64, unit: &str) -> String {
-    if n >= 1e9 {
-        format!("{:.3} G{unit}", n / 1e9)
-    } else if n >= 1e6 {
-        format!("{:.1} M{unit}", n / 1e6)
-    } else {
-        format!("{:.1} K{unit}", n / 1e3)
-    }
-}
-
-fn confidence_pct(t: f32) -> u32 {
-    // Abramowitz-Stegun 7.1.26 for erf(t / sqrt 2): the two-sided normal coverage.
-    let x = f64::from(t) / std::f64::consts::SQRT_2;
-    let k = 1.0 / (1.0 + 0.3275911 * x);
-    let poly = k
-        * (0.254829592
-            + k * (-0.284496736 + k * (1.421413741 + k * (-1.453152027 + k * 1.061405429))));
-    ((1.0 - poly * (-x * x).exp()) * 100.0).round() as u32
-}
-
-/// Edax's spectator log from the GGS guide: black's moves in capitals, white's in lower case.
-fn search_log(
-    chan: &str,
-    login: &str,
-    mid: &str,
-    mv: &kuroobi::engine::MoveEval,
-    s: &Searched,
-) -> Vec<String> {
-    let square = |p: Option<Position>, black: bool| {
-        let t = p.map_or("PA".to_string(), coord);
-        if black {
-            t
-        } else {
-            t.to_lowercase()
-        }
-    };
-    let mut lines = vec![
-        "-----------------------------------------".to_string(),
-        format!(
-            "{login} plays {} in game {mid} using {} threads ;",
-            square(mv.pos, s.black),
-            s.threads
-        ),
-    ];
-    let score = mv.value.round() as i32;
-    if mv.from_book {
-        lines.push(format!("score == {score:+} from book ;"));
-    } else {
-        let at = if mv.exact || mv.depth == 0 {
-            format!("{}@100%", s.empties)
-        } else {
-            let t = mv.mpc_t.unwrap_or_else(kuroobi::midgame::mpc_t);
-            format!("{}@{}%", mv.depth, confidence_pct(t))
-        };
-        let pv: Vec<String> =
-            s.pv.iter()
-                .scan(!s.black, |black, p| {
-                    *black = !*black;
-                    Some(square(*p, *black))
-                })
-                .collect();
-        let secs = s.took.as_secs_f64();
-        lines.push(format!(
-            "score == {score:+} at {at} ; PV: {} ;",
-            pv.join(" ")
-        ));
-        lines.push(format!(
-            "nodes: {} ; time: search = {secs:.1}s, move = {secs:.1}s; speed: {}.",
-            count(s.nodes as f64, "N"),
-            count(s.nodes as f64 / secs.max(1e-3), "N/s"),
-        ));
-        lines.push(if mv.cut {
-            format!("search out of time at {at}")
-        } else {
-            "search completed".to_string()
-        });
-    }
-    lines
-        .into_iter()
-        .map(|l| format!("tell {chan} {l}"))
-        .collect()
 }
 
 fn record_played(m: &mut MatchState, mv: &kuroobi::engine::MoveEval, hash: u64) {
@@ -3171,7 +2913,11 @@ fn think_and_play(
     let engine = ctx.engine.as_mut().unwrap();
     let n0 = engine.nodes();
     let began = std::time::Instant::now();
-    let mv = engine.play_clock(&board, clock);
+    let mv = if opts().fixed_level {
+        engine.choose_within(&board, None)
+    } else {
+        engine.play_clock(&board, clock)
+    };
     let took = began.elapsed();
     let r = report(engine, &board, &mv, engine.nodes() - n0);
 
@@ -3312,7 +3058,7 @@ fn collect_workers(ctx: &mut Ctx, matches: &mut HashMap<String, MatchState>) -> 
             continue;
         }
         let cfg = ctx.engine_cfg.clone();
-        match EngineWorker::spawn(cfg) {
+        match spawn_worker(cfg) {
             Ok(w) => {
                 ctx.workers[i] = w;
                 ctx.log(
@@ -3729,7 +3475,7 @@ fn handle_match_end(
                     Ok((_, fin)) => (fin.black.count_ones() as u8, fin.white.count_ones() as u8),
                     Err(_) => (0, 0),
                 };
-                let entry = crate::LearnEntry {
+                let entry = crate::env::LearnEntry {
                     at: now_secs(),
                     kifu: kifu.clone(),
                     black,
@@ -3764,8 +3510,12 @@ fn learn_tick(ctx: &mut Ctx) {
     let (id, _, mut entry) = ctx.learn_jobs.pop_front().expect("checked non-empty");
     match step {
         Ok(Some(out)) => {
-            entry.changes = out.changes.iter().map(crate::LearnChange::of).collect();
-            crate::learn_log_append(&entry);
+            entry.changes = out
+                .changes
+                .iter()
+                .map(crate::env::LearnChange::of)
+                .collect();
+            crate::env::learn_log_append(&entry);
             ctx.log(
                 "info",
                 &format!(
@@ -3983,110 +3733,6 @@ mod tests {
     ];
 
     use super::*;
-
-    #[test]
-    fn a_log_channel_is_a_dot_and_up_to_seven_name_characters() {
-        for ok in ["", ".kuroobi", ".Rhapsod", ".a", ".my_bot1", ".x-y_z"] {
-            assert!(valid_log_channel(ok), "{ok:?}");
-        }
-        for bad in [
-            "kuroobi",
-            ".",
-            ".Rhapsody",
-            " .kuroobi",
-            ".kuro obi",
-            "..kuroo",
-            ".くろおび",
-        ] {
-            assert!(!valid_log_channel(bad), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn probcut_margins_read_as_their_confidence() {
-        assert_eq!([1.5, 2.0, 2.5].map(confidence_pct), [87, 95, 99]);
-    }
-
-    #[test]
-    fn the_search_log_follows_edax_s_layout() {
-        let sq = |t: &str| Position::from_kifu(t).ok();
-        let s = |empties, black| Searched {
-            empties,
-            threads: 8,
-            nodes: 2_149_000_000,
-            took: Duration::from_millis(4300),
-            pv: vec![sq("f5"), sq("d6"), None, sq("c3")],
-            black,
-        };
-        let mid = kuroobi::engine::MoveEval {
-            pos: sq("f5"),
-            value: 2.4,
-            depth: 22,
-            ..Default::default()
-        };
-        assert_eq!(
-            search_log(".kuroobi", "kuroobi", ".1.0", &mid, &s(40, true)),
-            [
-                "tell .kuroobi -----------------------------------------",
-                "tell .kuroobi kuroobi plays F5 in game .1.0 using 8 threads ;",
-                "tell .kuroobi score == +2 at 22@73% ; PV: F5 d6 PA c3 ;",
-                "tell .kuroobi nodes: 2.149 GN ; time: search = 4.3s, move = 4.3s; speed: 499.8 MN/s.",
-                "tell .kuroobi search completed",
-            ]
-        );
-        let sel = kuroobi::engine::MoveEval {
-            pos: sq("f5"),
-            value: -1.0,
-            depth: 32,
-            mpc_t: Some(2.5),
-            cut: true,
-            ..Default::default()
-        };
-        let lines = search_log(".kuroobi", "kuroobi", ".1.0", &sel, &s(32, false));
-        assert_eq!(
-            lines[1],
-            "tell .kuroobi kuroobi plays f5 in game .1.0 using 8 threads ;"
-        );
-        assert_eq!(
-            lines[2],
-            "tell .kuroobi score == -1 at 32@99% ; PV: f5 D6 pa C3 ;"
-        );
-        assert_eq!(lines[4], "tell .kuroobi search out of time at 32@99%");
-        let exact = kuroobi::engine::MoveEval {
-            pos: sq("f5"),
-            value: 4.0,
-            exact: true,
-            ..Default::default()
-        };
-        assert!(
-            search_log(".kuroobi", "kuroobi", ".1.0", &exact, &s(26, true))[2]
-                .starts_with("tell .kuroobi score == +4 at 26@100% ;")
-        );
-        let book = kuroobi::engine::MoveEval {
-            pos: sq("f5"),
-            value: 0.5,
-            from_book: true,
-            ..Default::default()
-        };
-        assert_eq!(
-            search_log(".kuroobi", "kuroobi", ".1.0", &book, &s(50, true))[2..],
-            ["tell .kuroobi score == +1 from book ;"]
-        );
-    }
-
-    #[test]
-    fn clock_real_format() {
-        let (main, inc, ext) = parse_clock("14:59,0:0//02:00,0:0");
-        assert_eq!(main, Some(14 * 60 + 59));
-        assert_eq!(inc, None);
-        assert_eq!(ext, Some(120));
-        let (main, _, ext) = parse_clock("15:00//02:00");
-        assert_eq!(main, Some(900));
-        assert_eq!(ext, Some(120));
-        let (main, _, ext) = parse_clock("00:07");
-        assert_eq!(main, Some(7));
-        assert_eq!(ext, None);
-    }
 
     #[test]
     fn a_board_record_carries_each_move_s_eval_and_time() {
@@ -4339,40 +3985,6 @@ mod tests {
 
         ms.remove(".9.1");
         assert!(mirror_hint(&ms, ".9.0").is_none());
-    }
-
-    #[test]
-    fn the_stone_diff_follows_the_first_name() {
-        assert_eq!(my_stone_diff(2.0, "kuroobi", "kuroobi"), 2);
-        assert_eq!(my_stone_diff(-10.0, "kuroobi", "kuroobi"), -10);
-        assert_eq!(my_stone_diff(-5.0, "kuroobi", "kuroobi"), -5);
-        assert_eq!(my_stone_diff(-7.0, "kuroobi", "kuroobi"), -7);
-        assert_eq!(my_stone_diff(-6.0, "htz", "kuroobi"), 6);
-        assert_eq!(my_stone_diff(2.0, "htz", "kuroobi"), -2);
-        assert_eq!(my_stone_diff(0.0, "kuroobi", "kuroobi"), 0);
-        assert_eq!(my_stone_diff(0.0, "htz", "kuroobi"), 0);
-    }
-
-    #[test]
-    fn request_real_format() {
-        let r = parse_request("/os: undo .24 htz is asking", "kuroobi").unwrap();
-        assert_eq!(
-            (r.verb, r.id.as_str(), r.who.as_str()),
-            ("undo", ".24", "htz")
-        );
-        let r = parse_request("/os: abort .24 htz is asking", "kuroobi").unwrap();
-        assert_eq!(r.verb, "abort");
-        assert!(parse_request("/os: undo .24 kuroobi is asking", "kuroobi").is_none());
-        assert!(parse_request("/os: update .24 8 K?", "kuroobi").is_none());
-        assert!(parse_request("/os: undo .24 htz declined", "kuroobi").is_none());
-        assert!(parse_request("/os: - match .24 1720 htz", "kuroobi").is_none());
-    }
-
-    #[test]
-    fn a_negative_clock_reads_as_zero() {
-        let (main, _, ext) = parse_clock("-0:03,0:0//02:00,0:0");
-        assert_eq!(main, Some(0));
-        assert_eq!(ext, Some(120));
     }
 
     #[test]
@@ -4999,46 +4611,5 @@ mod tests {
         assert!(!matches.contains_key(".4.0"));
         assert!(matches.contains_key(".40"));
         assert!(matches.contains_key(".44.1"));
-    }
-
-    #[test]
-    fn base_id_synchro() {
-        assert_eq!(base_id(".82726.1"), ".82726");
-        assert_eq!(base_id(".82726.2"), ".82726");
-        assert_eq!(base_id(".13"), ".13");
-    }
-}
-
-#[cfg(test)]
-mod play_arg_tests {
-    use super::play_arg;
-    use std::time::Duration;
-
-    #[test]
-    fn a_move_carries_its_score_and_seconds() {
-        let s = play_arg("D8", 6.0, Some(Duration::from_millis(17_390)));
-        assert_eq!(s, "D8/6.00/17.39");
-    }
-
-    #[test]
-    fn a_negative_score_keeps_its_sign() {
-        let s = play_arg("F5", -3.5, Some(Duration::from_millis(1_200)));
-        assert_eq!(s, "F5/-3.50/1.20");
-    }
-
-    #[test]
-    fn a_pass_goes_bare() {
-        assert_eq!(play_arg("pa", 12.0, Some(Duration::from_secs(3))), "pa");
-    }
-
-    #[test]
-    fn a_non_finite_score_becomes_zero() {
-        let s = play_arg("A1", f32::INFINITY, Some(Duration::from_secs(1)));
-        assert_eq!(s, "A1/0.00/1.00");
-    }
-
-    #[test]
-    fn an_unmeasured_move_omits_the_time() {
-        assert_eq!(play_arg("C4", 2.0, None), "C4/2.00");
     }
 }

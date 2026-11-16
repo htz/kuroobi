@@ -201,9 +201,14 @@ src/
 ├── learn.rs           writing game outcomes back into the book (avoiding lost games)
 ├── resources.rs       where weights and the book live (configurable)
 ├── engine.rs          session layer shared by the GUI and the CLI (move choice, analysis)
-├── trainer.rs         training data I/O, symmetric forms, epoch stats
-└── bin/               CLI tools (self-play data, training, stage merge, MPC calibration, book generation, GTP server, GGS client)
-gui/                   GUI (Tauri + Vite/TypeScript)
+└── trainer.rs         training data I/O, symmetric forms, epoch stats
+crates/
+├── play/              engine workers for games on a clock, shared by every client
+├── gtp/               GTP server (kuroobi-gtp)
+├── ggs/               the GGS client, run by the GUI and by kuroobi-ggs
+├── gui/               GUI (Tauri + Vite/TypeScript; kuroobi-gui)
+├── mcp/               drives a running GUI from the shell or as an MCP server (kuroobi-mcp)
+└── train/             training, self-play data, stage merge, MPC calibration, book generation
 docs/                  implementation notes (linked from this README)
 tests/                 perft coverage, solver integration tests, time to stop
 benches/               micro-benchmarks (criterion)
@@ -223,9 +228,14 @@ cargo clippy --all-targets -- -D warnings
 cargo test --release
 ```
 
-For the GUI, run `npm run build` then `cargo build --release` inside
-`gui/`, in that order (Tauri embeds the frontend into the binary, so the
-reverse order builds fine and changes nothing).
+The root is one Cargo workspace: the engine library at the root, the
+tools and the GUI in `crates/`. Plain `cargo` commands at the
+root skip the GUI; `cargo fmt --all` reaches it. For the GUI, run
+`npm run build` then `cargo build --release` inside `crates/gui/`, in that order
+(Tauri embeds the frontend into the binary, so the reverse order builds
+fine and changes nothing). Every binary, the GUI's included, lands in
+`target/release/`; `kuroobi-mcp`, which drives the GUI, is built by the
+root `cargo build`, not by the one in `crates/gui/`.
 
 The tests include exhaustive move-generation checks via perft, agreement
 between incremental pattern indices and a full recount, invariance of

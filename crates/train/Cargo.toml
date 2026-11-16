@@ -1,0 +1,15 @@
+[package]
+name = "train"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Training, data generation and book building for kuroobi"
+
+[dependencies]
+kuroobi = { path = "../.." }
+libc = "0.2"
+
+[features]
+default = ["gpu"]
+# GPU training (`nnue_train --gpu`, `linear_train --gpu`).
+gpu = ["kuroobi/gpu"]

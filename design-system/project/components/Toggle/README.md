@@ -18,4 +18,4 @@ An on/off switch with a label. Used in settings and toolbars to turn one feature
 ## Similar components
 - `Segmented`: lays out named options.
 
-Used in: `gui/src-ui/js/App.tsx`, `AskSheet.tsx`, `PlayDock.tsx`, `SettingsScreen.tsx`, `ggs/Chat.tsx`, `ggs/Console.tsx`, `ggs/Lobby.tsx`.
+Used in: `crates/gui/src-ui/js/App.tsx`, `AskSheet.tsx`, `PlayDock.tsx`, `SettingsScreen.tsx`, `ggs/Chat.tsx`, `ggs/Console.tsx`, `ggs/Lobby.tsx`.

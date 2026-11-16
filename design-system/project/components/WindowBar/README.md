@@ -18,4 +18,4 @@ The strip at the very top of the window. Shows the name and note of the open scr
 - `Toolbar` is the per-screen control strip (`h-bar`). WindowBar is the window strip and shows only the screen name.
 - A `Modal`'s heading is a strip inside the box, separate from WindowBar.
 
-Used in: `gui/src-ui/js/App.tsx` (the top row of every screen).
+Used in: `crates/gui/src-ui/js/App.tsx` (the top row of every screen).

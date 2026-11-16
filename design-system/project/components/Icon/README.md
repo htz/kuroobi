@@ -16,4 +16,4 @@ A 24×24 SVG icon drawn with lines. The symbols used in the left menu, gauges, b
 ## Similar components
 - `IconButton`: an icon made into a 32px clickable button.
 
-Used in: `gui/src-ui/js/components/ggs.tsx` (`NavRow` in the left nav, the `Toasts` warning), `App.tsx` (the settings screen's "✓ Applied"), `GgsScreens.tsx` (`watch` on the "Watching" button in Play / observe), `components/Icons.tsx` (`IconButton`).
+Used in: `crates/gui/src-ui/js/components/ggs.tsx` (`NavRow` in the left nav, the `Toasts` warning), `App.tsx` (the settings screen's "✓ Applied"), `GgsScreens.tsx` (`watch` on the "Watching" button in Play / observe), `components/Icons.tsx` (`IconButton`).

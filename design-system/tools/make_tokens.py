@@ -125,7 +125,7 @@ tokens = {
      {"name":"fs-tag","fontSize":"9.5px","lineHeight":1.4,"fontWeight":600,"sample":"Playing","usage":"Tag text only. An exception to the minimum because it is a category mark. Not used elsewhere."}]},
    {"name":"Mono","family":"mono","styles":[
      {"name":"mono","fontSize":"11px","lineHeight":1.5,"fontWeight":400,"sample":"/os: + match .7 1720 alice","usage":"Protocol log, console."}]}]},
- "meta": {"source":"github-local","repo":"kuroobi (local)","package":"gui/src-ui","paths":{"tokens":["gui/src-ui/tokens.css"],"base":["gui/src-ui/base.css"],"components":["gui/src-ui/js/components"]}}
+ "meta": {"source":"github-local","repo":"kuroobi (local)","package":"crates/gui/src-ui","paths":{"tokens":["crates/gui/src-ui/tokens.css"],"base":["crates/gui/src-ui/base.css"],"components":["crates/gui/src-ui/js/components"]}}
 }
 json.dump(tokens, open('../project/tokens.json','w'), ensure_ascii=False, indent=1)
 print('ok', sum(len(tokens[k]['tokens']) for k in ['color','shadow','spacing','radius','height','width','timing']))

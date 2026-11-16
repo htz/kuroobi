@@ -504,7 +504,7 @@ class Component extends DCLogic {
       ...(() => {
         const st = this.props.ai ?? 'listening';
         const client = this.props.client ?? 'claude';
-        const exe = '/Users/htz/work/kuroobi/gui/target/release/kuroobi-mcp';
+        const exe = '/Users/htz/work/kuroobi/target/release/kuroobi-mcp';
         const json = (o) => JSON.stringify(o, null, 2);
         const entry = { command: exe, args: ['--mcp'] };
         const apps = {

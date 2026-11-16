@@ -15,4 +15,4 @@ A 6px round dot. Shows a state small, by colour alone.
 - `Busy`: an accent Dot + text.
 - `Tag`, `Badge`.
 
-Used in: `gui/src-ui/js/GlobalStatus.tsx` (status bar), `components/ggs.tsx` (GGS connection state in the left nav), `components/layout.tsx` (inside `Busy`), `ggs/Tourney.tsx`.
+Used in: `crates/gui/src-ui/js/GlobalStatus.tsx` (status bar), `components/ggs.tsx` (GGS connection state in the left nav), `components/layout.tsx` (inside `Busy`), `ggs/Tourney.tsx`.

@@ -26,4 +26,4 @@ The request sheet's opponent field (`OppPicker` in `AskSheet.tsx`) works the sam
 - `Select`: few fixed options, the OS list.
 - `Segmented`: 2–5 short options always visible.
 
-Used in: `gui/src-ui/js/ggs/Results.tsx` (opponent filter), `ggs/Tourney.tsx` (the two player fields). Defined in `components/layout.tsx`.
+Used in: `crates/gui/src-ui/js/ggs/Results.tsx` (opponent filter), `ggs/Tourney.tsx` (the two player fields). Defined in `components/layout.tsx`.

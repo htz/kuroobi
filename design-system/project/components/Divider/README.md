@@ -13,4 +13,4 @@ A vertical separator line placed between components laid out horizontally. Separ
 ## Similar components
 - None (there is no horizontal-line component).
 
-Used in: `gui/src-ui/js/App.tsx`, `components/data.tsx` (`ScoreRow`), `ggs/Chat.tsx`, `ggs/Console.tsx`, `ggs/Lobby.tsx`, `ggs/Results.tsx`.
+Used in: `crates/gui/src-ui/js/App.tsx`, `components/data.tsx` (`ScoreRow`), `ggs/Chat.tsx`, `ggs/Console.tsx`, `ggs/Lobby.tsx`, `ggs/Results.tsx`.

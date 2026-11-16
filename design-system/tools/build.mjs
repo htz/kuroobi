@@ -1,6 +1,6 @@
 // Bundle the GUI's components into one classic script reading window.React / window.ReactDOM.
-import { rolldown } from '../../gui/node_modules/rolldown/dist/index.mjs';
-import yaml from '../../gui/node_modules/js-yaml/dist/js-yaml.mjs';
+import { rolldown } from '../../crates/gui/node_modules/rolldown/dist/index.mjs';
+import yaml from '../../crates/gui/node_modules/js-yaml/dist/js-yaml.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 

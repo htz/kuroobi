@@ -23,4 +23,4 @@ One clickable row in a list. It owns the selected-row look (`card` background an
 - `NavRow`: a left nav item (background colour `accent-dim`).
 - `MatchRow`: the list of boards in "Play / observe" (with a board mark and a close button).
 
-Used in: `gui/src-ui/js/ggsui.tsx` (`Line`), `GgsScreens.tsx` (people watching), `ggs/Login.tsx`, `ggs/Chat.tsx`, `ggs/Tourney.tsx`, `ggs/Console.tsx`, `SettingsScreen.tsx`.
+Used in: `crates/gui/src-ui/js/ggsui.tsx` (`Line`), `GgsScreens.tsx` (people watching), `ggs/Login.tsx`, `ggs/Chat.tsx`, `ggs/Tourney.tsx`, `ggs/Console.tsx`, `SettingsScreen.tsx`.

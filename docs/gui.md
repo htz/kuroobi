@@ -2,7 +2,7 @@
 
 The desktop app for play, study, the book and the GGS connection.
 
-`gui/` is built with Tauri. The screen is web technology (React +
+`crates/gui/` is built with Tauri. The screen is web technology (React +
 TypeScript, built with Vite), the thinking is the Rust side calling the
 library directly, and IPC connects the two. The engine is not split off
 into a separate process, so even a search in progress can report back

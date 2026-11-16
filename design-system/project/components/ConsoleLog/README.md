@@ -18,4 +18,4 @@ A monospaced log of the exchange with the GGS server, one line at a time. Follow
 ## Similar components
 - `Bubble`: a chat message. ConsoleLog: raw communication lines.
 
-Used in: `gui/src-ui/js/ggs/Console.tsx` (the GGS console screen).
+Used in: `crates/gui/src-ui/js/ggs/Console.tsx` (the GGS console screen).

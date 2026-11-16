@@ -1,3 +1,16 @@
+[workspace]
+members = [".", "crates/*"]
+# The GUI needs its frontend built first and pulls in Tauri; build it with `-p gui`.
+default-members = [
+    ".",
+    "crates/ggs",
+    "crates/gtp",
+    "crates/mcp",
+    "crates/play",
+    "crates/train",
+]
+resolver = "2"
+
 [package]
 name = "kuroobi"
 version = "0.1.0"
@@ -7,7 +20,6 @@ description = "Ultra-fast Reversi bitboard library using 2x uint64"
 
 [dependencies]
 libc = "0.2"
-socket2 = "0.6"
 # GPU training path (`gpu` feature): one code base for Metal and Vulkan.
 wgpu = { version = "29", optional = true, default-features = false, features = ["metal", "vulkan", "wgsl", "std"] }
 bytemuck = { version = "1", optional = true }
@@ -17,7 +29,7 @@ rand = "0.8"
 criterion = "0.5"
 
 [features]
-default = ["gpu"]
+default = []
 # GPU training (`nnue_train --gpu`, `linear_train --gpu`).
 gpu = ["dep:wgpu", "dep:bytemuck"]
 # Read the solver's tuning knobs from environment variables at first use
@@ -38,6 +50,10 @@ harness = false
 # the optimizer see all of it at once.
 lto = "fat"
 codegen-units = 1
+
+# The GUI's debug builds still search at full speed: engine speed is felt directly in the UI.
+[profile.dev.package.kuroobi]
+opt-level = 3
 
 [profile.bench]
 lto = true

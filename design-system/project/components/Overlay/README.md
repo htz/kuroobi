@@ -15,4 +15,4 @@ The scrim laid under a dialog. It darkens and covers the screen, centres the con
 ## Similar components
 - The visual box is `Modal`. For a temporary notice that should not block interaction, use `Toasts`.
 
-Used in: `gui/src-ui/js/AskSheet.tsx` (asking for a game), `Dialogs.tsx` (loading a game record), `KifuViewer.tsx` (game record), `SettingsScreen.tsx` (adding and editing a server), `components/layout.tsx` (`Confirm`).
+Used in: `crates/gui/src-ui/js/AskSheet.tsx` (asking for a game), `Dialogs.tsx` (loading a game record), `KifuViewer.tsx` (game record), `SettingsScreen.tsx` (adding and editing a server), `components/layout.tsx` (`Confirm`).

@@ -19,4 +19,4 @@ Guidance shown when an entire screen is empty. Places a heading, a description a
 ## Similar components
 - `Empty`: one line inside a field. EmptyState: the entire screen.
 
-Used in: `gui/src-ui/js/BookScreen.tsx` (no book), `GgsScreens.tsx` (Play / observe: no games in progress / waiting for a reply to a request / there are adjourned matches).
+Used in: `crates/gui/src-ui/js/BookScreen.tsx` (no book), `GgsScreens.tsx` (Play / observe: no games in progress / waiting for a reply to a request / there are adjourned matches).

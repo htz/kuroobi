@@ -1,0 +1,18 @@
+[package]
+name = "ggs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "The GGS client shared by kuroobi's GUI and CLI"
+
+[[bin]]
+name = "kuroobi-ggs"
+path = "src/main.rs"
+
+[dependencies]
+kuroobi = { path = "../..", default-features = false }
+play = { path = "../play" }
+socket2 = "0.6"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

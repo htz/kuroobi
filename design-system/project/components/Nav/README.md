@@ -21,4 +21,4 @@ Screen switching on the left of the window. The logo at the top, then the local 
 ## Similar components
 - Switching within a screen (game record / strength, book / learning log) uses `Segmented`. Nav switches the screens themselves.
 
-Used in: `gui/src-ui/js/App.tsx` (left of every screen).
+Used in: `crates/gui/src-ui/js/App.tsx` (left of every screen).

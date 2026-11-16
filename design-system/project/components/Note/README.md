@@ -13,4 +13,4 @@ A paragraph of supplementary explanation. Places descriptive text in a subdued c
 ## Similar components
 - `Empty`: a single line shown when a list is empty.
 
-Used in: `gui/src-ui/js/PlayDock.tsx` ("— No file (you can choose one in settings)" when there is no book file), `components/ggs.tsx` (the explanation of "Not set" in the formula editor).
+Used in: `crates/gui/src-ui/js/PlayDock.tsx` ("— No file (you can choose one in settings)" when there is no book file), `components/ggs.tsx` (the explanation of "Not set" in the formula editor).

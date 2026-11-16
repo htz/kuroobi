@@ -16,4 +16,4 @@ An outer box that fits the board into a square filling the rest of its parent.
 ## Similar components
 - `Board` expands to fill its parent, so keeping it square is BoardFit's job. The GGS game screen computes the board's side itself and does not use BoardFit.
 
-Used in: `gui/src-ui/js/App.tsx`, `BookScreen.tsx`, `LearnLog.tsx`.
+Used in: `crates/gui/src-ui/js/App.tsx`, `BookScreen.tsx`, `LearnLog.tsx`.

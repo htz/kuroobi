@@ -17,4 +17,4 @@ A small label showing a state or category. Used for a match's "Observing", "Adjo
 - `Badge`: a red count circle.
 - `Dot`: just a coloured dot.
 
-Used in: `gui/src-ui/js/components/ggs.tsx` ("Observing", "Adjourned", "Finished" in the match list), `GgsScreens.tsx`, each screen under `ggs/` (lobby, chat, login, players, results, tournaments), `SettingsScreen.tsx`, `Dialogs.tsx` (the format a loaded game record was read as).
+Used in: `crates/gui/src-ui/js/components/ggs.tsx` ("Observing", "Adjourned", "Finished" in the match list), `GgsScreens.tsx`, each screen under `ggs/` (lobby, chat, login, players, results, tournaments), `SettingsScreen.tsx`, `Dialogs.tsx` (the format a loaded game record was read as).

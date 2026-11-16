@@ -21,4 +21,4 @@ A panel placed on the right of the screen. Tabs (`Segmented`) on top, the tab's 
 - Things to show in a dialog (settings, loading a game record) are `Overlay` + `Modal`.
 - Details of a selected row are `Drawer` (overlaid from the right only while something is selected).
 
-Used in: `gui/src-ui/js/PlayDock.tsx` (the right panel for play and study: strength on top, game record below), `gui/src-ui/js/App.tsx` (the book screen's right panel).
+Used in: `crates/gui/src-ui/js/PlayDock.tsx` (the right panel for play and study: strength on top, game record below), `crates/gui/src-ui/js/App.tsx` (the book screen's right panel).

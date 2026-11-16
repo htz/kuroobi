@@ -15,4 +15,4 @@ An invisible component that defines the board's tatami grain pattern (SVG `<patt
 ## Similar components
 - `Board` with `grain={false}` draws no pattern. BoardDefs only defines the pattern and draws no board.
 
-Used in: `gui/src-ui/js/components/layout.tsx`.
+Used in: `crates/gui/src-ui/js/components/layout.tsx`.

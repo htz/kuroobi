@@ -1,13 +1,13 @@
 // Concatenate component declarations into one index.d.ts, add <Comp>Props aliases, and pull in
 // the types they reference from the app's other modules.
 const path = require('path');
-const ts = require(path.join(__dirname, '../../gui/node_modules/typescript'));
+const ts = require(path.join(__dirname, '../../crates/gui/node_modules/typescript'));
 const fs = require('fs');
 process.chdir(__dirname);
 const parse = (f) => ts.createSourceFile(f, fs.readFileSync(f, 'utf8'), ts.ScriptTarget.Latest, true);
 const declName = (n) => (ts.isTypeAliasDeclaration(n) || ts.isInterfaceDeclaration(n) || ts.isEnumDeclaration(n)) && n.name.text;
 const dir = 'dts/components/';
-let out = '// Kuroobi UI components (window.KuroobiUI), generated from gui/src-ui/js/components.\n';
+let out = '// Kuroobi UI components (window.KuroobiUI), generated from crates/gui/src-ui/js/components.\n';
 const declared = new Set(), props = [], bodies = [];
 for (const f of fs.readdirSync(dir).sort()) {
   const sf = parse(dir + f);
@@ -48,6 +48,6 @@ while (work.length) {
   extra.push(text.startsWith('export') ? text : 'export ' + text);
   work.push(...refs(text));
 }
-out += '\n// ---- types the components use (gui/src-ui/js/ggs.ts, state.ts, types.ts) ----\n' + extra.join('\n') + '\n';
+out += '\n// ---- types the components use (crates/gui/src-ui/js/ggs.ts, state.ts, types.ts) ----\n' + extra.join('\n') + '\n';
 fs.writeFileSync('../project/components/index.d.ts', out);
 console.log(props.length, 'props,', extra.length, 'pulled types:', extra.map((e) => e.match(/(?:type|interface|enum) (\w+)/)?.[1]).join(' '));

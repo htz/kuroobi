@@ -24,4 +24,4 @@ A dialog box. It consists of a heading band, the body, and a band of buttons at 
 ## Similar components
 - `Overlay` handles the scrim and the interaction (Esc, closing by clicking the scrim, focus trapping). Modal is only the visual box and has no closing behaviour.
 
-Used in: `gui/src-ui/js/AskSheet.tsx` (asking for a game), `Dialogs.tsx` (loading a game record), `KifuViewer.tsx` (game record), `SettingsScreen.tsx` (adding and editing a server), `components/layout.tsx` (`Confirm`).
+Used in: `crates/gui/src-ui/js/AskSheet.tsx` (asking for a game), `Dialogs.tsx` (loading a game record), `KifuViewer.tsx` (game record), `SettingsScreen.tsx` (adding and editing a server), `components/layout.tsx` (`Confirm`).

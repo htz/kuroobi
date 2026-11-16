@@ -3,20 +3,47 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod control;
-mod formula;
-mod ggs;
-mod i18n;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 
+use ::ggs::client as ggs;
+use ::ggs::env::{
+    append_line, auto_threads, config_dir, learn_log_append, learn_log_path, now_secs, resources,
+    resources_path, LearnChange, LearnEntry, LEARN_LOG_MAX,
+};
+use ::ggs::i18n;
 use kuroobi::engine::{Engine, EngineConfig};
 use kuroobi::game::Reversi;
-use kuroobi::resources::Resources;
 use kuroobi::{Board, Color, Position};
+
+/// The GGS client's view of the app: state goes to the screen, notices to the OS.
+struct GuiHost {
+    app: tauri::AppHandle,
+    activity: Arc<Mutex<Activity>>,
+}
+
+impl ::ggs::Host for GuiHost {
+    fn publish(&self, snapshot: &ggs::Snapshot) {
+        let _ = self.app.emit("ggs", snapshot);
+    }
+    fn notify(&self, title: &str, body: &str) {
+        use tauri_plugin_notification::NotificationExt;
+        let _ = self
+            .app
+            .notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show();
+    }
+    fn local_search_running(&self) -> bool {
+        self.activity.lock().unwrap().local.is_some()
+    }
+}
 
 struct App {
     game: Mutex<Reversi>,
@@ -218,12 +245,6 @@ impl Drop for ActivityGuard {
     }
 }
 
-fn auto_threads() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| (n.get() / 2).max(1))
-        .unwrap_or(4)
-}
-
 fn ggs_snap_arc(app: &State<App>) -> Option<Arc<Mutex<ggs::Snapshot>>> {
     app.ggs.lock().unwrap().as_ref().map(|h| h.snapshot.clone())
 }
@@ -359,38 +380,6 @@ fn auto_pass(game: &mut Reversi) {
     while !game.is_game_over() && game.movable() == 0 {
         game.pass();
     }
-}
-
-fn config_dir() -> PathBuf {
-    dirs_config()
-        .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/..")))
-        .join("kuroobi")
-}
-
-fn resources_path() -> PathBuf {
-    config_dir().join("resources.conf")
-}
-
-fn learn_log_path() -> PathBuf {
-    if let Ok(p) = std::env::var("KUROOBI_LEARN_LOG") {
-        return PathBuf::from(p);
-    }
-    config_dir().join("learn_log.jsonl")
-}
-
-fn dirs_config() -> Option<PathBuf> {
-    if let Ok(d) = std::env::var("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(d));
-    }
-    let home = std::env::var("HOME").ok()?;
-    #[cfg(target_os = "macos")]
-    return Some(PathBuf::from(home).join("Library/Application Support"));
-    #[cfg(not(target_os = "macos"))]
-    return Some(PathBuf::from(home).join(".config"));
-}
-
-fn resources() -> Resources {
-    Resources::load(&resources_path())
 }
 
 /// Weights found by searching from the launch directory are pinned, so a launch from elsewhere finds them too.
@@ -585,91 +574,6 @@ fn has_book() -> bool {
 #[tauri::command]
 fn set_learn(app: State<App>, on: bool) {
     *app.learn_on.lock().unwrap() = on;
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct LearnEntry {
-    pub at: u64,
-    pub kifu: String,
-    pub black: u8,
-    pub white: u8,
-    pub positions: u32,
-    #[serde(default)]
-    pub start: String,
-    #[serde(default)]
-    pub changes: Vec<LearnChange>,
-    #[serde(default)]
-    pub opponent: String,
-    #[serde(default)]
-    pub my_color: String,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct LearnChange {
-    pub ply: usize,
-    pub mv: String,
-    pub before: Option<f32>,
-    pub after: f32,
-    pub best: f32,
-    #[serde(default)]
-    pub new_entry: bool,
-}
-
-impl LearnChange {
-    pub fn of(c: &kuroobi::learn::BackupChange) -> LearnChange {
-        LearnChange {
-            ply: c.ply,
-            mv: c.mv.to_kifu(),
-            before: c.before,
-            after: c.after,
-            best: c.best,
-            new_entry: c.new_entry,
-        }
-    }
-}
-
-pub fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-pub fn learn_log_append(e: &LearnEntry) {
-    let path = learn_log_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let Ok(line) = serde_json::to_string(e) else {
-        return;
-    };
-    append_line(&path, &line);
-    trim_learn_log(&path);
-}
-
-pub(crate) fn append_line(path: &std::path::Path, line: &str) {
-    use std::io::Write as _;
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        let _ = writeln!(f, "{line}");
-    }
-}
-
-const LEARN_LOG_MAX: usize = 200;
-
-fn trim_learn_log(path: &std::path::Path) {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return;
-    };
-    let lines: Vec<&str> = text.lines().collect();
-    if lines.len() <= LEARN_LOG_MAX + 100 {
-        return;
-    }
-    let keep = lines[lines.len() - LEARN_LOG_MAX..].join("\n");
-    let _ = std::fs::write(path, keep + "\n");
 }
 
 #[tauri::command]
@@ -1803,21 +1707,6 @@ fn ggs_send(app: &State<App>, cmd: ggs::Cmd) -> Result<(), String> {
     ggs_tx(app)?.send(cmd).map_err(|e| e.to_string())
 }
 
-pub(crate) fn read_credentials() -> Option<(String, String)> {
-    for c in [
-        ".ggs_credentials",
-        "../.ggs_credentials",
-        "../../.ggs_credentials",
-    ] {
-        if let Ok(s) = std::fs::read_to_string(c) {
-            if let Some((l, p)) = s.lines().next().and_then(|l| l.split_once(':')) {
-                return Some((l.trim().to_string(), p.trim().to_string()));
-            }
-        }
-    }
-    None
-}
-
 #[tauri::command]
 fn ggs_connect(
     app: State<App>,
@@ -2281,7 +2170,13 @@ fn main() {
             if std::env::var("KUROOBI_GGS_DEMO").is_ok() {
                 return Ok(());
             }
-            let handle = ggs::spawn(app.handle().clone(), st.stop.clone(), st.activity.clone());
+            let handle = ggs::spawn(
+                Arc::new(GuiHost {
+                    app: app.handle().clone(),
+                    activity: st.activity.clone(),
+                }),
+                st.stop.clone(),
+            );
             let force = std::env::var("KUROOBI_GGS_AUTOCONNECT").is_ok();
             let demo = std::env::var("KUROOBI_AUTOPLAY").is_ok()
                 || std::env::var("KUROOBI_GGS_AUTOVIEW").is_ok();

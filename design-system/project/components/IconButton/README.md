@@ -17,4 +17,4 @@ A small icon-only button. Used for actions whose meaning the symbol conveys, suc
 ## Similar components
 - `Button`: has a text label. With `square` it also becomes a square button with a single symbol, but it has a border and background.
 
-Used in: `gui/src-ui/js/components/ggs.tsx` (close in the game list, remove in the formula editor), `components/layout.tsx` (opening and closing the toolbar panel, close on `Modal` and `Drawer`).
+Used in: `crates/gui/src-ui/js/components/ggs.tsx` (close in the game list, remove in the formula editor), `components/layout.tsx` (opening and closing the toolbar panel, close on `Modal` and `Drawer`).

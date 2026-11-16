@@ -1,17 +1,19 @@
-# Build is fully separated from the engine (independent workspace).
-# cargo build/test at the root pulls in neither the GUI nor any tauri dependency.
-[workspace]
-
 [package]
-name = "kuroobi-gui"
+name = "gui"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "Kuroobi GUI (Tauri)"
 default-run = "kuroobi-gui"
 
+[[bin]]
+name = "kuroobi-gui"
+path = "src/main.rs"
+
 [dependencies]
-kuroobi = { path = "..", default-features = false }
+kuroobi = { path = "../..", default-features = false }
+ggs = { path = "../ggs" }
+play = { path = "../play" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
@@ -28,7 +30,3 @@ objc2 = "0.6"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-
-# Optimize the search even in GUI debug builds (engine speed is felt directly in the UI)
-[profile.dev.package.kuroobi]
-opt-level = 3

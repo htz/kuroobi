@@ -17,4 +17,4 @@ Shows a GGS match-request condition formula (accept, decline, request) as a read
 ## Similar components
 - `FormulaEditor`: for building and sending your own conditions. FormulaView is for reading someone else's conditions.
 
-Used in: `gui/src-ui/js/GgsScreens.tsx` (the profile on the player screen).
+Used in: `crates/gui/src-ui/js/GgsScreens.tsx` (the profile on the player screen).

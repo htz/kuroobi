@@ -841,8 +841,8 @@ partial lists) or partial (the book silently disabled).
 ### GGS rated games
 
 We take part in the 8x8 rated games on GGS (skatgame.net:5000) as
-**Kuroobi** (login name `kuroobi`). There are 2 clients, the GUI
-(`gui/src/ggs.rs`) and the CLI (`src/bin/ggs.rs`), with clock management
+**Kuroobi** (login name `kuroobi`). One client
+(`crates/ggs`), run by the GUI and by the CLI `kuroobi-ggs`, with clock management
 and automatic reconnection. **Adjourned games are not resumed
 automatically** (see [GUI](gui.md) for the reason). The rating and the
 results need measuring against the current engine.

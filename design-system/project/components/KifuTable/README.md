@@ -21,4 +21,4 @@ A game record table that lists move number, move, eval, time and source, one mov
 ## Similar components
 - `MoveScrub` / `EvalGraph`: moving through move numbers and the eval trend as a graphic. KifuTable is a list of numbers.
 
-Used in: `gui/src-ui/js/PlayDock.tsx`.
+Used in: `crates/gui/src-ui/js/PlayDock.tsx`.

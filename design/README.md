@@ -19,7 +19,7 @@ their markup and sample data is UI text, not documentation.
 
 ## Files the artifact serves but this folder does not hold
 
-- `project/kuroobi-tokens.css` — a copy of `gui/src-ui/tokens.css`.
+- `project/kuroobi-tokens.css` — a copy of `crates/gui/src-ui/tokens.css`.
 - `project/ds/kuroobiui/components/bundle.{js,css}` and
   `project/ds/kuroobiui/tokens.json` — copied from the Design System
   artifact (`design-system/project/components/bundle.*`,
@@ -29,6 +29,6 @@ their markup and sample data is UI text, not documentation.
 ## Publishing
 
 Publish from a clean `main`: the changed files under `project/`, plus
-`kuroobi-tokens.css` whenever `gui/src-ui/tokens.css` changed and the
+`kuroobi-tokens.css` whenever `crates/gui/src-ui/tokens.css` changed and the
 `ds/kuroobiui/` copies whenever the Design System artifact was
 republished with new components or tokens.

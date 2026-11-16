@@ -1,0 +1,9 @@
+[package]
+name = "play"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Engine workers for playing kuroobi on a clock, shared by every client"
+
+[dependencies]
+kuroobi = { path = "../..", default-features = false }

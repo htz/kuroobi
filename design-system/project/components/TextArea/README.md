@@ -19,4 +19,4 @@ A multi-line text input. Used for long strings such as formulas or game records.
 ## Similar components
 - `TextField`: one line.
 
-Used in: `gui/src-ui/js/GgsScreens.tsx` (the field for writing a `FormulaField` formula directly), `Dialogs.tsx` (the field for loading a game record and the read-only field for exporting one, 5 rows each).
+Used in: `crates/gui/src-ui/js/GgsScreens.tsx` (the field for writing a `FormulaField` formula directly), `Dialogs.tsx` (the field for loading a game record and the read-only field for exporting one, 5 rows each).

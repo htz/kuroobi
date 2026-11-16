@@ -14,4 +14,4 @@ A small date-separator label placed between chat messages.
 ## Similar components
 - `Bubble` is the message itself. DayMark is only a separator and has no actions.
 
-Used in: `gui/src-ui/js/ggs/Chat.tsx`.
+Used in: `crates/gui/src-ui/js/ggs/Chat.tsx`.

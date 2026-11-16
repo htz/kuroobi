@@ -15,4 +15,4 @@ The vertical stack in the middle of the screen that fills the space between `Nav
 ## Similar components
 - `Body` is the horizontal outer box; `Section` is a group with a heading inside Main or Dock.
 
-Used in: `gui/src-ui/js/App.tsx` (every screen).
+Used in: `crates/gui/src-ui/js/App.tsx` (every screen).

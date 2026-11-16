@@ -19,4 +19,4 @@ A single-line text input. Used for server names, login names, passwords, command
 - `TextArea`: multiple lines.
 - `Select`: choose from options.
 
-Used in: `gui/src-ui/js/AskSheet.tsx` (opponent search, game count and interval), `ggs/Login.tsx`, `ggs/Console.tsx`, `ggs/Chat.tsx`, `ggs/Players.tsx` and `ggs/Tourney.tsx` (search), `SettingsScreen.tsx`, `Dialogs.tsx`, `components/ggs.tsx` (numbers in the formula editor).
+Used in: `crates/gui/src-ui/js/AskSheet.tsx` (opponent search, game count and interval), `ggs/Login.tsx`, `ggs/Console.tsx`, `ggs/Chat.tsx`, `ggs/Players.tsx` and `ggs/Tourney.tsx` (search), `SettingsScreen.tsx`, `Dialogs.tsx`, `components/ggs.tsx` (numbers in the formula editor).

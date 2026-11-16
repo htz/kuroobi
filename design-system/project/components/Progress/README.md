@@ -14,4 +14,4 @@ Progress as a thin horizontal bar. Shows the progress of work with a known count
 ## Similar components
 - `Busy`: an in-progress indicator for work of unknown amount.
 
-Used in: `gui/src-ui/js/App.tsx` (progress of analysis in study), `ggs/Tourney.tsx` (progress of a tournament round).
+Used in: `crates/gui/src-ui/js/App.tsx` (progress of analysis in study), `ggs/Tourney.tsx` (progress of a tournament round).

@@ -21,4 +21,4 @@ A dropdown that collapses its options. Used when options are many or long, such 
 - `Combobox`: the same closed look, with a searchable list for many names.
 - `Strength`: a combination of Selects dedicated to strength.
 
-Used in: `gui/src-ui/js/App.tsx`, `PlayDock.tsx`, `AskSheet.tsx`, `Dialogs.tsx`, `LearnLog.tsx`, `SettingsScreen.tsx`, `components/ggs.tsx`, `components/strength.tsx`, `ggs/Login.tsx`, `ggs/Players.tsx`, `ggs/Results.tsx`.
+Used in: `crates/gui/src-ui/js/App.tsx`, `PlayDock.tsx`, `AskSheet.tsx`, `Dialogs.tsx`, `LearnLog.tsx`, `SettingsScreen.tsx`, `components/ggs.tsx`, `components/strength.tsx`, `ggs/Login.tsx`, `ggs/Players.tsx`, `ggs/Results.tsx`.

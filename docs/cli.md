@@ -8,7 +8,7 @@ for a question, and the question is settled. They run as
 the direct call to the binary in `target/release/`).
 
 Argument parsing is hand-rolled. Called without arguments most print
-their usage; `gtp` starts serving and `bookgen` reports the book it
+their usage; `kuroobi-gtp` starts serving and `bookgen` reports the book it
 finds. Only `linear_train` has `--help`.
 
 Paths default relative to the working directory (`weights/nnue.bin`,
@@ -20,7 +20,7 @@ repository root or pass the paths.
 | Training | [`linear_train`](#linear_train) [`nnue_train`](#nnue_train) |
 | Assembling a model | [`linear_stage_merge`](#linear_stage_merge) [`nnue_mpccalib`](#nnue_mpccalib) |
 | Training data and runtime resources | [`gendata`](#gendata) [`bookgen`](#bookgen) |
-| Playing | [`gtp`](#gtp) [`ggs`](#ggs) |
+| Playing | [`kuroobi-gtp`](#kuroobi-gtp) [`kuroobi-ggs`](#kuroobi-ggs) |
 
 
 ---
@@ -350,7 +350,7 @@ guessed at. Rebuild with `--scan` and top up with `--deepen --all-moves`.
 
 ## Playing
 
-Engine options `gtp` and `ggs` share:
+Engine options `kuroobi-gtp` and `kuroobi-ggs` share:
 
 | Option | Meaning |
 |---|---|
@@ -360,7 +360,7 @@ Engine options `gtp` and `ggs` share:
 | `--weights <path>` | Linear weights (`weights/linear.bin`) |
 | `--nnue <path>` | NNUE weights (`weights/nnue.bin`) |
 
-### gtp
+### kuroobi-gtp
 
 A GTP server around the engine on stdin/stdout, so this build can be
 driven by any GTP driver, or played against another build of itself.
@@ -372,13 +372,13 @@ nodes, seconds and speed of its searches to stderr.
 Without a clock, `genmove` searches to the level (cut by `--time-ms` if
 set). Once the driver sends `time_settings <main> <byo-yomi> <stones>`,
 each side gets `main` seconds for the game (byo-yomi is ignored, as on
-GGS) and `genmove` plays by the clock like `ggs`: one search sized to the
+GGS) and `genmove` plays by the clock like `kuroobi-ggs`: one search sized to the
 time left. `time_left <color> <seconds> <stones>` corrects that side's
 remaining time; without it the server deducts its own search time.
 `clear_board` restores both sides to the full `main`.
 
 ```sh
-gtp -l 12 -t 4 --nnue weights/nnue.bin
+kuroobi-gtp -l 12 -t 4 --nnue weights/nnue.bin
 ```
 
 | Option | Default | Meaning |
@@ -391,33 +391,36 @@ gtp -l 12 -t 4 --nnue weights/nnue.bin
 | `--no-mpc`, `--weights`, `--nnue` | | As above |
 | `-gtp`, `-q`, `--quiet`, `-nobook`, `--no-book` | | Accepted and ignored, for drivers that pass them |
 
-### ggs
+### kuroobi-ggs
 
 **Client for GGS (skatgame.net:5000).** Plays on the reversi service
-`/os`; the GUI's "GGS" screen has the same functionality and usually
-suffices. A game on a clock is played by the clock: each move gets one
+`/os` with the same client the GUI's "GGS" screen runs, which usually
+suffices. It leaves the GUI's settings, saved accounts and session lock
+alone, so it can run beside the GUI; game history, chat and the wire log
+go to `ggs_games/users/<server>/<login>/` (from the working directory,
+or a `users/` folder there when it has no `ggs_games/`). A game on a clock is played by the clock: each move gets one
 search sized to the time left. The book is not used.
 
 ```sh
 # Ask <opponent> for games
-ggs --play <opponent> [--games N] [--type 8] [--time 30:00]
+kuroobi-ggs --play <opponent> [--games N] [--type 8] [--time 30:00]
     [--login name --pw pass | --credentials .ggs_credentials] [--server host:port]
 
 # Resume an adjourned game
-ggs --resume <.id> [login options]
+kuroobi-ggs --resume <.id> [login options]
 
 # Wait for requests from <opponent> and accept them (asks for nothing);
 # `--accept '*'` takes a request from anyone
-ggs --accept <opponent> [--games N] [login options]
+kuroobi-ggs --accept <opponent> [--games N] [login options]
 
 # Stay logged in and pass stdin lines to the server. Any game the
 # account is seated in is still played -- e.g. one asked for by a line
 # typed on stdin, or accepted with --accept
-ggs --console [--accept <opponent>] [login options]
+kuroobi-ggs --console [--accept <opponent>] [login options]
 
 # Bridge that only returns a move: reads "<64 cells> <X|O>" lines on
 # stdin, answers "= <move> <value>" ("= pa <value>" to pass); "quit" ends
-ggs --serve [--depth N] [--solve-empties N]
+kuroobi-ggs --serve [--depth N] [--solve-empties N]
 ```
 
 | Option | Default | Meaning |

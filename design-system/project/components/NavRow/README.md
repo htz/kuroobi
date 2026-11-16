@@ -15,4 +15,4 @@ One item in the left nav. A clickable row with an icon and a name, and a count o
 ## Similar components
 - `Nav`: the left column itself that lays out the items. NavRow is one row of it.
 
-Used in: `gui/src-ui/js/components/ggs.tsx` (the items of `Nav`), `gui/src-ui/js/App.tsx` ("Settings" at the bottom of the left nav).
+Used in: `crates/gui/src-ui/js/components/ggs.tsx` (the items of `Nav`), `crates/gui/src-ui/js/App.tsx` ("Settings" at the bottom of the left nav).

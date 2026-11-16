@@ -15,4 +15,4 @@ Small heading text placed above a group. `fs-7`, weight 600, letter spacing .08e
 - `Section`: a section of heading + underline + content.
 - `TableHead`: the row of a table's column names.
 
-Used in: `gui/src-ui/js/ggs/Login.tsx`, `GlobalStatus.tsx`, `GgsScreens.tsx` (people watching), `ggs/Players.tsx`, `ggs/Chat.tsx`, `KifuViewer.tsx`, `Dialogs.tsx`, `components/ggs.tsx`.
+Used in: `crates/gui/src-ui/js/ggs/Login.tsx`, `GlobalStatus.tsx`, `GgsScreens.tsx` (people watching), `ggs/Players.tsx`, `ggs/Chat.tsx`, `KifuViewer.tsx`, `Dialogs.tsx`, `components/ggs.tsx`.

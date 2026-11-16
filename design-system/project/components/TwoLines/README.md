@@ -15,4 +15,4 @@ The content of a two-line row. A name on top and a `sub` note below. Both are cu
 ## Similar components
 - A toolbar title and note on one line is `TitleBit` in `ggsui.tsx` (a screen-side component).
 
-Used in: `gui/src-ui/js/ggs/Chat.tsx`, `ggs/Tourney.tsx`, `ggs/Console.tsx`.
+Used in: `crates/gui/src-ui/js/ggs/Chat.tsx`, `ggs/Tourney.tsx`, `ggs/Console.tsx`.

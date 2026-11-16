@@ -22,17 +22,16 @@ whose iteration order is meaningful and for wide-signature search
 functions, allowed per module with the reason commented in code; fix
 everything else.
 
-**`gui` is a separate workspace.** The root `--all` does not reach it,
-and CI checks formatting in the GUI job too. When you touch the GUI,
-run the same three there:
+**The GUI is a workspace member outside `default-members`.** Root
+`cargo fmt --all` formats it, but root clippy and test skip it. When
+you touch the GUI, also run:
 
 ```sh
-cd gui && cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test --release
+cd crates/gui && cargo clippy --all-targets -- -D warnings && cargo test --release
 ```
 
-Missing this once produced four consecutive red CI runs while
-everything passed locally — and the stale formatting was in files the
-change never touched, so inspecting the diff found nothing.
+Before the GUI joined the workspace, missing this produced four
+consecutive red CI runs while everything passed locally.
 
 ### If CI fails but local passes, suspect the toolchain first
 
@@ -50,7 +49,7 @@ rustup update stable    # get on CI's footing before fixing
 the screen simply never updates:
 
 ```sh
-cd gui
+cd crates/gui
 npm run build    # frontend first
 cargo build --release
 ```
@@ -64,7 +63,7 @@ content hash, so a match proves freshness):
 
 ```sh
 W=$(grep -o 'index-[A-Za-z0-9_-]*\.js' ui/index.html)
-strings target/release/kuroobi-gui | grep -c "$W"    # 0 means stale
+strings ../../target/release/kuroobi-gui | grep -c "$W"    # 0 means stale
 ```
 
 Grepping for content strings is useless — the embed is compressed and
@@ -80,9 +79,10 @@ never reach the screen. `npm run check` fails on this.
 pick up unrelated windows in front; use the `window-screenshot` skill.
 
 **Drive the GUI through its control socket, not by clicking**: with
-`kuroobi-mcp`, built beside the GUI, as the `kuroobi-gui` MCP server in
+`kuroobi-mcp` (`crates/mcp`, built by the root `cargo build` into
+`target/release/` beside the GUI), as the `kuroobi-gui` MCP server in
 `.mcp.json` (`kuroobi-mcp --mcp`) or from the shell
-(`gui/target/release/kuroobi-mcp [--instance test] status`). The
+(`target/release/kuroobi-mcp [--instance test] status`). The
 tools are named `namespace__operation`: `launch`, `quit` and `status` for
 the app itself; `ggs__` (GGS), `game__` (the local board and engine),
 `kifu__` and `engine__` for operations that mean the same with or without
@@ -97,7 +97,7 @@ control or `--no-control` turns it off. `--instance test` is
 `tmp/guitest`, whose `ggs_games` holds only local-server accounts; use it
 for anything that is not meant to reach the real GGS account.
 
-**Launch the real GUI only from `gui/`** (`launch` does). Weights and
+**Launch the real GUI only from `crates/gui/`** (`launch` does). Weights and
 GGS data are found relative to the launch folder; a GUI built and launched
 in a worktree once found neither, logged in anyway and lost two games on
 time.
@@ -160,8 +160,8 @@ crashes.
 ## UI strings live in the locale files
 
 **No implementation file carries display text.** Every user-visible
-string is a key in `gui/src-ui/locales/en.yaml` and `ja.yaml`; the
-screen calls `t('key')` (`gui/src-ui/js/i18n.ts`). English is the
+string is a key in `crates/gui/src-ui/locales/en.yaml` and `ja.yaml`; the
+screen calls `t('key')` (`crates/gui/src-ui/js/i18n.ts`). English is the
 fallback for every language, so a key missing from `ja.yaml` still
 renders. The language follows the machine by default and is switchable
 in Settings > Display.

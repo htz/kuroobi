@@ -2,7 +2,7 @@
 import re, json, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 os.chdir(HERE)
-src = open(os.path.join(HERE, '..', '..', 'gui', 'src-ui', 'tokens.css')).read()
+src = open(os.path.join(HERE, '..', '..', 'crates', 'gui', 'src-ui', 'tokens.css')).read()
 def block(sel):
     i = src.index(sel); j = src.index('{', i); depth=0
     for k in range(j, len(src)):

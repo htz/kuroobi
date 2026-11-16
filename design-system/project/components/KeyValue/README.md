@@ -14,4 +14,4 @@ Shows a label and a value on one line, with the label on the left and the value 
 ## Similar components
 - `TableHead` / `TableRow`: when many rows of items with the same shape are listed.
 
-Used in: `gui/src-ui/js/PlayDock.tsx` (remaining time when the game record has moves under a main time, `big`), `LearnLog.tsx` (this game), `ggs/Results.tsx` (match details and the record band).
+Used in: `crates/gui/src-ui/js/PlayDock.tsx` (remaining time when the game record has moves under a main time, `big`), `LearnLog.tsx` (this game), `ggs/Results.tsx` (match details and the record band).

@@ -18,4 +18,4 @@ A chart that draws the rating history as a single line and marks the hovered gam
 ## Similar components
 - `RateRow`: the current rating and win/loss counts as numbers on one line. RateChart shows the history as a chart.
 
-Used in: `gui/src-ui/js/ggs/Results.tsx` ("Rating history"), `ggs/Players.tsx` (player details).
+Used in: `crates/gui/src-ui/js/ggs/Results.tsx` ("Rating history"), `ggs/Players.tsx` (player details).

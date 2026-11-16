@@ -14,4 +14,4 @@ An indicator that work is running, such as "Thinking" or "Analyzing". Places an 
 - `Dot`: the dot alone.
 - `Progress`: a ratio bar.
 
-Used in: `gui/src-ui/js/App.tsx` (the aux "Importing {done} / {total} positions" of the book screen's Toolbar).
+Used in: `crates/gui/src-ui/js/App.tsx` (the aux "Importing {done} / {total} positions" of the book screen's Toolbar).

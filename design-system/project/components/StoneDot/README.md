@@ -15,4 +15,4 @@ A small circle representing a black or white disc. Placed beside a player name o
 ## Similar components
 - `Dot`: a status-colour dot (not a disc colour).
 
-Used in: `gui/src-ui/js/App.tsx`, `Dialogs.tsx`, `KifuViewer.tsx`, `components/data.tsx`.
+Used in: `crates/gui/src-ui/js/App.tsx`, `Dialogs.tsx`, `KifuViewer.tsx`, `components/data.tsx`.

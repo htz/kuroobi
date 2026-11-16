@@ -16,4 +16,4 @@ The status strip at the very bottom of the window. Shows running work on the lef
 ## Similar components
 - Transient notices are `Toasts` (shown just above the StatusBar). The StatusBar is an always-visible state.
 
-Used in: `gui/src-ui/js/GlobalStatus.tsx` (the bottom row of every screen).
+Used in: `crates/gui/src-ui/js/GlobalStatus.tsx` (the bottom row of every screen).

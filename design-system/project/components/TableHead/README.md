@@ -16,4 +16,4 @@ A table's header row. Pass column widths and alignment with `cols`, or lay out c
 ## Similar components
 - `ResultHead`: a header dedicated to game results (fixed columns). A `Section` heading (h3) is the title of a section, not a table's column names.
 
-Used in: `gui/src-ui/js/BookScreen.tsx`, `LearnLog.tsx`, `components/data.tsx` (`KifuTable`, `ResultHead`), `ggsui.tsx` (`HeadRow`).
+Used in: `crates/gui/src-ui/js/BookScreen.tsx`, `LearnLog.tsx`, `components/data.tsx` (`KifuTable`, `ResultHead`), `ggsui.tsx` (`HeadRow`).

@@ -18,4 +18,4 @@ One GGS chat speech bubble. Your own messages are right-aligned in `accent`; the
 ## Similar components
 - `DayMark`: the date divider between bubbles. `ConsoleLog`: raw lines exchanged with the server.
 
-Used in: `gui/src-ui/js/GgsScreens.tsx` (the GGS chat screen).
+Used in: `crates/gui/src-ui/js/GgsScreens.tsx` (the GGS chat screen).

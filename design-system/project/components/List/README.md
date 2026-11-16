@@ -14,4 +14,4 @@ A container that just stacks rows vertically (flex column).
 ## Similar components
 - `Section`: a section with a heading. List only groups rows within it.
 
-Used in: `gui/src-ui/js/BookScreen.tsx`, `LearnLog.tsx`.
+Used in: `crates/gui/src-ui/js/BookScreen.tsx`, `LearnLog.tsx`.

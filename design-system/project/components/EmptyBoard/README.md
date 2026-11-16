@@ -14,4 +14,4 @@ A component that shows a small board in the initial position (four central discs
 ## Similar components
 - `Board`: a real position with interaction. Use EmptyBoard only when you want a picture of a board instead of `EmptyState`'s default icon.
 
-Used in: `gui/src-ui/js/GgsScreens.tsx` (when there are no matches in Play / observe).
+Used in: `crates/gui/src-ui/js/GgsScreens.tsx` (when there are no matches in Play / observe).

@@ -1,0 +1,14 @@
+[package]
+name = "mcp"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Drives a running kuroobi GUI through its control socket, from the shell or as an MCP server"
+
+[[bin]]
+name = "kuroobi-mcp"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+kuroobi = { path = "../..", default-features = false }

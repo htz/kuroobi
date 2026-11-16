@@ -18,4 +18,4 @@ One input field with its name above it. Used for forms stacked vertically in a n
 ## Similar components
 - `SettingRow`: a settings row that lays out name, field and description side by side.
 
-Used in: `gui/src-ui/js/ggs/Login.tsx`, `SettingsScreen.tsx` (editing a server, changing the password).
+Used in: `crates/gui/src-ui/js/ggs/Login.tsx`, `SettingsScreen.tsx` (editing a server, changing the password).

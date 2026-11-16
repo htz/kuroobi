@@ -15,4 +15,4 @@ Shows a rating for one game type on one line: the rating value, deviation, provi
 ## Similar components
 - `RateChart`: a line chart of the history. RateRow shows only the current value.
 
-Used in: `RankRates` in `gui/src-ui/js/ggsui.tsx` (listed per game type: "alice's rating" in `ggs/Players.tsx`, and "Rating" in `ggs/Results.tsx` when "All" is selected).
+Used in: `RankRates` in `crates/gui/src-ui/js/ggsui.tsx` (listed per game type: "alice's rating" in `ggs/Players.tsx`, and "Rating" in `ggs/Results.tsx` when "All" is selected).

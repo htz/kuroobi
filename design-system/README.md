@@ -2,7 +2,7 @@
 
 The GUI's design system as published to the Design System artifact
 (window.KuroobiUI): its components, tokens and the screen spec. The
-implementation in `gui/` is the source of truth; everything here is
+implementation in `crates/gui/` is the source of truth; everything here is
 built from it or describes it.
 
 ## Layout
@@ -18,13 +18,13 @@ built from it or describes it.
 
 ## Building
 
-Run after `npm ci` in `gui/`, from the repository root:
+Run after `npm ci` in `crates/gui/`, from the repository root:
 
 ```sh
 cd design-system/tools
-python3 gen_tokens.py && python3 make_tokens.py   # gui/src-ui/tokens.css -> project/tokens.json
+python3 gen_tokens.py && python3 make_tokens.py   # crates/gui/src-ui/tokens.css -> project/tokens.json
 node build.mjs && python3 finish.py               # gui components -> project/components/bundle.{js,css}
-(cd ../../gui && npx tsc -p . --noEmit false --declaration --emitDeclarationOnly --outDir ../design-system/tools/dts)
+(cd ../../crates/gui && npx tsc -p . --noEmit false --declaration --emitDeclarationOnly --outDir ../../design-system/tools/dts)
 node dts.cjs                                      # -> project/components/index.d.ts
 ```
 

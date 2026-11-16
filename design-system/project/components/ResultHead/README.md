@@ -14,4 +14,4 @@ The header row of the game results table (result, opponent, format, disc differe
 ## Similar components
 - `TableHead`: a general-purpose header whose columns are set freely.
 
-Used in: `gui/src-ui/js/ggs/Results.tsx` ("Finished games"), `ggs/Players.tsx` (match history in player details).
+Used in: `crates/gui/src-ui/js/ggs/Results.tsx` ("Finished games"), `ggs/Players.tsx` (match history in player details).

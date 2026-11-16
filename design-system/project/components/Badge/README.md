@@ -14,4 +14,4 @@ A small red circle showing a count. Makes unread or received counts stand out.
 - `Tag`: a classification label. Four colours.
 - `Dot`: a dot without text.
 
-Used in: `gui/src-ui/js/ggs/Chat.tsx` (unread count in the conversation list).
+Used in: `crates/gui/src-ui/js/ggs/Chat.tsx` (unread count in the conversation list).

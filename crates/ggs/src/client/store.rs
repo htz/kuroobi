@@ -179,7 +179,7 @@ fn import_old_credentials() -> AccountStore {
         (!pw.is_empty() && login != "-").then_some((login, pw))
     };
     let mut s = AccountStore::default();
-    if let Some((login, pw)) = keychain().or_else(crate::read_credentials) {
+    if let Some((login, pw)) = keychain().or_else(crate::env::read_credentials) {
         s.auto = Some(key_of(DEFAULT_SERVER, &login));
         s.accounts.push(SavedAccount {
             server: DEFAULT_SERVER.to_string(),
@@ -413,6 +413,9 @@ impl Default for SavedSettings {
 }
 
 pub(super) fn save_settings(ctx: &Ctx) {
+    if !opts().persist {
+        return;
+    }
     let s = ctx.snap.lock().unwrap();
     let e = &s.engine;
     let v = SavedSettings {

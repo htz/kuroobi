@@ -19,4 +19,4 @@ Transient notices stacked at the bottom right of the window, just above the Stat
 ## Similar components
 - `StatusBar`: always-visible state. Toasts: transient events.
 
-Used in: `gui/src-ui/js/App.tsx` (shared by all screens).
+Used in: `crates/gui/src-ui/js/App.tsx` (shared by all screens).

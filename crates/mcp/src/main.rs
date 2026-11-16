@@ -15,18 +15,18 @@ use serde_json::{json, Map, Value};
 fn repo() -> PathBuf {
     let p = std::env::var_os("KUROOBI_REPO")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/..")));
+        .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")));
     std::fs::canonicalize(&p).unwrap_or(p)
 }
 
-/// `main` is the real app launched from `gui/`; `test` is a folder whose `ggs_games` holds only
+/// `main` is the real app launched from `crates/gui/`; `test` is a folder whose `ggs_games` holds only
 /// local-server accounts.
 fn launch_dir(instance: &str) -> PathBuf {
     match instance {
         "test" => std::env::var_os("KUROOBI_TEST_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| repo().join("tmp/guitest")),
-        _ => repo().join("gui"),
+        _ => repo().join("crates/gui"),
     }
 }
 
@@ -205,7 +205,7 @@ fn launch(instance: &str) -> Result<Value, String> {
     let data = if instance == "test" {
         cwd.join("ggs_games")
     } else {
-        cwd.join("../ggs_games")
+        cwd.join("../../ggs_games")
     };
     if !data.is_dir() {
         return Err(format!(

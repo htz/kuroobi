@@ -171,9 +171,14 @@ src/
 ├── learn.rs           実戦の帰結を定石へ書き戻す学習 (負け局の回避)
 ├── resources.rs       重み・定石の在り処 (設定ファイルで指定できる)
 ├── engine.rs          GUI と CLI が共用するセッション層 (着手選択・解析)
-├── trainer.rs         学習データ入出力・対称形・エポック統計
-└── bin/               CLI ツール群 (学習・stage 合成・MPC 較正・定石生成・GTP サーバ・GGS クライアント)
-gui/                   GUI (Tauri + Vite/TypeScript)
+└── trainer.rs         学習データ入出力・対称形・エポック統計
+crates/
+├── play/              持ち時間つき対局のエンジン担当 (全クライアント共通)
+├── gtp/               GTP サーバ (kuroobi-gtp)
+├── ggs/               GGS クライアント (GUI と kuroobi-ggs が動かす)
+├── gui/               GUI (Tauri + Vite/TypeScript、kuroobi-gui)
+├── mcp/               起動中の GUI をシェルや MCP サーバとして操作する (kuroobi-mcp)
+└── train/             学習・自己対局データ・stage 合成・MPC 較正・定石生成
 docs/                  実装の解説 (この README から辿る)
 tests/                 perft 網羅・ソルバ統合テスト・停止までの時間
 benches/               マイクロベンチ (criterion)
@@ -193,8 +198,12 @@ cargo clippy --all-targets -- -D warnings
 cargo test --release
 ```
 
-GUI は `gui/` で `npm run build` → `cargo build --release` の順に回す
+ルートは 1 つの Cargo workspace (エンジンのライブラリはルート、ツールと
+GUI は `crates/`)。ルートでの `cargo` は GUI を含まない (`cargo fmt --all`
+は含む)。GUI は `crates/gui/` で `npm run build` → `cargo build --release` の順に回す
 (Tauri はフロントをバイナリに埋め込むため、逆順だと変更が反映されない)。
+バイナリは GUI も含めてすべて `target/release/` に出る。GUI を操作する
+`kuroobi-mcp` はルートの `cargo build` で作られ、`crates/gui/` での build には含まれない。
 
 テストは perft による着手生成の網羅検証、差分パターンインデックスの全再計算
 との一致、確定石の対局不変性 (プロパティテスト)、探索の値等価性 (参照

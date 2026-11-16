@@ -1,7 +1,7 @@
 # bundle.raw.js -> project/components/bundle.js (+header), base.css -> bundle.css
 import re, json, os, subprocess
 HERE = os.path.dirname(os.path.abspath(__file__))
-GUI = os.path.join(HERE, '..', '..', 'gui')
+GUI = os.path.join(HERE, '..', '..', 'crates', 'gui')
 OUT = os.path.join(HERE, '..', 'project', 'components')
 os.chdir(HERE)
 code = open('bundle.raw.js').read().replace('<!--', '\\x3C!--')
@@ -16,5 +16,5 @@ css = open(os.path.join(GUI, 'src-ui', 'base.css')).read()
 # The app frame rules (fill the window, no page scroll) do not belong in a preview frame.
 css = css.replace('html, body, #root { height:100%; }\n', '')
 css = re.sub(r'\n  overflow:hidden;[^\n]*\n', '\n', css, count=1)
-open(os.path.join(OUT, 'bundle.css'),'w').write('/* Kuroobi base — gui/src-ui/base.css (frame rules removed) */\n' + css)
+open(os.path.join(OUT, 'bundle.css'),'w').write('/* Kuroobi base — crates/gui/src-ui/base.css (frame rules removed) */\n' + css)
 print(len(names), 'components')

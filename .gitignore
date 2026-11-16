@@ -13,13 +13,12 @@
 # the suffix too. An exact-match rule once let a second account's file through
 # and it was pushed to the public repo (password rotated, history rewritten).
 .ggs_credentials*
-/gui/target/
-/gui/gen/
+/crates/gui/gen/
 node_modules/
 # Frontend (Vite) build output. Generated, index.html included, so untracked.
 # Tauri reads ui/ as frontendDist, so `npm ci && npm run build` must run
 # before building the app (CI uses that order too).
-/gui/ui/
+/crates/gui/ui/
 __pycache__/
 # Working notes. **Untracked** — they change with every edit and are not worth
 # keeping in history (they were committed once and removed retroactively).

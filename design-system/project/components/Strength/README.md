@@ -18,4 +18,4 @@ Chooses KUROOBI's strength (search depth and the number of empties to solve). Pi
 ## Similar components
 - `Select`: a general-purpose dropdown.
 
-Used in: `gui/src-ui/js/PlayDock.tsx` (strength in play, analysis settings in study).
+Used in: `crates/gui/src-ui/js/PlayDock.tsx` (strength in play, analysis settings in study).

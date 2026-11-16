@@ -204,7 +204,7 @@ export async function onHints(
 export type ControlRequest = { action?: string; menu?: string; category?: string };
 
 /**
- * Serves the control socket (`gui/src/control.rs`): a `call` runs a command through the same
+ * Serves the control socket (`crates/gui/src/control.rs`): a `call` runs a command through the same
  * `call` the screens use; a screen request goes to `screen`. Either way the answer goes back.
  */
 export async function serveControl(screen: (r: ControlRequest) => unknown): Promise<() => void> {

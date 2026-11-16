@@ -1,4 +1,4 @@
-//! Socket setup shared by the GGS clients.
+//! Socket setup for the GGS clients.
 
 use std::net::TcpStream;
 use std::time::Duration;
