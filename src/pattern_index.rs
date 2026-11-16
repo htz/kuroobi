@@ -5,7 +5,7 @@ use crate::pattern::Pattern;
 use crate::position::Position;
 
 pub const MAX_MASKS: usize = 80;
-const _: () = assert!(MAX_MASKS.is_multiple_of(8));
+const _: () = assert!(MAX_MASKS.is_multiple_of(16));
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PatternIndices {
@@ -119,7 +119,14 @@ impl PatternIndexer {
         unsafe {
             self.apply_neon(indices, pos.index(), mover_diff, flipped, flip_diff)
         }
-        #[cfg(not(target_arch = "aarch64"))]
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        unsafe {
+            self.apply_avx2(indices, pos.index(), mover_diff, flipped, flip_diff)
+        }
+        #[cfg(not(any(
+            target_arch = "aarch64",
+            all(target_arch = "x86_64", target_feature = "avx2")
+        )))]
         {
             self.update_square(indices, pos.index(), mover_diff);
             let mut f = flipped;
@@ -167,7 +174,47 @@ impl PatternIndexer {
         }
     }
 
-    #[cfg(not(target_arch = "aarch64"))]
+    /// [`PatternIndices::apply_neon`] with sixteen masks per register.
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    #[inline]
+    unsafe fn apply_avx2(
+        &self,
+        indices: &mut PatternIndices,
+        pos: u8,
+        mover_diff: u16,
+        flipped: u64,
+        flip_diff: u16,
+    ) {
+        use core::arch::x86_64::*;
+        const V: usize = MAX_MASKS / 16;
+        let dst = indices.idx.as_mut_ptr() as *mut __m256i;
+        let mut acc = [_mm256_setzero_si256(); V];
+        for (i, a) in acc.iter_mut().enumerate() {
+            *a = _mm256_loadu_si256(dst.add(i));
+        }
+        let mul_add = |acc: &mut [__m256i; V], sq: usize, diff: u16| {
+            let row = self.dense_pow3.get_unchecked(sq).as_ptr() as *const __m256i;
+            let d = _mm256_set1_epi16(diff as i16);
+            for (i, a) in acc.iter_mut().enumerate() {
+                *a = _mm256_add_epi16(*a, _mm256_mullo_epi16(_mm256_loadu_si256(row.add(i)), d));
+            }
+        };
+        mul_add(&mut acc, pos as usize, mover_diff);
+        let mut f = flipped;
+        while f != 0 {
+            let sq = f.trailing_zeros() as usize;
+            f &= f - 1;
+            mul_add(&mut acc, sq, flip_diff);
+        }
+        for (i, a) in acc.iter().enumerate() {
+            _mm256_storeu_si256(dst.add(i), *a);
+        }
+    }
+
+    #[cfg(not(any(
+        target_arch = "aarch64",
+        all(target_arch = "x86_64", target_feature = "avx2")
+    )))]
     #[inline]
     fn update_square(&self, indices: &mut PatternIndices, sq: u8, digit_diff: u16) {
         let row = unsafe { self.dense_pow3.get_unchecked(sq as usize) };

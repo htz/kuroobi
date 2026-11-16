@@ -7,7 +7,11 @@ pub fn l1<T>(p: *const T) {
     unsafe {
         std::arch::asm!("prfm pldl1keep, [{p}]", p = in(reg) p, options(nostack, readonly, preserves_flags));
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(p as *const i8);
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     let _ = p;
 }
 
@@ -18,6 +22,10 @@ pub fn l2<T>(p: *const T) {
     unsafe {
         std::arch::asm!("prfm pldl2keep, [{p}]", p = in(reg) p, options(nostack, readonly, preserves_flags));
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T1 }>(p as *const i8);
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     let _ = p;
 }

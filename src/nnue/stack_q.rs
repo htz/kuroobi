@@ -47,6 +47,51 @@ unsafe fn prefetch_row(ft: *const i16, pa: *const i16, r: u32) {
     }
 }
 
+/// Starts loading every 64 B line of row `r` in both tables.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(feature = "nnue-scalar")
+))]
+#[inline(always)]
+unsafe fn prefetch_row_x86(ft: *const i16, pa: *const i16, r: u32) {
+    let (hp, pp) = (
+        ft.add(r as usize * ACC_DIMS) as *const u8,
+        pa.add(r as usize * PA_DIMS) as *const u8,
+    );
+    for l in 0..ACC_DIMS * 2 / 64 {
+        crate::prefetch::l1(hp.add(l * 64));
+    }
+    for l in 0..PA_DIMS * 2 / 64 {
+        crate::prefetch::l1(pp.add(l * 64));
+    }
+}
+
+/// Inputs of one layer as 16-bit lanes, aligned for 32 B loads.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(feature = "nnue-scalar")
+))]
+#[repr(align(32))]
+struct Lanes<const N: usize>([i16; N]);
+
+/// Weights packed for `_mm256_madd_epi16`: for input pair `p` and output `o`, `w[o][2p]` and `w[o][2p + 1]` sit at `(p * n_out + o) * 2`.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(feature = "nnue-scalar")
+))]
+fn pair_pack(packed: &[i8], n_out: usize, n_in: usize) -> Vec<i16> {
+    let mut out = vec![0i16; n_out * n_in];
+    for o in 0..n_out {
+        for k in 0..n_in {
+            out[(k / 2 * n_out + o) * 2 + k % 2] = packed[packed_index(o, k, n_out)] as i16;
+        }
+    }
+    out
+}
+
 /// The mobility input lane, shifted like the rest of `L1`'s input.
 #[inline(always)]
 fn mob_byte(mob: usize) -> i8 {
@@ -167,6 +212,19 @@ pub(super) struct StackQ {
     l2_b: Vec<i32>,
     out_w: Vec<i16>,
     out_b: Vec<i32>,
+    /// `l1_w` and `l2_w` per stage again, as [`pair_pack`] lays them out.
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(feature = "nnue-scalar")
+    ))]
+    l1_pairs: Vec<i16>,
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(feature = "nnue-scalar")
+    ))]
+    l2_pairs: Vec<i16>,
     /// Evaluations by board, shared by every thread; rebuilt with the weights.
     pub(super) cache: Vec<super::EvalSlot>,
 }
@@ -232,6 +290,22 @@ impl StackQ {
             out_b[st] = b + 128 * sum;
         }
 
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "avx2",
+            not(feature = "nnue-scalar")
+        ))]
+        let (l1_pairs, l2_pairs) = {
+            let (n1, n2) = (L1_CHUNKS * 4 * SO_L1, L2_CHUNKS * 4 * SO_L2);
+            let mut a = Vec::with_capacity(SO_STAGES * n1);
+            let mut b = Vec::with_capacity(SO_STAGES * n2);
+            for st in 0..SO_STAGES {
+                a.extend(pair_pack(&l1_w[st * n1..(st + 1) * n1], SO_L1, L1_IN));
+                b.extend(pair_pack(&l2_w[st * n2..(st + 1) * n2], SO_L2, L2_IN));
+            }
+            (a, b)
+        };
+
         StackQ {
             ft_b,
             ft_w,
@@ -245,6 +319,18 @@ impl StackQ {
             l2_b,
             out_w,
             out_b,
+            #[cfg(all(
+                target_arch = "x86_64",
+                target_feature = "avx2",
+                not(feature = "nnue-scalar")
+            ))]
+            l1_pairs,
+            #[cfg(all(
+                target_arch = "x86_64",
+                target_feature = "avx2",
+                not(feature = "nnue-scalar")
+            ))]
+            l2_pairs,
             cache: (0..1usize << super::EVAL_CACHE_BITS)
                 .map(|_| super::EvalSlot::default())
                 .collect(),
@@ -280,7 +366,21 @@ impl StackQ {
         #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
         let sum =
             unsafe { self.eval_neon(ft.as_ptr(), pa.as_ptr(), &rows, net.n_masks, st, stage, mob) };
-        #[cfg(not(all(target_arch = "aarch64", not(feature = "nnue-scalar"))))]
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "avx2",
+            not(feature = "nnue-scalar")
+        ))]
+        let sum =
+            unsafe { self.eval_avx2(ft.as_ptr(), pa.as_ptr(), &rows, net.n_masks, st, stage, mob) };
+        #[cfg(not(any(
+            all(target_arch = "aarch64", not(feature = "nnue-scalar")),
+            all(
+                target_arch = "x86_64",
+                target_feature = "avx2",
+                not(feature = "nnue-scalar")
+            )
+        )))]
         let sum = self.eval_scalar(ft, pa, &rows, net.n_masks, st, stage, mob);
         sum as f32 / OUT_PER_DISC
     }
@@ -321,7 +421,14 @@ impl StackQ {
     }
 
     #[cfg_attr(
-        all(target_arch = "aarch64", not(feature = "nnue-scalar")),
+        any(
+            all(target_arch = "aarch64", not(feature = "nnue-scalar")),
+            all(
+                target_arch = "x86_64",
+                target_feature = "avx2",
+                not(feature = "nnue-scalar")
+            )
+        ),
         allow(dead_code)
     )]
     #[allow(clippy::too_many_arguments)]
@@ -400,6 +507,165 @@ impl StackQ {
             sum += ow[k] as i32 * xout[k] as i32;
         }
         sum
+    }
+
+    /// [`StackQ::eval_scalar`] in AVX2: the same integers, sixteen lanes at a time.
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(feature = "nnue-scalar")
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    unsafe fn eval_avx2(
+        &self,
+        ft: *const i16,
+        pa: *const i16,
+        rows: &[u32; MAX_MASKS],
+        n: usize,
+        st: usize,
+        stage: usize,
+        mob: usize,
+    ) -> i32 {
+        use std::arch::x86_64::*;
+
+        /// Sum 128 lanes of `n` rows onto `bias`, wrapping like the 16-bit lanes of the scalar sum.
+        #[inline(always)]
+        unsafe fn sum128(
+            table: *const i16,
+            stride: usize,
+            bias: *const i16,
+            rows: &[u32; MAX_MASKS],
+            n: usize,
+        ) -> [__m256i; 8] {
+            let mut acc = [_mm256_setzero_si256(); 8];
+            for (r, a) in acc.iter_mut().enumerate() {
+                *a = _mm256_loadu_si256(bias.add(r * 16) as *const __m256i);
+            }
+            for m in 0..n {
+                let row = table.add(*rows.get_unchecked(m) as usize * stride);
+                for (r, a) in acc.iter_mut().enumerate() {
+                    *a =
+                        _mm256_add_epi16(*a, _mm256_loadu_si256(row.add(r * 16) as *const __m256i));
+                }
+            }
+            acc
+        }
+
+        for m in 0..n {
+            prefetch_row_x86(ft, pa, *rows.get_unchecked(m));
+        }
+        let clamp = _mm256_set1_epi16(ROW_CLAMP);
+        let (zero, top, shift) = (
+            _mm256_setzero_si256(),
+            _mm256_set1_epi16(255),
+            _mm256_set1_epi16(128),
+        );
+        // `((a << 5) * b) >> 15` as the high half of `(a << 6) * b`, clamped to a byte and shifted by 128.
+        let byte = |a: __m256i, b: __m256i| {
+            let p = _mm256_mulhi_epi16(_mm256_slli_epi16::<6>(a), b);
+            _mm256_sub_epi16(_mm256_min_epi16(_mm256_max_epi16(p, zero), top), shift)
+        };
+
+        let mut x = Lanes::<L1_IN>([0; L1_IN]);
+        let xp = x.0.as_mut_ptr() as *mut __m256i;
+        let lo = sum128(ft, ACC_DIMS, self.ft_bias.as_ptr(), rows, n);
+        let hi = sum128(ft.add(H), ACC_DIMS, self.ft_bias.as_ptr().add(H), rows, n);
+        for r in 0..8 {
+            let a = _mm256_min_epi16(_mm256_max_epi16(lo[r], zero), clamp);
+            _mm256_store_si256(xp.add(r), byte(a, _mm256_min_epi16(hi[r], clamp)));
+        }
+        let pz = sum128(
+            pa,
+            PA_DIMS,
+            self.pa_bias.as_ptr().add(pa_bucket(stage) * PA_DIMS),
+            rows,
+            n,
+        );
+        for (r, &z) in pz.iter().enumerate() {
+            let v = _mm256_min_epi16(z, clamp);
+            _mm256_store_si256(xp.add(H / 16 + r), byte(_mm256_max_epi16(v, zero), v));
+        }
+        x.0[SO_SKIP] = mob_byte(mob) as i16;
+
+        // `L1`: one input pair against eight outputs per `madd`; two chains per output half.
+        let w1 = self.l1_pairs.as_ptr().add(st * L1_IN * SO_L1) as *const __m256i;
+        let mut acc1 = [
+            _mm256_loadu_si256(self.l1_b.as_ptr().add(st * SO_L1) as *const __m256i),
+            _mm256_loadu_si256(self.l1_b.as_ptr().add(st * SO_L1 + 8) as *const __m256i),
+            zero,
+            zero,
+        ];
+        let xi = x.0.as_ptr() as *const i32;
+        for p in 0..L1_IN / 2 {
+            let xv = _mm256_set1_epi32(xi.add(p).read());
+            let c = (p & 1) * 2;
+            acc1[c] = _mm256_add_epi32(
+                acc1[c],
+                _mm256_madd_epi16(_mm256_loadu_si256(w1.add(p * 2)), xv),
+            );
+            acc1[c + 1] = _mm256_add_epi32(
+                acc1[c + 1],
+                _mm256_madd_epi16(_mm256_loadu_si256(w1.add(p * 2 + 1)), xv),
+            );
+        }
+        let mut s1 = [0i32; SO_L1];
+        _mm256_storeu_si256(
+            s1.as_mut_ptr() as *mut __m256i,
+            _mm256_add_epi32(acc1[0], acc1[2]),
+        );
+        _mm256_storeu_si256(
+            s1.as_mut_ptr().add(8) as *mut __m256i,
+            _mm256_add_epi32(acc1[1], acc1[3]),
+        );
+        let mut a1 = Lanes::<L2_IN>([0; L2_IN]);
+        for (o, &s) in s1.iter().enumerate() {
+            let s = s.clamp(-32768, 32767);
+            let sq = ((s * s) >> 15).min(32767) >> 5;
+            a1.0[o] = (sq.min(255) - 128) as i16;
+            a1.0[SO_L1 + o] = ((s >> 6).clamp(0, 255) - 128) as i16;
+        }
+
+        // `L2`: eight registers of eight outputs each.
+        let w2 = self.l2_pairs.as_ptr().add(st * L2_IN * SO_L2) as *const __m256i;
+        let b2 = self.l2_b.as_ptr().add(st * SO_L2) as *const __m256i;
+        let mut acc2 = [zero; SO_L2 / 8];
+        for (j, a) in acc2.iter_mut().enumerate() {
+            *a = _mm256_loadu_si256(b2.add(j));
+        }
+        let ai = a1.0.as_ptr() as *const i32;
+        for p in 0..L2_IN / 2 {
+            let xv = _mm256_set1_epi32(ai.add(p).read());
+            for (j, a) in acc2.iter_mut().enumerate() {
+                *a = _mm256_add_epi32(
+                    *a,
+                    _mm256_madd_epi16(_mm256_loadu_si256(w2.add(p * 8 + j)), xv),
+                );
+            }
+        }
+        let mut s2 = [0i32; SO_L2];
+        for (j, a) in acc2.iter().enumerate() {
+            _mm256_storeu_si256(s2.as_mut_ptr().add(j * 8) as *mut __m256i, *a);
+        }
+        let mut xo = Lanes::<OUT_IN>([0; OUT_IN]);
+        for (o, &s) in s2.iter().enumerate() {
+            let v = s.clamp(0, 255 << 6);
+            xo.0[o] = ((((v * v) >> 15) >> 5).min(255) - 128) as i16;
+        }
+        xo.0[SO_L2..].copy_from_slice(&x.0[..SO_SKIP]);
+
+        let ow = self.out_w.as_ptr().add(st * OUT_IN) as *const __m256i;
+        let xq = xo.0.as_ptr() as *const __m256i;
+        let mut o = [zero; 2];
+        for g in 0..OUT_IN / 16 {
+            let m = _mm256_madd_epi16(_mm256_loadu_si256(ow.add(g)), _mm256_load_si256(xq.add(g)));
+            o[g & 1] = _mm256_add_epi32(o[g & 1], m);
+        }
+        let v = _mm256_add_epi32(o[0], o[1]);
+        let h = _mm_add_epi32(_mm256_castsi256_si128(v), _mm256_extracti128_si256::<1>(v));
+        let h = _mm_add_epi32(h, _mm_shuffle_epi32::<0b01_00_11_10>(h));
+        let h = _mm_add_epi32(h, _mm_shuffle_epi32::<0b10_11_00_01>(h));
+        _mm_cvtsi128_si32(h) + self.out_b[st]
     }
 
     #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]
@@ -843,6 +1109,29 @@ mod tests {
                 );
             }
         });
+    }
+
+    /// `KUROOBI_STACK_WEIGHTS` names the trained weight file; every position of a game and its children.
+    #[test]
+    #[ignore]
+    fn vector_kernel_matches_scalar_on_trained_weights() {
+        let path = std::env::var("KUROOBI_STACK_WEIGHTS")
+            .expect("KUROOBI_STACK_WEIGHTS must name a stacked-read-out weight file");
+        let mut nn = Nnue::new(NNUE_PATTERNS);
+        nn.load(std::path::Path::new(&path)).expect("weights load");
+        nn.quantize();
+        let mut checked = 0;
+        walk_game(|board, _| {
+            for i in (0..64).filter(|&i| board.movable() >> i & 1 == 1) {
+                let mut b = *board;
+                b.make_move_bits(Position::from_index(i).unwrap());
+                let ix = nn.indices(b.black, b.white);
+                let q = nn.eval_from_indices(&ix, &b);
+                assert_eq!(q.to_bits(), scalar_discs(&nn, &b).to_bits(), "{b:?}");
+                checked += 1;
+            }
+        });
+        assert!(checked > 200, "only {checked} positions");
     }
 
     /// `KUROOBI_STACK_WEIGHTS` names the trained weight file.

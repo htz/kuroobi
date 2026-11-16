@@ -83,6 +83,41 @@ unsafe fn mobility_neon(player_bb: u64, opponent_bb: u64) -> u64 {
     moves
 }
 
+/// The four directions (1, 8, 7, 9) in the four lanes of one register.
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[inline]
+unsafe fn mobility_avx2(player_bb: u64, opponent_bb: u64) -> u64 {
+    use core::arch::x86_64::*;
+    let sh = _mm256_set_epi64x(9, 7, 8, 1);
+    let sh2 = _mm256_add_epi64(sh, sh);
+    let pp = _mm256_set1_epi64x(player_bb as i64);
+    let mo = _mm256_and_si256(
+        _mm256_set1_epi64x(opponent_bb as i64),
+        _mm256_set_epi64x(
+            MASK_DIAG as i64,
+            MASK_DIAG as i64,
+            MASK_FILE as i64,
+            MASK_RANK as i64,
+        ),
+    );
+    let up2 = _mm256_and_si256(mo, _mm256_sllv_epi64(mo, sh));
+    let dn2 = _mm256_srlv_epi64(up2, sh);
+
+    let mut u = _mm256_and_si256(mo, _mm256_sllv_epi64(pp, sh));
+    u = _mm256_or_si256(u, _mm256_and_si256(mo, _mm256_sllv_epi64(u, sh)));
+    u = _mm256_or_si256(u, _mm256_and_si256(up2, _mm256_sllv_epi64(u, sh2)));
+    u = _mm256_or_si256(u, _mm256_and_si256(up2, _mm256_sllv_epi64(u, sh2)));
+
+    let mut d = _mm256_and_si256(mo, _mm256_srlv_epi64(pp, sh));
+    d = _mm256_or_si256(d, _mm256_and_si256(mo, _mm256_srlv_epi64(d, sh)));
+    d = _mm256_or_si256(d, _mm256_and_si256(dn2, _mm256_srlv_epi64(d, sh2)));
+    d = _mm256_or_si256(d, _mm256_and_si256(dn2, _mm256_srlv_epi64(d, sh2)));
+
+    let m = _mm256_or_si256(_mm256_sllv_epi64(u, sh), _mm256_srlv_epi64(d, sh));
+    let x = _mm_or_si128(_mm256_castsi256_si128(m), _mm256_extracti128_si256::<1>(m));
+    (_mm_cvtsi128_si64(x) | _mm_extract_epi64::<1>(x)) as u64
+}
+
 #[inline]
 pub fn mobility(player_bb: u64, opponent_bb: u64, empty_bb: u64) -> u64 {
     debug_assert_eq!(
@@ -95,6 +130,10 @@ pub fn mobility(player_bb: u64, opponent_bb: u64, empty_bb: u64) -> u64 {
         unsafe {
             return mobility_neon(player_bb, opponent_bb) & empty_bb;
         }
+    }
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    unsafe {
+        return mobility_avx2(player_bb, opponent_bb) & empty_bb;
     }
     #[allow(unreachable_code)]
     mobility_scalar(player_bb, opponent_bb, empty_bb)
@@ -479,11 +518,16 @@ pub fn count_last_flips(player: u64, sq: u8) -> (u32, u32) {
     (packed & 0xFF, packed >> 8)
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", target_feature = "avx2")
+))]
 #[repr(align(64))]
 #[derive(Clone, Copy)]
 struct MaskLr([u64; 8]);
 
+/// Per square: the rays a carry runs up (`a`), then the inverted rays it runs down (`b`); `r` is the bit-reversed board.
+/// aarch64 keeps `[a, !b, ra, !rb]` in pairs, x86_64 `[a, ra, !b, !rb]` in fours.
 #[cfg(target_arch = "aarch64")]
 static MASK_LR: [MaskLr; 65] = {
     let mut out = [MaskLr([0u64; 8]); 65];
@@ -503,6 +547,77 @@ static MASK_LR: [MaskLr; 65] = {
     }
     out
 };
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+static MASK_LR: [MaskLr; 65] = {
+    let mut out = [MaskLr([0u64; 8]); 65];
+    let mut sq = 0usize;
+    while sq < 65 {
+        out[sq].0 = [
+            RAY_UP[sq][0],
+            RAY_UP[sq][1],
+            RAY_DOWN_REV[sq][0],
+            RAY_DOWN_REV[sq][1],
+            !RAY_UP[sq][2],
+            !RAY_UP[sq][3],
+            !RAY_DOWN_REV[sq][2],
+            !RAY_DOWN_REV[sq][3],
+        ];
+        sq += 1;
+    }
+    out
+};
+
+/// [`BoardCtx`] in four lanes: the board in the first two, the bit-reversed board in the last two.
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[derive(Clone, Copy)]
+struct BoardCtx {
+    pp: core::arch::x86_64::__m256i,
+    oo: core::arch::x86_64::__m256i,
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+impl BoardCtx {
+    #[inline]
+    unsafe fn new(player_bb: u64, opponent_bb: u64) -> Self {
+        use core::arch::x86_64::*;
+        let (p, o) = (player_bb as i64, opponent_bb as i64);
+        Self {
+            pp: _mm256_set_epi64x(p.reverse_bits(), p.reverse_bits(), p, p),
+            oo: _mm256_set_epi64x(o.reverse_bits(), o.reverse_bits(), o, o),
+        }
+    }
+
+    #[inline]
+    unsafe fn flip1(&self, sq: usize) -> u64 {
+        use core::arch::x86_64::*;
+        let m = MASK_LR.get_unchecked(sq).0.as_ptr() as *const __m256i;
+        let (mask_a, cmask_b) = (_mm256_load_si256(m), _mm256_load_si256(m.add(1)));
+        let zero = _mm256_setzero_si256();
+        let one = _mm256_set1_epi64x(1);
+        // `x - 1`, but 0 stays 0: no 64-bit saturating subtract here.
+        let dec =
+            |x: __m256i| _mm256_andnot_si256(_mm256_cmpeq_epi64(x, zero), _mm256_sub_epi64(x, one));
+
+        let carry_a = _mm256_sub_epi64(zero, _mm256_andnot_si256(self.oo, mask_a));
+        let w_a = dec(_mm256_and_si256(carry_a, _mm256_and_si256(mask_a, self.pp)));
+        let carry_b = _mm256_add_epi64(_mm256_or_si256(self.oo, cmask_b), one);
+        let w_b = dec(_mm256_and_si256(
+            carry_b,
+            _mm256_andnot_si256(cmask_b, self.pp),
+        ));
+
+        let merged = _mm256_or_si256(
+            _mm256_and_si256(cmask_b, _mm256_and_si256(mask_a, w_a)),
+            _mm256_andnot_si256(cmask_b, w_b),
+        );
+        let lo = _mm256_castsi256_si128(merged);
+        let hi = _mm256_extracti128_si256::<1>(merged);
+        let up = (_mm_cvtsi128_si64(lo) as u64).wrapping_add(_mm_extract_epi64::<1>(lo) as u64);
+        let down = (_mm_cvtsi128_si64(hi) as u64).wrapping_add(_mm_extract_epi64::<1>(hi) as u64);
+        up | down.reverse_bits()
+    }
+}
 
 #[cfg(target_arch = "aarch64")]
 #[derive(Clone, Copy)]
@@ -609,24 +724,39 @@ unsafe fn span_inv(
 /// One side to move, prepared once so that every square's flips cost only the flip kernel.
 #[derive(Clone, Copy)]
 pub struct FlipCtx {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(
+        target_arch = "aarch64",
+        all(target_arch = "x86_64", target_feature = "avx2")
+    ))]
     ctx: BoardCtx,
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(not(any(
+        target_arch = "aarch64",
+        all(target_arch = "x86_64", target_feature = "avx2")
+    )))]
     player: u64,
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(not(any(
+        target_arch = "aarch64",
+        all(target_arch = "x86_64", target_feature = "avx2")
+    )))]
     opponent: u64,
 }
 
 impl FlipCtx {
     #[inline]
     pub fn new(player_bb: u64, opponent_bb: u64) -> FlipCtx {
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(any(
+            target_arch = "aarch64",
+            all(target_arch = "x86_64", target_feature = "avx2")
+        ))]
         {
             FlipCtx {
                 ctx: unsafe { BoardCtx::new(player_bb, opponent_bb) },
             }
         }
-        #[cfg(not(target_arch = "aarch64"))]
+        #[cfg(not(any(
+            target_arch = "aarch64",
+            all(target_arch = "x86_64", target_feature = "avx2")
+        )))]
         {
             FlipCtx {
                 player: player_bb,
@@ -637,11 +767,17 @@ impl FlipCtx {
 
     #[inline]
     pub fn flip(&self, sq: u8) -> u64 {
-        #[cfg(target_arch = "aarch64")]
+        #[cfg(any(
+            target_arch = "aarch64",
+            all(target_arch = "x86_64", target_feature = "avx2")
+        ))]
         {
             unsafe { self.ctx.flip1((sq & 63) as usize) }
         }
-        #[cfg(not(target_arch = "aarch64"))]
+        #[cfg(not(any(
+            target_arch = "aarch64",
+            all(target_arch = "x86_64", target_feature = "avx2")
+        )))]
         {
             flippable_scalar(self.player, self.opponent, 1u64 << (sq & 63))
         }
@@ -650,11 +786,17 @@ impl FlipCtx {
 
 #[inline]
 pub fn flippable(player_bb: u64, opponent_bb: u64, pos_bit: u64) -> u64 {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(
+        target_arch = "aarch64",
+        all(target_arch = "x86_64", target_feature = "avx2")
+    ))]
     unsafe {
         BoardCtx::new(player_bb, opponent_bb).flip1(pos_bit.trailing_zeros() as usize)
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(not(any(
+        target_arch = "aarch64",
+        all(target_arch = "x86_64", target_feature = "avx2")
+    )))]
     {
         flippable_scalar(player_bb, opponent_bb, pos_bit)
     }
