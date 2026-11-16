@@ -10,6 +10,19 @@ to the screen as it goes. The UI is in English or Japanese (Settings →
 Display → Language). The build steps and the pitfalls are in
 [CLAUDE.md](../CLAUDE.md).
 
+## The app bundle
+
+`crates/gui/tools/bundle-app.sh arm64` (or `x86_64`) builds
+`target/bundle/<arch>/Kuroobi.app` with the weights and the book inside,
+signed ad hoc, and a zip beside it. The Intel build needs AVX2 (any
+Intel Mac from 2013 on). The app finds its weights in
+`Contents/Resources/weights` unless Settings → Engine points elsewhere,
+and keeps what it writes outside the bundle, in
+`~/Library/Application Support/kuroobi/`: the GGS accounts and games
+(`ggs_games/`) and the learned book (`book_learn.txt`, starting from the
+copy shipped inside). Launched from a checkout instead, it uses
+`ggs_games/` and `weights/` found from the launch folder.
+
 ## The window
 
 The menu on the left is where you go: **Play, Study and Book**, then the
@@ -266,7 +279,8 @@ position, and games on a server not marked Public are not. The one switch,
 (on by default). The import advances one search at a time in the
 background and yields to games in progress (the status bar shows
 Learning). What is learned is saved in a file separate from the book
-itself (`book_learn.txt`) and overlaid at startup, so it does not clash
+itself (`book_learn.txt` beside it; the app bundle keeps it in the
+settings folder) and overlaid at startup, so it does not clash
 while `bookgen` is updating the main file, and even where there is no
 book file a "book of experience" grows from the positions real games
 went through.

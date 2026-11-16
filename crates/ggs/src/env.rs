@@ -30,14 +30,7 @@ pub fn learn_log_path() -> PathBuf {
 }
 
 pub fn dirs_config() -> Option<PathBuf> {
-    if let Ok(d) = std::env::var("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(d));
-    }
-    let home = std::env::var("HOME").ok()?;
-    #[cfg(target_os = "macos")]
-    return Some(PathBuf::from(home).join("Library/Application Support"));
-    #[cfg(not(target_os = "macos"))]
-    return Some(PathBuf::from(home).join(".config"));
+    kuroobi::resources::user_config_dir()
 }
 
 pub fn resources() -> Resources {

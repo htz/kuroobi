@@ -198,7 +198,7 @@ impl Engine {
         let stop = StopHandle::new();
         search.set_stop(Some(stop.clone()));
         solver.set_stop(Some(stop.clone()));
-        let learn_path = config.book.with_file_name("book_learn.txt");
+        let learn_path = crate::resources::learn_path(&config.book);
         let book_base = Book::load(&config.book).ok().filter(|b| !b.is_empty());
         let learned = Book::load(&learn_path).unwrap_or_default();
         let book = merged_book(book_base.clone(), &learned).map(std::sync::Arc::new);

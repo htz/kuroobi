@@ -386,7 +386,9 @@ fn auto_pass(game: &mut Reversi) {
 fn remember_found_weights() {
     let mut r = resources();
     let unset = r.dir.is_none() && r.weights.is_none() && r.nnue.is_none() && r.book.is_none();
-    if unset && std::env::var_os("KUROOBI_WEIGHTS_DIR").is_none() {
+    // The bundle's own weights are found again from wherever the app is moved to.
+    let bundled = kuroobi::resources::bundled_weights().is_some_and(|b| r.dir() == b);
+    if unset && !bundled && std::env::var_os("KUROOBI_WEIGHTS_DIR").is_none() {
         r.dir = Some(r.dir());
         let _ = r.save(&resources_path());
     }

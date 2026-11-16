@@ -26,7 +26,56 @@ pub fn default_dir() -> PathBuf {
             return p;
         }
     }
+    if let Some(p) = bundled_weights() {
+        return p;
+    }
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/weights"))
+}
+
+/// `Contents/Resources` of the macOS app bundle this program runs from, if it runs from one.
+pub fn bundle_resources() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let in_bundle = macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && contents.parent()?.extension()? == "app";
+    in_bundle.then(|| contents.join("Resources"))
+}
+
+/// The weights shipped inside the app bundle, when they are there.
+pub fn bundled_weights() -> Option<PathBuf> {
+    let p = bundle_resources()?.join("weights");
+    p.join("nnue.bin").exists().then_some(p)
+}
+
+/// The per-user settings folder (`~/Library/Application Support` on macOS).
+pub fn user_config_dir() -> Option<PathBuf> {
+    if let Ok(d) = std::env::var("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(d));
+    }
+    let home = std::env::var("HOME").ok()?;
+    #[cfg(target_os = "macos")]
+    return Some(PathBuf::from(home).join("Library/Application Support"));
+    #[cfg(not(target_os = "macos"))]
+    return Some(PathBuf::from(home).join(".config"));
+}
+
+/// Where the learned book beside `book` lives. A book inside the app bundle learns into the
+/// settings folder instead, starting from the copy shipped with it: the bundle stays as signed.
+pub fn learn_path(book: &Path) -> PathBuf {
+    let beside = book.with_file_name("book_learn.txt");
+    let shipped = bundle_resources()
+        .is_some_and(|r| std::fs::canonicalize(book).is_ok_and(|b| b.starts_with(r)));
+    let Some(dir) = user_config_dir().filter(|_| shipped) else {
+        return beside;
+    };
+    let p = dir.join("kuroobi").join("book_learn.txt");
+    if !p.exists() {
+        let _ = std::fs::create_dir_all(dir.join("kuroobi"));
+        let _ = std::fs::copy(&beside, &p);
+    }
+    p
 }
 
 fn hash_bits(configured: Option<u32>, default: u32) -> u32 {

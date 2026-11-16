@@ -237,6 +237,8 @@ root skip the GUI; `cargo fmt --all` reaches it. For the GUI, run
 fine and changes nothing). Every binary, the GUI's included, lands in
 `target/release/`; `kuroobi-mcp`, which drives the GUI, is built by the
 root `cargo build`, not by the one in `crates/gui/`.
+`crates/gui/tools/bundle-app.sh arm64|x86_64` builds `Kuroobi.app` with
+the weights inside, and a zip of it (see [GUI](docs/gui.md#the-app-bundle)).
 
 The tests include exhaustive move-generation checks via perft, agreement
 between incremental pattern indices and a full recount, invariance of

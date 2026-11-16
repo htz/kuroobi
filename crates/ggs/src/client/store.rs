@@ -20,8 +20,14 @@ pub(super) fn local_server() -> bool {
     !saved_servers().iter().any(|s| s.addr == addr && s.public)
 }
 
-/// `ggs_games/`, holding the account store and one folder per account.
+/// `ggs_games/`, holding the account store and one folder per account. The app bundle keeps it
+/// in the settings folder; a launch from a checkout finds it relative to the launch folder.
 fn base_dir() -> PathBuf {
+    if kuroobi::resources::bundle_resources().is_some() {
+        let p = crate::env::config_dir().join("ggs_games");
+        let _ = std::fs::create_dir_all(&p);
+        return p;
+    }
     for c in ["ggs_games", "../ggs_games", "../../ggs_games"] {
         let p = PathBuf::from(c);
         if p.is_dir() {
