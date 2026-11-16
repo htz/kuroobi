@@ -176,6 +176,7 @@ crates/
 ├── play/              持ち時間つき対局のエンジン担当 (全クライアント共通)
 ├── gtp/               GTP サーバ (kuroobi-gtp)
 ├── ggs/               GGS クライアント (GUI と kuroobi-ggs が動かす)
+├── flipsight/         FlipSight (othelloclub.com) のボット (kuroobi-flipsight)
 ├── gui/               GUI (Tauri + Vite/TypeScript、kuroobi-gui)
 ├── mcp/               起動中の GUI をシェルや MCP サーバとして操作する (kuroobi-mcp)
 └── train/             学習・自己対局データ・stage 合成・MPC 較正・定石生成

@@ -206,6 +206,7 @@ crates/
 ├── play/              engine workers for games on a clock, shared by every client
 ├── gtp/               GTP server (kuroobi-gtp)
 ├── ggs/               the GGS client, run by the GUI and by kuroobi-ggs
+├── flipsight/         the FlipSight (othelloclub.com) bot (kuroobi-flipsight)
 ├── gui/               GUI (Tauri + Vite/TypeScript; kuroobi-gui)
 ├── mcp/               drives a running GUI from the shell or as an MCP server (kuroobi-mcp)
 └── train/             training, self-play data, stage merge, MPC calibration, book generation

@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use kuroobi::engine::{Engine, EngineConfig};
+use kuroobi::engine::{Engine, EngineAssets, EngineConfig};
 use kuroobi::{Board, Position};
 
 /// An engine on its own thread, taking one job at a time; `mid` is the game it is serving.
@@ -71,7 +71,18 @@ impl EngineWorker {
     /// Starts the engine thread with `cfg` as given (resources and table sizes already resolved).
     /// `fixed_level` plays every move at the configured depth instead of by the clock.
     pub fn spawn(cfg: EngineConfig, fixed_level: bool) -> Result<EngineWorker, String> {
-        let engine = Engine::new(cfg)?;
+        let assets = EngineAssets::load(&cfg)?;
+        EngineWorker::spawn_with(assets, cfg, fixed_level)
+    }
+
+    /// As [`EngineWorker::spawn`], on weights already loaded: many workers share one copy, and
+    /// each after the first starts in a fraction of a second instead of seconds.
+    pub fn spawn_with(
+        assets: EngineAssets,
+        cfg: EngineConfig,
+        fixed_level: bool,
+    ) -> Result<EngineWorker, String> {
+        let engine = Engine::with_assets(assets, cfg)?;
         let stop = engine.stop_handle();
         let progress = engine.progress();
         let (jtx, jrx) = std::sync::mpsc::channel::<Job>();

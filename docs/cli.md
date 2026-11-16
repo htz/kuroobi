@@ -20,7 +20,7 @@ repository root or pass the paths.
 | Training | [`linear_train`](#linear_train) [`nnue_train`](#nnue_train) |
 | Assembling a model | [`linear_stage_merge`](#linear_stage_merge) [`nnue_mpccalib`](#nnue_mpccalib) |
 | Training data and runtime resources | [`gendata`](#gendata) [`bookgen`](#bookgen) |
-| Playing | [`kuroobi-gtp`](#kuroobi-gtp) [`kuroobi-ggs`](#kuroobi-ggs) |
+| Playing | [`kuroobi-gtp`](#kuroobi-gtp) [`kuroobi-ggs`](#kuroobi-ggs) [`kuroobi-flipsight`](#kuroobi-flipsight) |
 
 
 ---
@@ -446,3 +446,36 @@ if any, resumed.
 
 `--credentials` exists so credentials need not be passed in plain text.
 The GUI stores them in the macOS keychain.
+
+### kuroobi-flipsight
+
+**Bot for FlipSight (othelloclub.com).** Register the bot on the site,
+then run it with the token the site showed at registration. It accepts
+standard 8x8 matches and declines the other variants; each of the two
+legs of a match is played by its own engine on the clock, with the
+weights and table sizes the GUI uses (the book is off unless `--book`).
+
+```sh
+FS_BOT_TOKEN=fsbm_... kuroobi-flipsight [--threads N] [--pause NAMES] [--out DIR]
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--threads <n>` | the GUI's setting | Threads for one leg; two legs thinking at once get half each |
+| `--book` | off | Use the opening book |
+| `--margin <s>` | 1.5 | Seconds kept back from the clock on every move |
+| `--lag <s>` | 0.8 | First guess of the seconds a move loses to polling and the network; measured from then on, and 1.3 times it is kept back for each move still to play |
+| `--practice` | off | Report the bot as practising: kept out of automatic matching, games unrated |
+| `--pause <names>` | none | Process names (`pgrep -x` pattern, e.g. `gendata\|nnue_train`) stopped while a match runs and resumed after it, unless a GGS game of `kuroobi` is live then |
+| `--pause-log <file>` | `<out>/paused.txt` | Where each pause and resume is noted |
+| `--out <dir>` | `flipsight_games` | `moves.jsonl` (each move: empties, move, value, depth, exact, nodes, threads, seconds, time left and given) and `results.jsonl` (each match from our side: totals of both legs, per-leg discs, ratings) |
+| `--challenge <who>` | none | Challenge bots to standard matches, one at a time while no match of ours runs: `builtin` (the site's own bots, weakest first) or ids `3,4,5` in that order. Each is challenged once, as soon as it is online. `stronger` challenges every online bot rated above us, weakest first, over and over |
+| `--until-stable <n>:<points>` | off | Stop, as on a first Ctrl-C, once the last n rating changes moved the rating by no more than the points in all |
+| `--base <url>` | `https://othelloclub.com` | The server, e.g. the local stand-in |
+
+The token is read from the environment only and never printed. The
+weights load once and the two engines share them, so the bot takes
+matches about 4 s after starting. The first Ctrl-C (or SIGTERM) takes no
+new match and stops once the running ones are over; a second stops at
+once. `crates/flipsight/tools/fake_server.py` stands in for
+the server to try it locally.

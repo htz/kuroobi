@@ -3,6 +3,7 @@ members = [".", "crates/*"]
 # The GUI needs its frontend built first and pulls in Tauri; build it with `-p gui`.
 default-members = [
     ".",
+    "crates/flipsight",
     "crates/ggs",
     "crates/gtp",
     "crates/mcp",
