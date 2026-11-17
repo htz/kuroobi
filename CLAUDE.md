@@ -84,7 +84,9 @@ pick up unrelated windows in front; use the `window-screenshot` skill.
 `.mcp.json` (`kuroobi-mcp --mcp`) or from the shell
 (`target/release/kuroobi-mcp [--instance test] status`). The
 tools are named `namespace__operation`: `launch`, `quit` and `status` for
-the app itself; `ggs__` (GGS), `game__` (the local board and engine),
+the app itself; `ggs__` (GGS), `fs__` (FlipSight bots; adding a bot or
+changing its token, which carry the token, stay on the screen), `game__`
+(the local board and engine),
 `kifu__` and `engine__` for operations that mean the same with or without
 the window, run through the same commands the GUI's controls run; and
 `gui__` for what only the window has: `gui__show` / `gui__current` for its

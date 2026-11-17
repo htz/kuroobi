@@ -14,14 +14,22 @@ fn control_commands() {
         .map(|(l, _)| l)
         .expect("generate_handler! list");
     let mut out = String::from("pub const COMMANDS: &[(&str, &[(&str, &str)])] = &[\n");
-    // A password never passes through the socket an AI drives.
-    const SCREEN_ONLY: [&str; 1] = ["ggs_change_password"];
-    for name in list
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && !SCREEN_ONLY.contains(s))
-    {
-        let params = params_of(&src, name);
+    // A password or a bot's token never passes through the socket an AI drives.
+    const SCREEN_ONLY: [&str; 3] = ["ggs_change_password", "fs_add", "fs_change_token"];
+    for path in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        // `fs::fs_connect` is defined in src/fs.rs and called as `fs_connect`.
+        let (file, name) = match path.rsplit_once("::") {
+            Some((module, name)) => (format!("src/{module}.rs"), name),
+            None => ("src/main.rs".to_string(), path),
+        };
+        if SCREEN_ONLY.contains(&name) {
+            continue;
+        }
+        println!("cargo:rerun-if-changed={file}");
+        let params = params_of(
+            &std::fs::read_to_string(&file).expect("command module"),
+            name,
+        );
         let ps: Vec<String> = params
             .iter()
             .map(|(n, t)| format!("({n:?}, {t:?})"))

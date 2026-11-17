@@ -44,7 +44,8 @@ fn socket(instance: &str) -> PathBuf {
 type Tool = (&'static str, &'static str, Value, Vec<&'static str>);
 
 /// Tools that only pass their arguments on to one GUI command: (tool, command, arguments, help).
-/// An argument is `name:type` with type s(tring), b(ool), i(nteger) or o(bject); `?` makes it optional.
+/// An argument is `name:type` with type s(tring), b(ool), i(nteger), o(bject) or a(rray); `?` makes
+/// it optional.
 const PASS: &[(&str, &str, &[&str], &str)] = &[
     ("ggs__logout", "ggs_disconnect", &[], "Log out, as the Logout button does (auto login at the next launch is cleared)."),
     ("ggs__accounts", "ggs_accounts", &[], "The saved accounts."),
@@ -105,6 +106,13 @@ const PASS: &[(&str, &str, &[&str], &str)] = &[
     ("engine__hash", "hash_sizes", &[], "The transposition table sizes."),
     ("engine__set_hash", "set_hash_sizes", &["mid:i", "end:i"], "Transposition table sizes in bits (from the next launch)."),
     ("engine__activity", "activity_status", &[], "What the engine is busy with."),
+    ("fs__state", "fs_snapshot", &[], "FlipSight: my bots with their settings and connection, each one's matches in progress, and the bots on the site (large). Bots are added and tokens changed on the screen only."),
+    ("fs__connect", "fs_connect", &["id:i"], "Connect a bot (logs out of GGS first; refused during a GGS game)."),
+    ("fs__disconnect", "fs_disconnect", &["id:i"], "Disconnect a bot: at once with no match, else after its matches."),
+    ("fs__set", "fs_set", &["id:i", "cap:i?", "threads:i?", "book:b?", "accept:b?", "level:a?"], "A bot's settings, each left out stays: cap matches at once (0: the site's), threads per game (1-4), book, accept direct challenges, level [depth, solve] ([0, 0]: by the clock). Apply from the next game."),
+    ("fs__refresh", "fs_refresh", &["id:i"], "Read a disconnected bot's settings on the site again (a connected one reads them on every poll)."),
+    ("fs__challenge", "fs_challenge", &["id:i", "target:i"], "Challenge another bot (target: its id from fs__state)."),
+    ("fs__results", "fs_results", &["id:i"], "A bot's finished matches: result, rating, and each game's moves, evals and final board."),
     ("gui__ai_control", "control_info", &[], "This control socket's state and the registration for MCP clients."),
     ("gui__set_ai_control", "set_control", &["on:b"], "Turn the control socket on or off (off cuts this very connection)."),
 ];
@@ -118,6 +126,7 @@ fn schema_of(spec: &'static [&'static str]) -> (Value, Vec<&'static str>) {
             "b" => "boolean",
             "i" => "integer",
             "o" => "object",
+            "a" => "array",
             _ => "string",
         };
         props.insert(name.to_string(), json!({"type": t}));
@@ -128,9 +137,9 @@ fn schema_of(spec: &'static [&'static str]) -> (Value, Vec<&'static str>) {
     (Value::Object(props), req)
 }
 
-/// Names are `namespace__operation`: `ggs__` GGS, `game__` the local board, `kifu__` game
-/// records, `engine__` its files and resources, and `gui__` what only the GUI has (its menus and
-/// window); the app itself has no namespace.
+/// Names are `namespace__operation`: `ggs__` GGS, `fs__` FlipSight bots, `game__` the local
+/// board, `kifu__` game records, `engine__` its files and resources, and `gui__` what only the GUI
+/// has (its menus and window); the app itself has no namespace.
 fn tools() -> Vec<Tool> {
     let s = json!({"type": "string"});
     let b = json!({"type": "boolean"});
