@@ -187,10 +187,14 @@ pub fn results(id: i64) -> Vec<Value> {
         .collect()
 }
 
-/// Adds each leg's final board (`cells`, `last`), replayed from its moves.
+/// Adds each leg's final board (`cells`, `last`), replayed from its moves, to records written
+/// before the board itself was kept.
 fn with_boards(mut r: Value) -> Value {
     if let Some(legs) = r.get_mut("legs").and_then(Value::as_array_mut) {
         for leg in legs {
+            if leg.get("cells").is_some_and(|c| !c.is_null()) {
+                continue;
+            }
             let Some(moves) = leg.get("moves").and_then(Value::as_str) else {
                 continue;
             };
@@ -485,7 +489,8 @@ impl Manager {
                 self.check(check, token);
             }
             Cmd::Refresh(id) => {
-                if self.running.contains_key(&id) {
+                let live = self.running.get(&id);
+                if live.is_some_and(|r| !r.done.load(Ordering::Relaxed)) {
                     return;
                 }
                 if let Some(token) = self.find(id).map(|b| b.token.clone()) {
@@ -666,6 +671,7 @@ impl Manager {
         let mut rows = Vec::new();
         let mut connected = false;
         let mut playing = false;
+        let mut learned = false;
         for b in self.saved.iter_mut() {
             let r = self.running.get_mut(&b.id);
             let view = r.as_ref().map(|r| r.view.lock().unwrap().clone());
@@ -675,14 +681,17 @@ impl Manager {
                 (Some(_), true) | (None, _) => "off".to_string(),
                 (Some(v), false) => v.conn.clone(),
             };
-            if let Some(v) = &view {
+            // A stopped bot's view keeps what it last saw; the site may have changed since.
+            if let Some(v) = view.as_ref().filter(|_| !over) {
                 if !v.name.is_empty() && v.name != b.name {
                     b.name = v.name.clone();
+                    learned = true;
                 }
-                if v.max_games.is_some() {
+                if v.max_games.is_some() && v.max_games != b.max_games {
                     b.max_games = v.max_games;
+                    learned = true;
                 }
-                playing |= !v.matches.is_empty() && !over;
+                playing |= !v.matches.is_empty();
             }
             if let Some(r) = r {
                 if conn == "refused" && !r.told_refused {
@@ -709,6 +718,9 @@ impl Manager {
                 conn,
                 view,
             });
+        }
+        if learned {
+            save(&self.saved);
         }
         let snap = {
             let mut s = self.snap.lock().unwrap();

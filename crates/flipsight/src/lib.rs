@@ -1311,8 +1311,10 @@ impl Bot {
                     .as_ref()
                     .filter(|h| h.complete)
                     .map(|h| h.moves.iter().map(|&q| coord(q)).collect::<String>());
+                let last = h.as_ref().and_then(|h| h.moves.last().copied());
                 json!({"black": usize::from(l.black_participant) == part, "discs": l.discs,
                        "result_discs": l.result_discs, "status": l.status, "moves": moves,
+                       "cells": (l.board.len() == 64).then_some(&l.board), "last": last,
                        "evals": h.as_ref().map(|h| h.evals.clone()).unwrap_or_default(),
                        "opp_secs": h.map(|h| h.opp_secs).unwrap_or_default()})
             })
