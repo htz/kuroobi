@@ -957,22 +957,22 @@ impl Nnue {
         }
         self.pa_bias.fill(0.0);
         let b1 = 1.0 / (SO_L1_IN as f32).sqrt();
-        for i in 0..SO_L1 * SO_L1_IN {
-            self.so_l1_w[i] = next() * b1;
+        for w in &mut self.so_l1_w[..SO_L1 * SO_L1_IN] {
+            *w = next() * b1;
         }
-        for i in 0..SO_L1 {
-            self.so_l1_b[i] = next() * b1;
+        for w in &mut self.so_l1_b[..SO_L1] {
+            *w = next() * b1;
         }
         let b2 = 1.0 / ((SO_L1 * 2) as f32).sqrt();
-        for i in 0..SO_L2 * (SO_L1 * 2) {
-            self.so_l2_w[i] = next() * b2;
+        for w in &mut self.so_l2_w[..SO_L2 * (SO_L1 * 2)] {
+            *w = next() * b2;
         }
-        for i in 0..SO_L2 {
-            self.so_l2_b[i] = next() * b2;
+        for w in &mut self.so_l2_b[..SO_L2] {
+            *w = next() * b2;
         }
         let bo = 1.0 / (SO_OUT_IN as f32).sqrt();
-        for i in 0..SO_OUT_IN {
-            self.so_out_w[i] = next() * bo;
+        for w in &mut self.so_out_w[..SO_OUT_IN] {
+            *w = next() * bo;
         }
         self.so_out_b[0] = 0.0;
         replicate_stage0(&mut self.so_l1_w, SO_L1 * SO_L1_IN);
