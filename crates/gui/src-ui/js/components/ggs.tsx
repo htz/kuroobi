@@ -13,6 +13,7 @@ export const NAV_IDS = [
   'play', 'study', 'book', 'settings',
   'ggs-play', 'ggs-lobby', 'ggs-players', 'ggs-results', 'ggs-chat', 'ggs-tourney', 'ggs-console',
   'ggs-login',
+  'fs-play', 'fs-bots', 'fs-results', 'fs-mine',
 ] as const;
 export type NavId = typeof NAV_IDS[number];
 
@@ -26,7 +27,10 @@ export type NavItem = {
   hint?: string;
 };
 
-type Conn = 'offline' | 'connecting' | 'logging-in' | 'online';
+export type Conn = 'offline' | 'connecting' | 'logging-in' | 'online';
+
+/** Another server's rows below GGS's, with the same heading and connection dot. */
+export type NavSection = { key: string; title: string; conn: Conn; items: NavItem[] };
 
 const CONN_TONE: Record<Conn, 'sub' | 'gold' | 'ok'> = {
   offline: 'sub', connecting: 'gold', 'logging-in': 'gold', online: 'ok',
@@ -52,9 +56,10 @@ export function ggsNav(conn: Conn, badges?: Partial<Record<NavId, Pick<NavItem, 
   return base.map(i => ({ ...i, ...(badges?.[i.id] ?? {}) }));
 }
 
-export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
+export function Nav({ items, ggsItems, conn, active, onSelect, footer, sections = [] }: {
   items: NavItem[]; ggsItems: NavItem[]; conn: Conn;
   active: NavId; onSelect?: (id: NavId) => void; footer?: React.ReactNode;
+  sections?: NavSection[];
 }) {
   return (
     <nav className="k-nav" style={{
@@ -79,6 +84,19 @@ export function Nav({ items, ggsItems, conn, active, onSelect, footer }: {
       <div style={{ padding: '0 var(--sp-2)', display: 'flex', flexDirection: 'column', gap: 1 }}>
         {ggsItems.map(i => <NavRow key={i.id} item={i} active={active === i.id} onSelect={onSelect} />)}
       </div>
+      {sections.map(sec => (
+        <React.Fragment key={sec.key}>
+          <div className="k-nav-section" style={{
+            margin: 'var(--sp-4) 0 6px', padding: '0 18px', alignItems: 'center', gap: 'var(--sp-2)',
+            fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.1em', color: 'var(--sub)',
+          }}>
+            <Dot tone={CONN_TONE[sec.conn]} />{sec.title}
+          </div>
+          <div style={{ padding: '0 var(--sp-2)', display: 'flex', flexDirection: 'column', gap: 1 }}>
+            {sec.items.map(i => <NavRow key={i.id} item={i} active={active === i.id} onSelect={onSelect} />)}
+          </div>
+        </React.Fragment>
+      ))}
       </div>
       {footer && <div className="k-nav-foot" style={{
         flex: 'none', display: 'flex', flexDirection: 'column',

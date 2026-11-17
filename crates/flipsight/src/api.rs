@@ -124,6 +124,8 @@ pub struct State {
     pub totals: Vec<i64>,
     pub winner: Option<i64>,
     pub finish_reason: Option<String>,
+    /// The moves before the legs split (a1 = 0, b1 = 1, ...), when the match starts from an opening.
+    pub opening_moves: Vec<i64>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -140,4 +142,13 @@ pub struct Leg {
     pub legal_moves: Vec<i64>,
     pub discs: Vec<i64>,
     pub result_discs: Option<Vec<i64>>,
+    /// This leg's moves after the opening; -1 is a pass.
+    pub history: Vec<Played>,
+}
+
+#[derive(Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct Played {
+    #[serde(rename = "move")]
+    pub mv: i64,
 }

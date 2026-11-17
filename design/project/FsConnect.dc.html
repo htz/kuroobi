@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>FlipSight · Bots</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="ds/kuroobiui/components/bundle.css">
+<script src="ds/kuroobiui/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+x-import{display:contents}
+@media (max-width:1040px){.k-nav-ov .k-nav-label{display:none}.k-nav-ov .k-nav-row{justify-content:center;padding:0}.k-nav-ov .k-nav-section{display:none}}
+.k-scroll{overflow-y:scroll!important}
+.k-scroll::-webkit-scrollbar-track{background:var(--track);border-radius:9px}
+body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--ff)}
+a{color:var(--accent)}a:hover{color:var(--text)}
+</style>
+</helmet>
+<div style="width: 100%; height: 100vh; min-height: 480px; background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff); overflow: hidden">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.AppFrame">
+<x-import component-from-global-scope="KuroobiUI.WindowBar" title="自分のボット"></x-import>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Body">
+<div style="position: relative; flex: none; display: flex">
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Nav" items="{{navLocal}}" ggs-items="{{ggsItems}}" conn="{{ggsConn}}" active="fs-connect"></x-import>
+<!-- FlipSight section: a second server section below GGS. Not connected: Bots only; connected: Matches, Opponents, Results, Bots -->
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; top: {{fsTop}}; padding: 0 var(--sp-2); display: flex; flex-direction: column; gap: 1px">
+<div class="k-nav-section" style="margin: var(--sp-4) 0 6px; padding: 0 10px; align-items: center; gap: var(--sp-2); font-size: var(--fs-7); font-weight: 600; letter-spacing: .1em; color: var(--sub)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="{{fsTone}}"></x-import>FlipSight</div>
+<sc-for list="{{fsItems}}" as="i" hint-placeholder-count="4">
+<x-import component-from-global-scope="KuroobiUI.NavRow" item="{{i.item}}" active="{{i.on}}"></x-import>
+</sc-for>
+</div>
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; bottom: 0; padding: var(--sp-2); border-top: 1px solid var(--border); background: var(--panel)">
+<button type="button" class="k-nav-row k-row" style="width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-3); border: 0; border-radius: var(--r-2); font: inherit; font-size: var(--fs-4); background: transparent; color: var(--text)"><span style="flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.Icon" name="prefs"></x-import></span><span class="k-nav-label">設定</span></button>
+</div>
+</div>
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Main">
+<!-- Threads: each bot uses (threads per game) × 2 games × (matches at once); shown against what this Mac runs at once, never refused -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Toolbar">
+<span style="font-size: var(--fs-3); font-weight: 600; white-space: nowrap">自分のボット</span>
+<div style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<span>スレッド</span>
+<span aria-hidden="true" style="display: flex; gap: 2px; width: 160px; height: 6px">
+<sc-for list="{{budget}}" as="s" hint-placeholder-count="8">
+<span style="flex: 1; border-radius: 1px; background: {{s}}"></span>
+</sc-for>
+</span>
+<b style="font-weight: 600; color: {{budgetColor}}">{{budgetText}}</b>
+</div>
+</x-import>
+<div style="flex: 1; min-height: 0; display: flex">
+
+<!-- Saved bots (hidden when there are none). A row: name, threads x matches, state -->
+<sc-if value="{{hasSaved}}" hint-placeholder-val="{{true}}">
+<div style="flex: none; width: var(--w-list); min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border)">
+<div style="flex: none; height: var(--h-field); display: flex; align-items: center; padding: 0 var(--sp-3); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub)">自分のボット<span style="margin-left: auto; font-weight: 400; letter-spacing: 0">{{botCount}}</span></div>
+<div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
+<sc-for list="{{bots}}" as="b" hint-placeholder-count="2">
+<button type="button" class="k-row" style="flex: none; width: 100%; height: var(--h-row2); padding: 0 var(--sp-3); border: 0; border-bottom: 1px solid var(--border-weak); display: flex; flex-direction: column; justify-content: center; gap: 2px; line-height: 1.3; text-align: left; color: var(--text); font: inherit; background: {{b.ground}}; box-shadow: {{b.mark}}; white-space: nowrap">
+<span style="display: flex; align-items: center; gap: var(--sp-2); overflow: hidden"><b style="font-weight: 600; overflow: hidden; text-overflow: ellipsis">{{b.name}}</b><span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-7); color: {{b.stateColor}}"><x-import component-from-global-scope="KuroobiUI.Dot" tone="{{b.tone}}"></x-import>{{b.state}}</span></span>
+<span style="font-size: var(--fs-7); color: var(--sub)">{{b.use}}</span>
+</button>
+</sc-for>
+</div>
+<button type="button" class="k-row" style="flex: none; height: var(--h-field); padding: 0 var(--sp-3); border: 0; border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-2); text-align: left; color: var(--text); font: inherit; font-size: var(--fs-5); background: {{newGround}}; box-shadow: {{newMark}}">＋ ボットを追加</button>
+</div>
+</sc-if>
+
+<div class="k-scroll" style="flex: 1; min-width: 0; min-height: 0; display: grid; place-items: center; padding: var(--sp-5)">
+<div style="width: {{panelW}}; display: flex; flex-direction: column; gap: var(--sp-3)">
+
+<!-- GGS and FlipSight are never connected at once: waiting for games on both would make them fight over the CPU -->
+<sc-if value="{{blocked}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-3); background: var(--card); box-shadow: inset 2px 0 0 var(--gold); font-size: var(--fs-5)">
+<span>GGS に kuroobi でログイン中です</span>
+</div>
+</sc-if>
+
+<!-- A saved bot. Name and matches at once are the bot's settings on FlipSight (Manage on the bot page), read on every poll; the token cannot change them.
+     Threads per match is this Mac's choice, reported to FlipSight as the bot's engine threads -->
+<sc-if value="{{showSaved}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-direction: column; gap: var(--sp-1)">
+<span style="display: flex; align-items: center; gap: var(--sp-2)"><span class="k-sel" style="font-size: var(--fs-1); font-weight: 700">{{sel.name}}</span><x-import component-from-global-scope="KuroobiUI.Tag" tone="{{sel.tagTone}}">{{sel.tag}}</x-import></span>
+<span style="display: flex; align-items: center; gap: var(--sp-2)"><span style="font-size: var(--fs-5)">{{sel.id}}</span><span class="k-sel" style="font-family: var(--ff-mono); font-size: var(--fs-6); color: var(--sub)">othelloclub.com</span><span style="font-size: var(--fs-6); color: var(--sub)">レーティング {{sel.rate}}</span></span>
+</div>
+<!-- Settings rows: name column, then the control with its value right beside it -->
+<div style="display: flex; flex-direction: column; margin-top: var(--sp-2); border-top: 1px solid var(--border-weak)">
+<div style="display: flex; align-items: center; gap: var(--sp-3); min-height: var(--h-row2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5)"><span style="width: 160px; flex: none; color: var(--sub)">同時対局数</span><x-import component-from-global-scope="KuroobiUI.Select" value="fs" options="{{sel.matchOpts}}"></x-import></div>
+<div style="display: flex; align-items: center; gap: var(--sp-3); min-height: var(--h-row2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5)"><span style="width: 160px; flex: none; color: var(--sub)">直接の申込を受ける</span><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{sel.accept}}"></x-import></div>
+<div style="display: flex; align-items: center; gap: var(--sp-3); min-height: var(--h-row2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5)"><span style="width: 160px; flex: none; color: var(--sub)">スレッド数</span><x-import component-from-global-scope="KuroobiUI.Select" value="{{sel.threads}}" options="{{threadOpts}}"></x-import><span style="color: {{sel.useColor}}; white-space: nowrap; font-variant-numeric: tabular-nums">{{sel.use}}</span></div>
+<!-- Strength: main time (the search set by the clock, as on GGS) or a level (fixed depth and solve, the same steps as Play). Takes effect from the next game -->
+<div style="display: flex; align-items: flex-start; gap: var(--sp-3); min-height: var(--h-row2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5)"><span style="width: 160px; flex: none; color: var(--sub); line-height: var(--h-field)">強さ</span><div style="width: 320px; display: flex; flex-direction: column; gap: var(--sp-2)"><x-import component-from-global-scope="KuroobiUI.Segmented" value="{{sel.by}}" options="{{byOpts}}" fill="{{yes}}"></x-import><sc-if value="{{sel.byLevel}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Strength" value="{{sel.levels}}" on-change="{{noop}}"></x-import></sc-if></div></div>
+<div style="display: flex; align-items: center; gap: var(--sp-3); min-height: var(--h-row2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5)"><span style="width: 160px; flex: none; color: var(--sub)">定石を使う</span><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{no}}"></x-import></div>
+</div>
+<div style="display: flex; gap: var(--sp-2); margin-top: var(--sp-3)">
+<sc-if value="{{showGo}}" hint-placeholder-val="{{true}}"><x-import component-from-global-scope="KuroobiUI.Button" variant="{{selGoVariant}}" disabled="{{selGoOff}}">{{selGo}}</x-import></sc-if>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="{{tokenVariant}}">接続トークンを変える…</x-import>
+<span style="margin-left: auto"><x-import component-from-global-scope="KuroobiUI.Button" variant="ghost">このボットを削除</x-import></span>
+</div>
+<span style="font-size: var(--fs-6); color: {{msgColor}}; min-height: 1.5em">{{msg}}</span>
+</sc-if>
+
+<!-- Add a bot: the token is the only field; everything else comes from FlipSight or is filled in from this Mac's free threads -->
+<sc-if value="{{showForm}}" hint-placeholder-val="{{false}}">
+<span style="font-size: var(--fs-3); font-weight: 600">{{formTitle}}</span>
+<label style="display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-6); color: var(--sub)">接続トークン
+<x-import component-from-global-scope="KuroobiUI.TextField" value="{{token}}" password="{{yes}}" invalid="{{bad}}" placeholder="fsbm_…"></x-import>
+</label>
+<!-- Optional: empty means FlipSight's matches at once and threads from the free ones. Matches at once can only go below FlipSight's: more than that are declined here -->
+<button type="button" class="k-row" style="align-self: flex-start; border: 0; padding: 0; background: transparent; color: var(--accent); font: inherit; font-size: var(--fs-6)">{{detailLabel}}</button>
+<sc-if value="{{detailOpen}}" hint-placeholder-val="{{false}}">
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3)">
+<label style="display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-6); color: var(--sub)">同時対局数
+<x-import component-from-global-scope="KuroobiUI.Select" value="{{newMatches}}" options="{{newMatchOpts}}"></x-import>
+</label>
+<label style="display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-6); color: var(--sub)">スレッド数
+<x-import component-from-global-scope="KuroobiUI.Select" value="{{newThreads}}" options="{{newThreadOpts}}"></x-import>
+</label>
+</div>
+<div style="display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-6); color: var(--sub)">強さ
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="{{newBy}}" options="{{byOpts}}" fill="{{yes}}"></x-import>
+<sc-if value="{{newByLevel}}" hint-placeholder-val="{{false}}"><x-import component-from-global-scope="KuroobiUI.Strength" value="{{newLevels}}" on-change="{{noop}}"></x-import></sc-if>
+</div>
+</sc-if>
+<x-import component-from-global-scope="KuroobiUI.Button" variant="primary" size="field" disabled="{{busy}}">{{goLabel}}</x-import>
+<span style="font-size: var(--fs-6); color: {{msgColor}}; min-height: 1.5em">{{msg}}</span>
+</sc-if>
+
+</div>
+</div>
+</div>
+</x-import>
+</x-import>
+<div style="height: var(--h-status); flex: none; background: var(--bg); border-top: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-4); padding: 0 var(--sp-4); font-size: var(--fs-6); color: var(--sub); white-space: nowrap">
+<span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1)">CPU <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 3%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">12</b>%</span>
+<span style="display: flex; align-items: center; gap: var(--sp-1)">メモリ <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 25%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">2.1</b> GB</span>
+<span>GGS <b style="color: var(--text); font-weight: 600">{{ggsText}}</b></span>
+<span>FlipSight <b style="color: var(--text); font-weight: 600">{{connText}}</b></span>
+</div>
+</x-import>
+<sc-if value="{{tokenDlg}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Overlay" on-close="{{noop}}">
+<x-import component-from-global-scope="KuroobiUI.Modal" title="{{tokenTitle}}" on-close="{{noop}}" actions="{{tokenActions}}">
+<x-import component-from-global-scope="KuroobiUI.Field" label="新しい接続トークン" error="{{tokenErr}}"><x-import component-from-global-scope="KuroobiUI.TextField" value="fsbm_9c1e" password="{{yes}}" invalid="{{tokenBad}}"></x-import></x-import>
+</x-import>
+</x-import>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"state":{"editor":"select","options":["saved","level","draining","off","revoked","retry","first","add","add-detail","connecting","added","error","unreachable","ggs","ggs-playing"],"default":"saved"},"dialog":{"editor":"select","options":["none","token","token-other","token-bad"],"default":"none"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ui = window.KuroobiUI;
+    if (ui && ui.setLang) ui.setLang('ja');
+    // saved: two bots saved and connected, the first selected / first: nothing saved
+    // add: the token field alone / connecting: reading the bot's settings / error: token refused / unreachable
+    // ggs: logged in to GGS, nothing saved connects / ggs-playing: a GGS game in progress, so the switch waits
+    const state = this.props.state ?? 'saved';
+    const ggs = state === 'ggs' || state === 'ggs-playing';
+    const ggsBusy = state === 'ggs-playing';
+    const first = state === 'first';
+    const form = ['first', 'add', 'add-detail', 'connecting', 'error', 'unreachable'].includes(state);
+    const connected = !ggs && !first;
+    const CORES = 8;
+    // added: the bot just added, with what FlipSight gave and the threads filled in
+    const added = state === 'added';
+    const saved = first ? [] : [
+      // draining: Disconnect was pressed during a match: it finishes the match, then stops
+      { name: 'KUROOBI', id: 'ボット 31', rate: '2463.4', threads: 2, matches: 1, state: ggs ? 'off' : state === 'draining' ? 'draining' : 'playing' },
+      // off: disconnected by hand / revoked: FlipSight refused its token (reissued on the site), so it dropped
+      // off: disconnected by hand / revoked: FlipSight refused its token (401; not retried) / retry: the server stopped answering (retried on its own)
+      // level: KUROOBI-lite plays on a level (Lv3: depth 4 / solve 8) and does not take challenges, selected
+      { name: 'KUROOBI-lite', id: 'ボット 87', rate: '1702.6', threads: 1, matches: 1, level: { depth: 4, solve: 8 }, refuse: true, state: ggs || state === 'off' ? 'off' : state === 'revoked' ? 'revoked' : state === 'retry' ? 'retry' : 'waiting' },
+      ...(added ? [{ name: 'KUROOBI-x2', id: 'ボット 92', rate: '1500.0', threads: 1, matches: 1, state: 'off' }] : []),
+    ];
+    // A match plays its two games at once, each on its own engine with the bot's threads.
+    const used = saved.reduce((n, b) => n + b.threads * 2 * b.matches, 0);
+    const total = used;
+    const STATE = { playing: ['対局中', 'ok', 'var(--ok)'], waiting: ['待機中', 'accent', 'var(--accent)'], off: ['未接続', 'sub', 'var(--sub)'], draining: ['対局後に切断', 'gold', 'var(--gold)'], revoked: ['トークン拒否', 'sub', 'var(--bad)'], retry: ['再接続中', 'gold', 'var(--gold)'] };
+    const busy = state === 'connecting';
+    const msgs = {
+      connecting: ['', 'var(--sub)'],
+      error: ['この接続トークンは使えません', 'var(--bad)'],
+      unreachable: ['othelloclub.com に接続できません', 'var(--bad)'],
+      'ggs-playing': ['GGS の対局が終わるまで切り替えられません', 'var(--sub)'],
+      revoked: ['接続トークンが拒否されました', 'var(--bad)'],
+      retry: ['othelloclub.com が応答しません', 'var(--gold)'],
+    };
+    const [msg, msgColor] = msgs[state] ?? ['', 'var(--sub)'];
+    const budget = [];
+    saved.forEach((b, i) => { const c = ['var(--accent)', 'var(--ok)', 'var(--gold)'][i]; for (let k = 0; k < b.threads * 2 * b.matches; k++) budget.push((b.state === 'off' || b.state === 'revoked') && !ggs ? 'color-mix(in srgb, ' + c + ' 35%, var(--track))' : c); });
+    while (budget.length < CORES) budget.push('var(--track)');
+    const offSel = state === 'off' || state === 'revoked' || state === 'retry' || state === 'added';
+    const revoked = state === 'revoked';
+    const selIdx = added ? 2 : offSel || state === 'level' ? 1 : 0;
+    const sb = saved[selIdx] ?? saved[0] ?? { name: '', id: '', rate: '', threads: 1, matches: 1 };
+    const LV = [[1, 2], [2, 4], [4, 8], [6, 10], [8, 12], [10, 14], [12, 16], [14, 18], [16, 20], [18, 22], [20, 24], [22, 26], [24, 26]];
+    const lv = (l) => { const i = LV.findIndex(([d, v]) => d === l.depth && v === l.solve); return i >= 0 ? 'Lv' + (i + 1) : 'カスタム'; };
+    const sel = {
+      ...sb, threads: String(sb.threads), added,
+      accept: !sb.refuse,
+      by: sb.level ? 'level' : 'clock', byLevel: !!sb.level, levels: sb.level ?? { depth: 12, solve: 16 },
+      tag: ggs ? '未接続' : STATE[sb.state ?? 'off'][0], tagTone: ggs ? 'sub' : sb.state === 'revoked' ? 'bad' : sb.state === 'retry' || sb.state === 'draining' ? 'sub' : STATE[sb.state ?? 'off'][1],
+      use: '× 2 局 × ' + sb.matches + ' = ' + sb.threads * 2 * sb.matches + ' スレッド',
+      useColor: 'var(--sub)',
+      // FlipSight's setting first; only fewer can be chosen
+      matchOpts: [['fs', 'ボット管理の設定 (' + sb.matches + ')'], ...Array.from({ length: Math.max(0, sb.matches - 1) }, (_, i) => [String(i + 1), String(i + 1)])],
+    };
+    // Change the token: one field. The new token must be the same bot (same id); another bot's is refused here and is added with + instead
+    const dlg = this.props.dialog ?? 'none';
+    const h = window.React ? window.React.createElement : null;
+    const tokenErr = { 'token-other': 'ほかのボット (KUROOBI-x2) の接続トークンです', 'token-bad': 'この接続トークンは使えません' }[dlg] ?? '';
+    return {
+      yes: true, no: false, noop: () => {},
+      tokenDlg: dlg !== 'none', tokenTitle: sb.name + ' の接続トークンを変える', tokenErr, tokenBad: tokenErr !== '',
+      tokenActions: h && ui ? h(window.React.Fragment, null,
+        h('span', { style: { marginLeft: 'auto' } }),
+        h(ui.Button, { size: 'field', variant: 'ghost' }, 'キャンセル'),
+        h(ui.Button, { size: 'field', variant: 'primary' }, '変える')) : null,
+      navLocal: ui ? ui.navLocal() : [],
+      ggsItems: ui ? ui.ggsNav(ggs ? 'online' : 'offline', ggsBusy ? { 'ggs-play': { count: 1 } } : {}).filter((it) => it.id !== 'ggs-standby') : [],
+      ggsConn: ggs ? 'online' : 'offline',
+      // The FlipSight section sits below GGS's rows: 1 row when not logged in, 7 when logged in
+      fsTop: ggs ? '414px' : '216px',
+      fsTone: busy ? 'gold' : connected ? 'ok' : 'sub',
+      fsItems: (connected
+        ? [{ id: 'fs-play', label: '対局', icon: 'ggs-play', count: 1 }, { id: 'fs-bots', label: 'ボット', icon: 'ggs-users' }, { id: 'fs-results', label: '結果', icon: 'results' }, { id: 'fs-connect', label: '自分のボット', icon: 'login' }]
+        : [{ id: 'fs-connect', label: '自分のボット', icon: 'login' }]).map((item) => ({ item: item.id === 'fs-connect' && revoked ? { ...item, dot: 'bad' } : item, on: item.id === 'fs-connect' })),
+      budget,
+      sel,
+      budgetText: total + ' / ' + CORES,
+      budgetColor: 'var(--text)',
+      hasSaved: !first,
+      botCount: saved.length + ' 体',
+      bots: saved.map((b, i) => {
+        const on = !form && i === selIdx;
+        const [st, tone, color] = STATE[b.state];
+        return { ...b, use: b.threads + ' スレッド × 2 局 × ' + b.matches + (b.level ? ' · ' + lv(b.level) : ''), state: st, tone, stateColor: color, ground: on ? 'var(--card)' : 'transparent', mark: on ? 'inset 2px 0 0 var(--accent)' : 'none' };
+      }),
+      newGround: form && !first ? 'var(--card)' : 'transparent',
+      newMark: form && !first ? 'inset 2px 0 0 var(--accent)' : 'none',
+      blocked: ggs,
+      showSaved: !form,
+      panelW: form ? 'var(--w-modal)' : 'var(--w-modal-wide)',
+      selGo: ggs ? 'GGS からログアウトして接続' : state === 'draining' ? '切断をやめる' : state === 'retry' ? '接続を切る' : offSel ? '接続' : '接続を切る',
+      selGoVariant: state === 'draining' ? 'secondary' : ggs || (offSel && state !== 'retry') ? 'primary' : 'danger',
+      selGoOff: ggsBusy,
+      // A refused token: the only way on is a new one, so that button takes the place of Connect
+      showGo: !revoked, tokenVariant: revoked ? 'primary' : 'secondary',
+      showForm: form,
+      formTitle: 'ボットを追加',
+      token: state === 'first' || state === 'add' ? '' : 'fsbm_3f9a',
+      // add-detail: matches at once lowered to 1 and 2 threads per game
+      detailOpen: state === 'add-detail',
+      detailLabel: state === 'add-detail' ? '▾ 詳細設定' : '▸ 詳細設定',
+      newMatches: state === 'add-detail' ? '1' : 'fs',
+      newMatchOpts: [['fs', 'ボット管理の設定'], ['1', '1'], ['2', '2'], ['3', '3'], ['4', '4']],
+      newThreads: state === 'add-detail' ? '2' : 'auto',
+      newThreadOpts: [['auto', '空きから自動'], ...[1, 2, 3, 4].map((n) => [String(n), n + ' スレッド'])],
+      bad: state === 'error',
+      byOpts: [{ value: 'level', label: 'レベル' }, { value: 'clock', label: '持ち時間' }],
+      newBy: state === 'add-detail' ? 'level' : 'clock', newByLevel: state === 'add-detail', newLevels: { depth: 8, solve: 12 },
+      threadOpts: [1, 2, 3, 4].map((n) => [String(n), n + ' スレッド']),
+      busy: busy || ggsBusy,
+      goLabel: busy ? '読み取っています…' : '追加',
+      msg, msgColor,
+      ggsText: ggs ? '接続中 (kuroobi)' : '未接続',
+      connText: busy ? '接続中…' : connected ? '接続中 (' + saved.filter((b) => b.state === 'playing' || b.state === 'waiting').length + ' / ' + saved.length + ' 体)' : '未接続',
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import type { Account } from './components/accounts';
-import type { BookNode, ClockView, EvalPoint, GameResult, GameView, GgsSnapshot, HintView, LearnEntry, StandbyCfg, ThinkView } from './types';
+import type { BookNode, ClockView, EvalPoint, FsResult, FsSnapshot, GameResult, GameView, GgsSnapshot, HintView, LearnEntry, StandbyCfg, ThinkView } from './types';
 
 const core = () => window.__TAURI__?.core;
 
@@ -130,6 +130,30 @@ export type UnfitView = {
   top: 'any' | 'all' | 'one';
   rows: { depth: number; group: boolean | null; text: string; hit: boolean }[];
 };
+
+export const fsApi = {
+  snapshot: () => call<FsSnapshot>('fs_snapshot'),
+  add: (token: string, cap: number | null, threads: number | null, level: [number, number] | null) =>
+    call('fs_add', { token, cap, threads, level }),
+  connect: (id: number) => call('fs_connect', { id }),
+  disconnect: (id: number) => call('fs_disconnect', { id }),
+  remove: (id: number) => call('fs_remove', { id }),
+  /** `cap` 0 is the bot's own setting on the site; `level` [0, 0] plays by the clock. */
+  set: (id: number, s: { cap?: number; threads?: number; book?: boolean; accept?: boolean; level?: [number, number] }) =>
+    call('fs_set', { id, ...s }),
+  challenge: (id: number, target: number) => call('fs_challenge', { id, target }),
+  changeToken: (id: number, token: string) => call('fs_change_token', { id, token }),
+  clearPending: () => call('fs_clear_pending'),
+  /** Reads a disconnected bot's settings on the site again. */
+  refresh: (id: number) => call('fs_refresh', { id }),
+  results: (id: number) => call<FsResult[]>('fs_results', { id }),
+};
+
+export async function onFsSnapshot(fn: (s: FsSnapshot) => void): Promise<() => void> {
+  const ev = window.__TAURI__?.event;
+  if (!ev) throw new Error('Tauri events unavailable');
+  return ev.listen<FsSnapshot>('fs', (e) => fn(e.payload));
+}
 
 export const ggsApi = {
   connect: (login: string, pw: string, server: string) => call<void>('ggs_connect', { login, pw, server }),

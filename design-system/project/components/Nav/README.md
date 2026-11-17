@@ -9,6 +9,7 @@ Screen switching on the left of the window. The logo at the top, then the local 
 - `conn` (required): `'offline' | 'connecting' | 'logging-in' | 'online'`. The colour of the dot by the GGS heading (`sub` / `gold` / `ok`).
 - `active` (required) and `onSelect`: the selected item and switching it.
 - `footer`: what goes at the bottom. In the app, a single settings `NavRow`.
+- `sections`: other servers' rows below GGS, each `{ key, title, conn, items }` with the same heading and connection dot. In the app, FlipSight's (`fsNav` in `App.tsx`).
 - `badges` (an argument of ggsNav): per-item `count` (a number), `alert` (`bad` background for something addressed to the login name or unread), `dot` (`gold` while in a tournament / `bad` when it is the login name's turn to move). The Play / observe count includes only games in progress (finished games are not counted).
 
 ## Rules

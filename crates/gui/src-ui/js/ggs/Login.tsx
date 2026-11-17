@@ -9,6 +9,7 @@ import { PUBLIC_SERVER } from '../components/accounts';
 import { ServerDialog, useServers, serverName } from '../SettingsScreen';
 import { ListHead, ListPane, Page, TitleBit, act } from '../ggsui';
 import { day, whenFull } from '../when';
+import { useFs } from '../fs';
 
 const ADD = '__add';
 
@@ -48,8 +49,21 @@ export function Login({ conn, server: linkingTo }: { conn: GgsSnapshot['conn']; 
   const linking = conn === 'connecting' || conn === 'logging_in';
   const working = busy || linking;
   const shown = linking ? t('login.connecting_to', { server: linkingTo || PUBLIC_SERVER }) : status;
+  // GGS and FlipSight are never connected at once; logging in here disconnects FlipSight first.
+  const fs = useFs();
+  const fsOn = fs?.connected ?? false;
+  const fsBots = fs?.bots.filter((b) => b.conn === 'online' || b.conn === 'draining').length ?? 0;
+  const fsPlaying = fs?.playing ?? false;
+  const goLabel = working ? t('ggs.login.connecting') : fsOn ? t('login.fs_switch') : t('ggs.login.submit');
+  const fsCard = fsOn && (
+    <div style={{ padding: 'var(--sp-3)', background: 'var(--card)', boxShadow: 'inset 2px 0 0 var(--gold)', fontSize: 'var(--fs-5)' }}>
+      {t('login.fs_on', { n: fsBots })}
+    </div>
+  );
   const msg = (
-    <span style={{ fontSize: 'var(--fs-6)', minHeight: '1.5em', color: working ? 'var(--sub)' : 'var(--bad)' }}>{shown}</span>
+    <span style={{ fontSize: 'var(--fs-6)', minHeight: '1.5em', color: working || fsPlaying ? 'var(--sub)' : 'var(--bad)' }}>
+      {shown || (fsPlaying ? t('login.fs_playing') : '')}
+    </span>
   );
 
   return (
@@ -85,6 +99,7 @@ export function Login({ conn, server: linkingTo }: { conn: GgsSnapshot['conn']; 
         <div className="k-scroll" style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'grid', placeItems: 'center', padding: 'var(--sp-5)' }}>
           {!showForm && picked ? (
             <div style={{ width: 'var(--w-modal)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+              {fsCard}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
                 <span className="k-sel" style={{ fontSize: 'var(--fs-1)', fontWeight: 700 }}>{picked.login}</span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
@@ -94,9 +109,9 @@ export function Login({ conn, server: linkingTo }: { conn: GgsSnapshot['conn']; 
                 </span>
                 {picked.last ? <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('ggs.accounts.last', { when: whenFull(picked.last) })}</span> : null}
               </div>
-              <Button variant="primary" size="field" disabled={working}
+              <Button variant="primary" size="field" disabled={working || fsPlaying}
                       onClick={() => void run(() => ggsApi.connectSaved(picked.server, picked.login), picked.server)}>
-                {working ? t('ggs.login.connecting') : t('ggs.login.submit')}
+                {goLabel}
               </Button>
               {msg}
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -105,6 +120,7 @@ export function Login({ conn, server: linkingTo }: { conn: GgsSnapshot['conn']; 
             </div>
           ) : (
             <div style={{ width: 'var(--w-modal)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+              {fsCard}
               <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>{first ? t('ggs.login.title') : t('login.new')}</span>
               <Field label={t('ggs.login.server')}>
                 <Select value={server} onChange={(v) => (v === ADD ? setAdding(true) : setServer(v))}
@@ -117,8 +133,8 @@ export function Login({ conn, server: linkingTo }: { conn: GgsSnapshot['conn']; 
               <Field label={t('ggs.login.password')}>
                 <TextField value={pw} password onChange={setPw} onEnter={() => void connect()} invalid={!!status && !working} />
               </Field>
-              <Button variant="primary" size="field" disabled={working || !user.trim()} onClick={() => void connect()}>
-                {working ? t('ggs.login.connecting') : t('ggs.login.submit')}
+              <Button variant="primary" size="field" disabled={working || fsPlaying || !user.trim()} onClick={() => void connect()}>
+                {goLabel}
               </Button>
               {msg}
               <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('login.saved_help')}</span>

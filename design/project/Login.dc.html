@@ -26,6 +26,15 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <x-import style="display: contents" component-from-global-scope="KuroobiUI.Body">
 <div style="position: relative; flex: none; display: flex">
 <x-import style="display: contents" component-from-global-scope="KuroobiUI.Nav" items="{{navLocal}}" ggs-items="{{ggsItems}}" conn="offline" active="ggs-login"></x-import>
+<!-- FlipSight connected: its section below GGS (see the FlipSight page) -->
+<sc-if value="{{fs}}" hint-placeholder-val="{{false}}">
+<div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; top: 216px; padding: 0 var(--sp-2); display: flex; flex-direction: column; gap: 1px">
+<div class="k-nav-section" style="margin: var(--sp-4) 0 6px; padding: 0 10px; align-items: center; gap: var(--sp-2); font-size: var(--fs-7); font-weight: 600; letter-spacing: .1em; color: var(--sub)"><x-import component-from-global-scope="KuroobiUI.Dot" tone="ok"></x-import>FlipSight</div>
+<sc-for list="{{fsItems}}" as="i" hint-placeholder-count="4">
+<x-import component-from-global-scope="KuroobiUI.NavRow" item="{{i.item}}" active="{{i.on}}"></x-import>
+</sc-for>
+</div>
+</sc-if>
 <div class="k-nav-ov" style="position: absolute; left: 0; right: 1px; bottom: 0; padding: var(--sp-2); border-top: 1px solid var(--border); background: var(--panel)">
 <button type="button" class="k-nav-row k-row" style="width: 100%; height: var(--h-field); display: flex; align-items: center; gap: var(--sp-3); border: 0; border-radius: var(--r-2); font: inherit; font-size: var(--fs-4); background: transparent; color: var(--text)"><span style="flex: none; display: grid; place-items: center"><x-import component-from-global-scope="KuroobiUI.Icon" name="prefs"></x-import></span><span class="k-nav-label">設定</span></button>
 </div>
@@ -64,6 +73,12 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <span style="display: flex; align-items: center; gap: var(--sp-2)"><span style="font-size: var(--fs-5)">GGS 本番</span><span class="k-sel" style="font-family: var(--ff-mono); font-size: var(--fs-6); color: var(--sub)">skatgame.net:5000</span><x-import component-from-global-scope="KuroobiUI.Tag" tone="accent">本番</x-import></span>
 <span style="font-size: var(--fs-6); color: var(--sub)">前回 10/25 21:40</span>
 </div>
+<!-- GGS and FlipSight are never connected at once: waiting for games on both would make them fight over the CPU -->
+<sc-if value="{{fs}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-3); background: var(--card); box-shadow: inset 2px 0 0 var(--gold); font-size: var(--fs-5)">
+<span>FlipSight にボット 2 体で接続中です</span>
+</div>
+</sc-if>
 <x-import component-from-global-scope="KuroobiUI.Button" variant="primary" size="field" disabled="{{busy}}">{{goLabel}}</x-import>
 <span style="font-size: var(--fs-6); color: {{msgColor}}; min-height: 1.5em">{{msg}}</span>
 <div style="display: flex; justify-content: flex-end"><x-import component-from-global-scope="KuroobiUI.Button" variant="ghost">このアカウントを削除</x-import></div>
@@ -97,11 +112,12 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <span style="margin-left: auto; display: flex; align-items: center; gap: var(--sp-1)">CPU <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 3%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">24</b>%</span>
 <span style="display: flex; align-items: center; gap: var(--sp-1)">メモリ <span aria-hidden="true" style="display: inline-block; width: 32px; height: 4px; border-radius: var(--r-pill); background: var(--track); overflow: hidden"><span style="display: block; height: 100%; width: 25%; background: var(--ok)"></span></span><b style="color: var(--text); font-weight: 600">4.0</b> GB</span>
 <span>GGS <b style="color: var(--text); font-weight: 600">{{connText}}</b></span>
+<sc-if value="{{fs}}" hint-placeholder-val="{{false}}"><span>FlipSight <b style="color: var(--text); font-weight: 600">接続中</b> (2 体)</span></sc-if>
 </div>
 </x-import>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"state":{"editor":"select","options":["saved","new","first","connecting","error","unreachable","timeout"],"default":"saved"},"$preview":{"width":1280,"height":800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"state":{"editor":"select","options":["saved","new","first","connecting","error","unreachable","timeout","fs","fs-playing"],"default":"saved"},"$preview":{"width":1280,"height":800}}'>
 class Component extends DCLogic {
   renderVals() {
     const ui = window.KuroobiUI;
@@ -121,12 +137,16 @@ class Component extends DCLogic {
       const on = a.login + '@' + a.server === sel;
       return { ...a, ground: on ? 'var(--card)' : 'transparent', mark: on ? 'inset 2px 0 0 var(--accent)' : 'none' };
     });
-    const busy = state === 'connecting';
+    // fs: FlipSight connected, nothing running / fs-playing: a FlipSight match in progress, so the switch waits for it
+    const fs = state === 'fs' || state === 'fs-playing';
+    const fsBusy = state === 'fs-playing';
+    const busy = state === 'connecting' || fsBusy;
     const msgs = {
       connecting: ['skatgame.net:5000 に接続しています…', 'var(--sub)'],
       error: ['ログイン名かパスワードが違います', 'var(--bad)'],
       unreachable: ['skatgame.net:5000 に接続できません', 'var(--bad)'],
       timeout: ['20 秒待っても応答がないので中止しました', 'var(--bad)'],
+      'fs-playing': ['FlipSight の対局が終わるまで切り替えられません', 'var(--sub)'],
     };
     const [msg, msgColor] = msgs[state] ?? ['', 'var(--sub)'];
     return {
@@ -148,9 +168,16 @@ class Component extends DCLogic {
       login: state === 'error' ? 'kuroobi2' : '',
       bad: state === 'error',
       busy,
-      goLabel: busy ? '接続しています…' : 'ログイン',
+      goLabel: state === 'connecting' ? '接続しています…' : fs ? 'FlipSight の接続を切ってログイン' : 'ログイン',
+      fs,
+      fsItems: [
+        { item: { id: 'fs-play', label: '対局', icon: 'ggs-play', count: fsBusy ? 1 : undefined }, on: false },
+        { item: { id: 'fs-bots', label: 'ボット', icon: 'ggs-users' }, on: false },
+        { item: { id: 'fs-results', label: '結果', icon: 'results' }, on: false },
+        { item: { id: 'fs-connect', label: '自分のボット', icon: 'login' }, on: false },
+      ],
       msg, msgColor,
-      connText: busy ? '接続中…' : '未接続',
+      connText: state === 'connecting' ? '接続中…' : '未接続',
     };
   }
 }

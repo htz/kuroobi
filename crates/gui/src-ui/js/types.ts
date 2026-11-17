@@ -367,3 +367,98 @@ export interface ClockView {
   white: number;
   lost: 'black' | 'white' | null;
 }
+
+/** FlipSight: one leg of a match (the site calls it 局). `cells` run a1 = 0, b1 = 1, ...; 1 black, 2 white. */
+export interface FsLeg {
+  cells: number[];
+  turn: number;
+  my_color: number;
+  clocks_ms: number[];
+  discs: number[];
+  last: number | null;
+  ply: number;
+  active: boolean;
+  thinking: boolean;
+  /** Our moves: [move number, value, seconds]. */
+  evals: [number, number, number?][];
+  /** The opponent's moves: [move number, seconds], from its clock. */
+  opp_secs: [number, number][];
+  moves: string;
+}
+
+export interface FsMatch {
+  id: number;
+  opponent: number;
+  opponent_name: string;
+  opponent_rating: number | null;
+  legs: FsLeg[];
+}
+
+export interface FsOtherBot {
+  id: number;
+  name: string;
+  rating: number | null;
+  online: boolean;
+  playing: boolean;
+  builtin: boolean;
+}
+
+export interface FsBotView {
+  id: number;
+  name: string;
+  rating: number | null;
+  max_games: number | null;
+  conn: string;
+  matches: FsMatch[];
+  outstanding: { target: number; name: string; since_ms: number } | null;
+  cooling: number[];
+  bots: FsOtherBot[];
+  finished: number;
+}
+
+export type FsConn = 'off' | 'connecting' | 'online' | 'draining' | 'retrying' | 'refused';
+
+export interface FsBotRow {
+  id: number;
+  name: string;
+  threads: number;
+  cap: number | null;
+  max_games: number | null;
+  book: boolean;
+  accept: boolean;
+  /** Depth and solve every move is played at; null plays by the clock. */
+  level: [number, number] | null;
+  conn: FsConn;
+  view: FsBotView | null;
+}
+
+export interface FsPending { busy: boolean; error: string; done: number | null }
+
+export interface FsSnapshot {
+  cores: number;
+  bots: FsBotRow[];
+  adding: FsPending | null;
+  token_change: FsPending | null;
+  connected: boolean;
+  playing: boolean;
+}
+
+/** One finished match as `results.jsonl` keeps it. */
+export interface FsResult {
+  t: number;
+  match: number;
+  opponent: number;
+  opponent_name?: string | null;
+  opponent_rating?: number | null;
+  status: string;
+  result: 'win' | 'loss' | 'draw' | 'aborted';
+  mine: number;
+  theirs: number;
+  diff: number;
+  finish_reason?: string | null;
+  legs: { black: boolean; discs: number[]; result_discs?: number[] | null; status: string; moves?: string | null; evals?: [number, number, number?][]; opp_secs?: [number, number][];
+          /** The final board (site order) and last square, replayed from the moves. */
+          cells?: number[]; last?: number | null }[];
+  my_rating?: number | null;
+  my_rating_before?: number | null;
+}

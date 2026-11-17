@@ -42,6 +42,9 @@ pub enum Job {
     NewGame,
     SetUseBook(bool),
     SetThreads(usize),
+    /// Plays every move at this depth and solve instead of by the clock, still within an even
+    /// share of the clock; `None` goes back to how the worker was started.
+    SetLevel(Option<(u32, u8)>),
 }
 
 pub struct Report {
@@ -89,6 +92,8 @@ impl EngineWorker {
         let (dtx, drx) = std::sync::mpsc::channel::<Done>();
         std::thread::spawn(move || {
             let mut engine = engine;
+            let mut fixed = fixed_level;
+            let mut within_clock = false;
             while let Ok(job) = jrx.recv() {
                 match job {
                     Job::Think { board, clock, hint } => {
@@ -98,8 +103,10 @@ impl EngineWorker {
                         let nf0 = kuroobi::engine::NON_FINITE_VALUES
                             .load(std::sync::atomic::Ordering::Relaxed);
                         let n0 = engine.nodes();
-                        let mv = if fixed_level {
-                            engine.choose_within(&board, None)
+                        let mv = if fixed {
+                            let share = (board.empty_count() as u32).div_ceil(2).max(1);
+                            let deadline = within_clock.then(|| Instant::now() + clock / share);
+                            engine.choose_within(&board, deadline)
                         } else {
                             engine.play_clock(&board, clock)
                         };
@@ -123,6 +130,11 @@ impl EngineWorker {
                     Job::NewGame => engine.clear_tables(),
                     Job::SetUseBook(b) => engine.set_use_book(b),
                     Job::SetThreads(n) => engine.set_threads(n),
+                    Job::SetLevel(Some((depth, solve))) => {
+                        engine.set_levels(depth, solve);
+                        (fixed, within_clock) = (true, true);
+                    }
+                    Job::SetLevel(None) => (fixed, within_clock) = (fixed_level, false),
                 }
             }
         });

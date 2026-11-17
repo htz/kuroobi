@@ -9,11 +9,14 @@ import { useActivity, useEngineSettings, useEngineTurn, useGraph, useHints, useL
 import { connOf, evalsOf, ggsPlaying, movesOf, navBadges, sqName } from './adapt';
 import { AppFrame, BoardFit, Body, Busy, Confirm, Divider, Dock, Main, Toolbar, WindowBar, useToolbarCompact } from './components/layout';
 import { GgsScreen } from './GgsScreens';
+import { FsScreen } from './fs/FsScreens';
+import { useFs } from './fs';
+import type { FsSnapshot } from './types';
 import { ExportKifu, LoadKifu } from './Dialogs';
 import { EditBoard, EditDock, EditTools, boardText, useBoardEdit, useEditKeys } from './BoardEdit';
 import { Board, type Cell } from './components/board';
 import { EvalGraph, MoveScrub, ScoreRow, StoneDot, srcIsBook, srcLabel } from './components/data';
-import { Nav, NavRow, navLocal, ggsNav, Toasts, NAV_IDS, type NavId } from './components/ggs';
+import { Nav, NavRow, navLocal, ggsNav, Toasts, NAV_IDS, type NavId, type NavItem, type NavSection } from './components/ggs';
 import { Button, Progress, Segmented, Select, Toggle } from './components/primitives';
 import { BookDock, BookPane, BookTree, useBookBrowse } from './BookScreen';
 import { LearnLog } from './LearnLog';
@@ -61,9 +64,24 @@ const sides = () => [
   { value: 'off' as const, label: t('app.side.off') },
 ];
 
-function reachable(raw: NavId, conn: ReturnType<typeof connOf>): NavId {
+function reachable(raw: NavId, conn: ReturnType<typeof connOf>, fs: FsSnapshot | null): NavId {
+  if (raw.startsWith('fs-')) return fs?.connected || raw === 'fs-mine' ? raw : 'fs-mine';
   if (conn === 'online') return raw === 'ggs-login' ? 'ggs-play' : raw;
   return raw.startsWith('ggs-') && raw !== 'ggs-login' ? 'ggs-login' : raw;
+}
+
+/** FlipSight's rows: My bots alone until a bot is connected. */
+function fsNav(fs: FsSnapshot | null): NavSection {
+  const live = fs?.bots.reduce((n, b) => n + (b.view?.matches.length ?? 0), 0) ?? 0;
+  const refused = fs?.bots.some((b) => b.conn === 'refused');
+  const mine: NavItem = { id: 'fs-mine', label: t('fs.nav.mine'), icon: 'login', ...(refused ? { dot: 'bad' as const } : {}) };
+  const items: NavItem[] = fs?.connected
+    ? [{ id: 'fs-play', label: t('fs.nav.play'), icon: 'ggs-play', ...(live ? { count: live } : {}) },
+       { id: 'fs-bots', label: t('fs.nav.bots'), icon: 'ggs-users' },
+       { id: 'fs-results', label: t('fs.nav.results'), icon: 'results' }, mine]
+    : [mine];
+  const connecting = fs?.bots.some((b) => b.conn === 'connecting');
+  return { key: 'fs', title: 'FlipSight', conn: fs?.connected ? 'online' : connecting ? 'connecting' : 'offline', items };
 }
 
 export function App() {
@@ -72,9 +90,11 @@ export function App() {
   const applied = useApplied();
   const g = useGame(prefs.clockSecs, prefs.learnOn);
   const ggs = useGgs();
+  const fs = useFs();
   const [navRaw, setNavRaw] = useState<NavId>('play');
   const conn = connOf(ggs.snap?.conn);
-  const nav = reachable(navRaw, conn);
+  const nav = reachable(navRaw, conn, fs);
+  const isFs = nav.startsWith('fs-');
   const study = nav === 'study';
   const isBook = nav === 'book';
   const isGgs = nav.startsWith('ggs');
@@ -123,6 +143,17 @@ export function App() {
     if (chatOpen) markChatRead();
   }, [chatOpen, markChatRead]);
 
+  // A token the site refused shows on whatever screen is open (the OS is told by the backend).
+  const say = g.say;
+  const refused = (fs?.bots ?? []).filter((b) => b.conn === 'refused').map((b) => b.name).join('\n');
+  const toldRefused = useRef('');
+  useEffect(() => {
+    for (const name of refused.split('\n').filter(Boolean)) {
+      if (!toldRefused.current.split('\n').includes(name)) say(t('fs.toast.refused', { name }));
+    }
+    toldRefused.current = refused;
+  }, [refused, say]);
+
   const setMode = g.setMode;
   // Leaving the game for another screen pauses it, clock and all; "Start" takes it on from the same position.
   const { playing, stop } = g;
@@ -166,7 +197,7 @@ export function App() {
   // The right panel exists on the play/study screens and on the book tab when there is a book;
   // the toolbar's panel button and the room kept for the panel follow it.
   const bookDock = isBook && bookTab === 'book' && book.node?.size !== 0;
-  const playDock = !isGgs && !isBook && !isSettings;
+  const playDock = !isGgs && !isFs && !isBook && !isSettings;
   const editing = playDock && !!ed.st;
   // The board's live evals search until stopped and hold the engine, so they stop while the board is
   // off screen (the book and settings read the engine), and do not start again until it is back
@@ -515,8 +546,8 @@ export function App() {
   // Playing to a clock, KUROOBI's strength is the clock.
   const playLv = prefs.clockSecs > 0 ? secsText(prefs.clockSecs) : lv;
   const screenTitle = isSettings ? t('settings.title')
-    : [...navLocal(), ...ggsNav(conn)].find((i) => i.id === nav)?.label ?? 'KUROOBI';
-  const screenSub = isGgs || isSettings || isBook ? undefined
+    : [...navLocal(), ...ggsNav(conn), ...fsNav(fs).items].find((i) => i.id === nav)?.label ?? 'KUROOBI';
+  const screenSub = isGgs || isFs || isSettings || isBook ? undefined
     // Studying, KUROOBI plays no side; its level is the analysis strength.
     : study ? t('app.study.analysis_level', { lv })
     : `${playLv} · ${t(g.side === 'both' ? 'app.side.both'
@@ -532,7 +563,7 @@ export function App() {
       <Body>
 
       <Nav items={navLocal()} ggsItems={ggsNav(conn, navBadges(ggs.snap, chatUnread))} conn={conn}
-           active={nav} onSelect={setNav}
+           sections={[fsNav(fs)]} active={nav} onSelect={setNav}
            footer={<NavRow item={{ id: 'settings', label: t('ggs.nav.settings'), icon: 'prefs', hint: '⌘,' }}
                            active={isSettings} onSelect={setNav} />} />
 
@@ -553,7 +584,7 @@ export function App() {
           <EditTools ed={ed} />
         </Toolbar>
       )}
-      {!isGgs && !isSettings && !editing && <Toolbar
+      {!isGgs && !isFs && !isSettings && !editing && <Toolbar
           dock={hasDock ? { open: dockOpen, onToggle: () => setDockOpen(o => !o) } : undefined}
           graph={study
             ? { open: graphOpen, onToggle: () => setGraphOpen(o => !o) } : undefined}
@@ -617,6 +648,8 @@ export function App() {
                                        learn={{ on: g.learnOn, set: (on) => { setPref('learnOn', on); markApplied(); },
                                                 stored: book.node?.size, learned: book.node?.learned_size,
                                                 onLog: () => { setBookTab('log'); setNav('book'); } }} />
+         : isFs ? <FsScreen nav={nav} fs={fs} ggs={ggs.snap} onNav={setNav} prefs={prefs} confirm={confirm} say={g.say}
+                           onKifu={(title, kifu, parts) => setViewer({ title, kifu, parts })} />
          : isGgs ? <GgsScreen nav={nav} snap={ggs.snap} onNav={setNav} prefs={prefs}
                        onKifu={(title, kifu, archive) => {
                          if (archive) {
@@ -722,7 +755,7 @@ export function App() {
 
       </Body>
 
-        <GlobalStatus snap={ggs.snap} cpu={cpu} analyzing={graph.busy ? graph.prog : null} thinking={g.thinking}
+        <GlobalStatus snap={ggs.snap} fs={fs} cpu={cpu} analyzing={graph.busy ? graph.prog : null} thinking={g.thinking}
                       thinkSecs={g.thinkSecs} nodes={nodes} nps={nps} servers={servers} />
 
       {viewer && (

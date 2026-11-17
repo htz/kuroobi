@@ -22,7 +22,7 @@ Per-screen spec of the KUROOBI desktop GUI (Tauri + React). As the starting poin
 │ (scrolls)                                             │                     │
 │ Settings ⌘,                                           │                     │
 ├────────┴──────────────────────────────────────────────┴─────────────────────┤
-│ StatusBar (--h-status 28)  Left: what is running          Right: CPU · Memory · GGS │
+│ StatusBar (--h-status 28)  Left: what is running   Right: CPU · Memory · GGS · FlipSight │
 └──────────────────────────────────────────────────────────────────────────────┘
   + Watchers (z 20) / Drawer (z 26, from the right) / Toasts (z 27, bottom right) / Overlay (z 30)
     / GGS menu (z 50) / Opponent dropdown (z 60)
@@ -40,6 +40,7 @@ Assembled by `App` in `js/App.tsx`. `AppFrame` → `WindowBar` → `Body` (`Nav`
 - Row `NavRow`: height `--h-field`; the selected row is filled `--accent-dim` with `--on-accent` text. At the right end, a count badge (`.k-nav-n`) or a status dot (`.k-nav-dot`).
 - Local items (`navLocal`): "Play", "Study", "Book" (⌘B).
 - GGS items (`ggsNav`): only "Log in" while not connected or connecting. Once connected: "Play / observe", "Lobby", "Players", "Results", "Chat", "Tournaments", "Console".
+- Below GGS, the FlipSight section (`sections` of `Nav`, built by `fsNav` in `js/App.tsx`): the same heading and connection dot. Only "My bots" until a bot is connected; then "Matches" (count of matches in progress), "Bots", "Results", "My bots". "My bots" carries a red dot while a bot's token is refused.
 - Badges (`navBadges` in `js/adapt.ts`): Lobby = number of incoming requests (red); Players = unread notices (red); Play / observe = number of games in progress, plus a red dot when it is the logged-in name's turn to move; Chat = unread count (red); Tournaments = a gold dot when in a tournament.
 - The footer is a single `NavRow` "Settings" (⌘,).
 
@@ -59,7 +60,7 @@ Assembled by `App` in `js/App.tsx`. `AppFrame` → `WindowBar` → `Body` (`Nav`
 ### StatusBar (`GlobalStatus` in `js/GlobalStatus.tsx`; frame is `StatusBar` in `js/components/layout.tsx`)
 - Shared by all screens. Height `--h-status`, `--fs-6` `--sub`, values bold `--text`. No per-screen information.
 - **Left = what is running** (comes and goes): "● Auto match" (pressing it opens the request sheet in continuous-play mode), "● Analyzing n / m", "● Thinking 12.3 s" (same for local search and GGS games), "● Learning a / b" (gold), "Nodes 58.7M" (k/M/G/T regardless of language, the same unit system as the Mnps speed), "Speed 12.3 Mnps". Items that do not fit are **hidden whole, from the end** (never shown cut off, `fit` in `StatusBar`).
-- **Right = always present** (gap `--sp-4`): `Load` (local) with "CPU" and "Memory" (a thin 32px-wide bar + number, hard-coded; below 70% `--ok`, 70% and up `--gold`, 90% and up `--bad`), and `GgsConn` (local) "GGS Connected (alice · local)" / "GGS Not connected" / "GGS Connecting…" / "GGS Reconnecting…".
+- **Right = always present** (gap `--sp-4`): `Load` (local) with "CPU" and "Memory" (a thin 32px-wide bar + number, hard-coded; below 70% `--ok`, 70% and up `--gold`, 90% and up `--bad`), and `GgsConn` (local) "GGS Connected (alice · local)" / "GGS Not connected" / "GGS Connecting…" / "GGS Reconnecting…", then, once a FlipSight bot is saved, `FsConn` (local) "FlipSight Connected (1 / 2 bots)" (bots connected / saved).
 - Pressing the GGS item while connected opens a menu (opens upward, width `--w-popover`, z 50, `GgsConn`): heading "Switch account", saved accounts per server (✓ on the current one; list height at most 240px, hard-coded), "Log in with another account…" (disconnects and goes to the new-account form on the login screen), and "Log out" in red. Closes on an outside click and Esc.
 
 ### Overlays and toasts
@@ -326,6 +327,40 @@ Purpose: see and send raw traffic with GGS.
 - Input row (`--panel`): an `--accent` "›" + monospaced `TextField` "Command (e.g. tell /os who 8; Enter to send)" + "Common commands ▴" (a small popup above, width `--w-popover`, height at most 280px hard-coded: 12 commands with descriptions; pressing one puts it in the input field) + "Send" (primary).
 
 ---
+
+## FlipSight (`fs-*`, `FsScreen` in `js/fs/FsScreens.tsx`)
+
+Purpose: run bots on FlipSight (othelloclub.com), several at once, each with its own connection token. The words are FlipSight's own Japanese (ボット, 自分のボット, FlipSightボット / 登録ボット, 申込, 承諾 / 辞退, レーティング, 局 for each of a match's two games, 同時対局数, 接続トークン, トークン拒否, ボット管理); screens show labels and values only.
+
+**GGS and FlipSight are never connected at once**: waiting for games on both would make them fight over the CPU. Connecting a bot while logged in to GGS logs out of GGS first ("Log out of GGS and connect"), and logging in to GGS disconnects FlipSight first ("Disconnect FlipSight and log in", in `ggs/Login.tsx`, with "Connected to FlipSight with n bots" above it); either is refused while the other side has a game in progress. At launch only the one used last connects (`connects_at_launch` in `crates/flipsight/src/manager.rs`).
+
+**Use cases**: FS-Enter-1 Add a bot by its token (details optional) / -2 See why adding failed / -3 Switch from GGS / -4 Set each bot's threads and games at once / -5 Disconnect and connect again / -6 Replace a refused token / -7 Remove a bot; play with or without the book / -8 Notice a refused token from any screen / -9 Set each bot's strength and whether it takes challenges. FS-Board-1 Follow the matches in progress / -2 Open a finished match's record / -3 See what the bots wait for. FS-Bots-1 Pick a bot, see its rating and rank / -2 Challenge one bot. FS-Results-1 Rating history and record / -2 Open a record / -3 Pick a bot, narrow by period and opponent.
+
+### My bots (`fs-mine`, `FsMine`)
+- **Toolbar**: `TitleBit` "My bots"; in `end` the threads in use against what this machine runs at once: one segment per thread (160px, hard-coded), coloured per bot (faint for a bot not connected, whose threads stay reserved), and "6 / 10". It only shows the use: a bot on a level uses far less than its threads, so nothing is refused for passing it.
+- **List** (left `ListPane`, shown once a bot is saved): `ListHead` "My bots" + "n bots"; rows of `--h-row2`: name (the site's; "Bot n" when it gave none) with `Dot` and state on the right ("Playing" `--ok` / "Waiting" `--accent` / "Connecting…" / "Reconnecting" / "Disconnecting after the match" `--gold` / "Token refused" `--bad` / "Not connected" `--sub`), below "4 threads × 1". Foot row "＋ Add a bot".
+- **A bot** (width `--w-modal-wide`): name `--fs-1` + `Tag` state; "Bot 31", `othelloclub.com` mono, "Rating 2463.4". Settings rows (name column 160px, hard-coded): "Games at once" `Select` ("Bot settings (n)" = the site's `max_games`, or fewer: the extra challenges are declined here, as the token cannot change the site's setting; a connected bot reads the site's value on every poll, a disconnected one once more when the pointer reaches the `Select`), "Accept direct challenges" `Toggle` (off declines every challenge sent to the bot by another bot or a member; the matches the site's auto matching sets up are not challenges and still start, so Disconnect is the way to stop all), "Threads" `Select` (per game, as FlipSight counts and limits them and as declared to the site: 1–4; a match plays its two games at once, so twice that) followed by "× 2 games × 1 = 8 threads", "Strength" (width 320px: `Segmented` "Level" "Main time" as in Play, and on a level `Strength`; main time is the search set by the clock, a level plays every move at its depth and solve within an even share of the clock; each game keeps what it started with), "Use the book" `Toggle`. The list row reads "1 thread × 2 games × 1 · Lv3" for a bot on a level. Buttons: "Connect" (primary; "Log out of GGS and connect" while on GGS) / "Disconnect" (danger; at once with no match, else after the matches: meanwhile the state reads "Disconnecting after the match" `--gold` everywhere and the button becomes "Keep connected", which takes it back), "Change the token…", and on the right "Remove this bot" (ghost → `Confirm`, danger). Below, "The connection token was refused" `--bad` (then "Change the token…" is the primary and Connect is gone) or "othelloclub.com is not answering" `--gold`.
+- **Add** (width `--w-modal`, and alone when nothing is saved): "Add a bot", `Field` "Connection token" (password), "▸ Details" (closed by default: "Games at once" "Bot settings" or 1–4, "Threads" "From the free threads" or 1–4, and "Strength" as on a bot, main time by default), primary "Add" ("Reading…" while the site answers). Adding checks and saves the token only; the bot is selected, not connected, until "Connect". The name, id, rating and games at once come from the first poll; threads per game default to the free threads ÷ (2 × games at once), from 1 to 4. Errors under the button (`err.fs_*`): token refused, unreachable, already added.
+- **Change the token** (`Overlay` + `Modal` "Change KUROOBI-lite's token"): `Field` "New connection token", "Cancel" "Change". A token of another bot (different id) is refused in the field ("That is the token of another bot (X)"); the same bot keeps its settings and records.
+- A refused token (401) is not retried: a toast "KUROOBI-lite: connection token refused" on any screen, the red dot on "My bots", and the OS notification "FlipSight: cannot connect". A server that stops answering is retried on its own ("Reconnecting").
+
+### Matches (`fs-play`, `FsPlay`)
+- **Toolbar**: `TitleBit` "KUROOBI vs nova" + "Standard · 2 games"; for a finished match "Record" (→ viewer, both games as `parts`).
+- **List** (left `ListPane`): `Segmented` "All" "In progress" "Finished"; `ListHead` "In progress" / "Finished" + "n matches"; `MatchRow` for every bot's matches (the bot's name first). Finished matches come from each bot's `results.jsonl` (newest 100); × closes one, the foot "Close n finished matches" all.
+- **In progress**: the two games side by side, as a GGS synchro pair: "Game 1" + "19 – 6 · 21 moves", `PlayerRow` opponent above, `Board` (the site's a1 = 0, b1 = 1 order turned into the board's), `PlayerRow` the bot below with "Eval +2.4", clocks running between polls; under each "KUROOBI to move · Thinking" `--accent`. Below, `EvalTrend` as for a GGS synchro pair: the two games summed by move number (`sumBoards`), the gold "Split at move n" where their moves first differ, and both sides' thinking times (the opponent's from what its clock lost); the opponent's evaluations are not known.
+- **Finished**: a strip with `Tag` "Finished", "KUROOBI wins +22", "Game 1 +16 · Game 2 +6 · Rating 2462.4 → 2463.4", then the two final boards laid out as in progress (last move marked, no clocks) with the trend below. The boards are replayed from each game's moves and shown only when those reach the end of the game; otherwise the trend alone. A match that ends while picked stays picked; with nothing picked, the newest finished one shows.
+- **Empty**: `EmptyBoard` + "Waiting for challenges", one line per connected bot ("KUROOBI is challenging nova" while a challenge stands), "See the bots" (primary).
+
+### Bots (`fs-bots`, `FsBots`)
+- **Toolbar**: `Select` of my bots. Taking challenges is set in My bots; a bot that does not take them shows the band "Not accepting direct challenges".
+- `Band` "Not accepting direct challenges" while off.
+- `Section` "KUROOBI's rating": "Rating" "Rank" "W / L / D" "Last 12 matches" (`KeyValue`s, wrapping as on Results).
+- `Section` "Bots" + "n bots": every standard bot of the last poll by rating. Columns "Rank" (#1 `--gold`), "Name" (an icon tells FlipSight bots, `cpu` `--accent`, from registered bots, person `--sub`; the kind is its label), "Rating", "State" ("Playing" `--ok` / "Online" `--accent` / "Offline" / "Declined" for a bot that did not take a challenge, left alone for 10 minutes), and "Challenge" (`size="row"`; disabled unless the bot is online and free, nothing of ours is outstanding and the matches at once are not full; a challenge of ours waiting for its answer also holds a place against challenges that arrive) or "Challenging 0:42" `--accent`. The bot's own row is bold, without a button.
+
+### Results (`fs-results`, `FsResults`)
+- As GGS Results, per bot and without the format: **Toolbar** `Select` of my bots, `Divider`, period `Select`, opponent `Combobox`, pages in `end`.
+- `Section` "Rating history" (`RateChart`, the bot's own rating after each match, written by the bot as `my_rating`) and the six numbers; `Section` "Finished games" with `ResultHead boards rating` (`boardLabel` "Game n", `ratingLabel` "Rating"); `ResultRow` with the two games' disc differences and a decided-by tag only for time-outs.
+- **Detail** (`Drawer`): "When", "Opponent's rating", "Discs (Game 1 +16 · Game 2 +6)", "My colour", "Rating (+1.0)", `EvalTrend`, "Open kifu" (disabled when the moves are not known).
 
 ## Settings (`settings`, `SettingsScreen` in `js/SettingsScreen.tsx`)
 

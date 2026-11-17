@@ -461,7 +461,7 @@ FS_BOT_TOKEN=fsbm_... kuroobi-flipsight [--threads N] [--pause NAMES] [--out DIR
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--threads <n>` | the GUI's setting | Threads for one leg; two legs thinking at once get half each |
+| `--threads <n>` | half the GUI's setting | Threads for each leg's engine, as FlipSight counts and limits them (declared to the site); a match's two legs think at once, so it takes twice that |
 | `--book` | off | Use the opening book |
 | `--margin <s>` | 1.5 | Seconds kept back from the clock on every move |
 | `--lag <s>` | 0.8 | First guess of the seconds a move loses to polling and the network; measured from then on, and 1.3 times it is kept back for each move still to play |

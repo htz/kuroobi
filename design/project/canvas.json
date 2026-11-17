@@ -937,6 +937,258 @@
    "title": "Tournaments · Create (refused by the director program)",
    "expand": "fill",
    "page": "tourney"
+  },
+  "FsBots.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "flipsight",
+   "title": "FlipSight · Bots",
+   "w": 1280,
+   "x": 0,
+   "y": 1840
+  },
+  "FsBotsChallenge.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "flipsight",
+   "title": "FlipSight · Bots · Challenge sent",
+   "w": 1280,
+   "x": 1360,
+   "y": 1840
+  },
+  "FsBotsClosed.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "flipsight",
+   "title": "FlipSight · Bots · Not taking challenges",
+   "w": 1280,
+   "x": 2720,
+   "y": 1840
+  },
+  "FsConnect.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · My bots (two connected)",
+   "w": 1280,
+   "x": 0,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsConnectAdd.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · Add a bot (token only)",
+   "w": 1280,
+   "x": 10880,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsConnectAdded.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · My bots · Bot added (not connected until Connect)",
+   "w": 1280,
+   "x": 14960,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsConnectConnecting.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · Reading the bot from FlipSight",
+   "w": 1280,
+   "x": 13600,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsConnectError.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · Token refused",
+   "w": 1280,
+   "x": 16320,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsConnectFirst.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · First bot (token only)",
+   "w": 1280,
+   "x": 9520,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsConnectGgs.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · My bots while logged in to GGS",
+   "w": 1280,
+   "x": 17680,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsConnectGgsPlaying.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · My bots while a GGS game is on (switch waits)",
+   "w": 1280,
+   "x": 19040,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsPlay.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "flipsight",
+   "title": "FlipSight · Match in progress (two boards)",
+   "w": 1280,
+   "x": 0,
+   "y": 920
+  },
+  "FsPlayChallenging.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "flipsight",
+   "title": "FlipSight · Challenge sent",
+   "w": 1280,
+   "x": 4080,
+   "y": 920
+  },
+  "FsPlayEmpty.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "flipsight",
+   "title": "FlipSight · Waiting for a challenge",
+   "w": 1280,
+   "x": 2720,
+   "y": 920
+  },
+  "FsPlayFinished.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "flipsight",
+   "title": "FlipSight · Match finished",
+   "w": 1280,
+   "x": 1360,
+   "y": 920
+  },
+  "FsResults.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "flipsight",
+   "title": "FlipSight · Results",
+   "w": 1280,
+   "x": 0,
+   "y": 2760
+  },
+  "FsResultsDetail.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "flipsight",
+   "title": "FlipSight · Results · Detail",
+   "w": 1280,
+   "x": 1360,
+   "y": 2760
+  },
+  "LoginFlipSight.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "login",
+   "title": "Log in while connected to FlipSight",
+   "w": 1280,
+   "x": 9520,
+   "y": 0
+  },
+  "LoginFlipSightPlaying.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "login",
+   "title": "Log in while a FlipSight match is on (switch waits)",
+   "w": 1280,
+   "x": 10880,
+   "y": 0
+  },
+  "FsConnectAddDetail.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · Add a bot (details: matches at once, threads, strength)",
+   "w": 1280,
+   "x": 12240,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsConnectOff.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · My bots · A bot disconnected",
+   "w": 1280,
+   "x": 2720,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsConnectRevoked.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · My bots · A bot whose token stopped working",
+   "w": 1280,
+   "x": 4080,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsConnectRetry.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · My bots · A bot reconnecting (server not answering)",
+   "w": 1280,
+   "x": 5440,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsConnectToken.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · Change the token",
+   "w": 1280,
+   "x": 6800,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsConnectTokenOther.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · Change the token (another bot's token)",
+   "w": 1280,
+   "x": 8160,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsPlayRevoked.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · A token refused while on another screen (toast, red dot)",
+   "w": 1280,
+   "x": 5440,
+   "y": 920,
+   "page": "flipsight"
+  },
+  "FsConnectDraining.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · My bots · Disconnect pressed during a match",
+   "w": 1280,
+   "x": 1360,
+   "y": 0,
+   "page": "flipsight"
+  },
+  "FsConnectLevel.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "FlipSight · My bots · A bot on a level",
+   "w": 1280,
+   "x": 20400,
+   "y": 0,
+   "page": "flipsight"
   }
  },
  "createdOnFiles": {
@@ -1034,7 +1286,7 @@
    "y": 0,
    "w": 520,
    "size": "s",
-   "text": "GGS login use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Enter-1 Log in with a saved account\n• GGS-Enter-2 Log in with a new account\n• GGS-Enter-3 Remove an account",
+   "text": "GGS login use cases (source of truth: the DS Screen spec, screens.md. ※ marks one not yet met)\n\n• GGS-Enter-1 Log in with a saved account\n• GGS-Enter-2 Log in with a new account\n• GGS-Enter-3 Remove an account\n• GGS-Enter-4 Switch from FlipSight to GGS: logging in disconnects FlipSight first; while a FlipSight match is on, the switch waits ※",
    "page": "login"
   },
   "uc-results-920": {
@@ -1200,6 +1452,56 @@
    "page": "settings",
    "maxW": 16240,
    "text": "Settings"
+  },
+  "fs-design": {
+   "fill": "blue",
+   "page": "flipsight",
+   "text": "FlipSight in the GUI: a second server section in the left menu, below GGS, with the same heading and connection dot. Not connected: My bots. Connected: Matches (count of matches in progress), Bots, Results, My bots. The status bar shows FlipSight's connection (bots connected) beside GGS.\n\nSeveral bots run at once, each with its own token, threads per game (as FlipSight counts them), matches at once and strength (main time as on GGS, or a level as in Play); the toolbar of My bots shows the threads in use against what this Mac runs at once. Matches lists every bot's matches; Bots and Results pick one of my bots (ratings are per bot).\n\nGGS and FlipSight are never connected at once (waiting for games on both makes them fight over the CPU). Connecting to one while on the other offers \"Log out of GGS and connect\" / \"Disconnect FlipSight and log in\", which cannot be pressed while that side has a game in progress. At launch only the one used last connects.\n\nThe boards draw the section over the menu (the Nav component has a GGS section only); the component gains it when the code is written.\n\nWords follow FlipSight's own Japanese (othelloclub.com/ja/flipsight/bot): ボット, 自分のボット, FlipSightボット / 登録ボット, 申込 (not 挑戦), 承諾 / 辞退, レーティング, 局 for each of a match's two boards (1 局目 / 2 局目; a match is counted in 対局), 同時対局数, スレッド数, 接続トークン, トークン拒否, ボット管理. FlipSightボット (is_builtin) and 登録ボット are told apart by an icon before the name: cpu (--accent) / person (--sub), with the kind as its label.",
+   "w": 520,
+   "x": -1200,
+   "y": -260,
+   "size": "s"
+  },
+  "title-flipsight": {
+   "kind": "title1",
+   "maxW": 8000,
+   "page": "flipsight",
+   "text": "FlipSight",
+   "w": 240,
+   "x": 0,
+   "y": -260
+  },
+  "uc-fs-0": {
+   "page": "flipsight",
+   "text": "FlipSight my bots (自分のボット) use cases (※ marks one not yet met)\n\n• FS-Enter-1 Add a bot by its token; optionally set matches at once, threads per game and strength while adding. Adding does not connect: Connect does, and the bot then connects at every launch until disconnected ※\n• FS-Enter-2 See why adding failed (token refused, server unreachable) ※\n• FS-Enter-3 Switch from GGS to FlipSight: connecting logs out of GGS first; while a GGS game is on, the switch waits ※\n• FS-Enter-4 Set each bot's threads per game (1–4); the bar shows threads × 2 games × matches at once over the bots against what this Mac runs at once, without refusing more (a bot on a level uses far less) ※\n• FS-Enter-5 Disconnect a bot and connect it again; a disconnected bot keeps its threads ※\n• FS-Enter-6 Replace a bot's token after it was reissued on FlipSight (the old one is refused): same bot, settings and records kept ※\n• FS-Enter-8 Notice a refused token from any screen ※\n• FS-Enter-7 Remove a bot; play with or without the book ※\n• FS-Enter-9 Set each bot's strength (main time, or a level as in Play) and whether it takes challenges; both apply from the next match ※\n\nWhat the bot API allows (othelloclub.com/en/flipsight/bot/api): with the token a bot reads its matches, challenges, accepts, declines and moves. Its name and matches at once (max_games) are set under Manage on the bot page and only read here, from the poll's bot record. Threads are this Mac's choice, sent with every poll as environment.engine_threads.\n\nAdding: the token is the only required field. Details (closed by default): matches at once (FlipSight's setting, or fewer: the extra challenges are declined here, since the token cannot change FlipSight's) threads per game (from the free threads, or a number) and strength (main time, or a level). Left empty, matches at once is FlipSight's and threads per game the free threads ÷ (2 × matches at once), from 1 to 4.\n\nScreen text is kept to labels and values: no explanatory sentences.\n\nA connection that fails: a refused token (401) is not retried: the bot row reads \"Token expired\" in --bad, its detail puts \"Change the token…\" in Connect's place, Bots in the menu gets a red dot, a toast says \"KUROOBI-lite: token refused\" on whatever screen is open, and the OS notification \"FlipSight: cannot connect\" is sent (as GGS's \"cannot log in\"). Its matches in progress cannot be moved and run out on time. A server that stops answering is retried on its own: the row reads \"Reconnecting\" in --gold, with no toast. Changing the token: one field; a token of another bot (different id) is refused in the dialog.",
+   "w": 520,
+   "x": -1200,
+   "y": 0,
+   "size": "s"
+  },
+  "uc-fs-1840": {
+   "page": "flipsight",
+   "text": "FlipSight bots (ボット) use cases (※ marks one not yet met)\n\n• FS-Bots-1 Pick one of this Mac's bots; see its rating and rank ※\n• FS-Bots-2 Challenge one bot ※\n\nA challenge stands for 2 minutes; a bot that does not take it is left alone for 15 minutes (\"Turned down · 12 min\").",
+   "w": 520,
+   "x": -1200,
+   "y": 1840,
+   "size": "s"
+  },
+  "uc-fs-2760": {
+   "page": "flipsight",
+   "text": "FlipSight results use cases (※ marks one not yet met)\n\n• FS-Results-1 See the record and rating history ※\n• FS-Results-2 Open a finished match's record (→ viewer) ※\n• FS-Results-3 Pick one of this Mac's bots; narrow by period and opponent ※\n\nOne format only, so no format filter or column. Decided by: time-outs only.",
+   "w": 520,
+   "x": -1200,
+   "y": 2760,
+   "size": "s"
+  },
+  "uc-fs-920": {
+   "page": "flipsight",
+   "text": "FlipSight match use cases (※ marks one not yet met)\n\n• FS-Board-1 Follow the bot's matches in progress, both boards at once ※\n• FS-Board-2 Open a finished match's record (→ viewer) ※\n• FS-Board-3 With no match, see whether the bot is waiting for challenges or has sent one ※\n\nA match is two boards with colours swapped, played at once: laid out as a GGS synchro match. No resign or adjourn: the bot API has neither. The opponent's evaluations are unknown, so the graph has KUROOBI's line only.",
+   "w": 520,
+   "x": -1200,
+   "y": 920,
+   "size": "s"
   }
  },
  "order": [
@@ -1306,7 +1608,35 @@
   "MainOpenOff.dc.html",
   "TourneyCreate.dc.html",
   "TourneyCreateUnregistered.dc.html",
-  "TourneyCreateRefused.dc.html"
+  "TourneyCreateRefused.dc.html",
+  "FsConnect.dc.html",
+  "FsConnectConnecting.dc.html",
+  "FsConnectError.dc.html",
+  "FsPlay.dc.html",
+  "FsPlayFinished.dc.html",
+  "FsPlayEmpty.dc.html",
+  "FsPlayChallenging.dc.html",
+  "FsBots.dc.html",
+  "FsBotsChallenge.dc.html",
+  "FsBotsClosed.dc.html",
+  "FsResults.dc.html",
+  "FsResultsDetail.dc.html",
+  "FsConnectGgs.dc.html",
+  "FsConnectGgsPlaying.dc.html",
+  "LoginFlipSight.dc.html",
+  "LoginFlipSightPlaying.dc.html",
+  "FsConnectFirst.dc.html",
+  "FsConnectAdd.dc.html",
+  "FsConnectAdded.dc.html",
+  "FsConnectAddDetail.dc.html",
+  "FsConnectOff.dc.html",
+  "FsConnectRevoked.dc.html",
+  "FsConnectRetry.dc.html",
+  "FsConnectToken.dc.html",
+  "FsConnectTokenOther.dc.html",
+  "FsPlayRevoked.dc.html",
+  "FsConnectLevel.dc.html",
+  "FsConnectDraining.dc.html"
  ],
  "pages": [
   {
@@ -1352,6 +1682,10 @@
   {
    "id": "console",
    "name": "Console"
+  },
+  {
+   "id": "flipsight",
+   "name": "FlipSight"
   },
   {
    "id": "settings",

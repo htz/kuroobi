@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ggsApi, type ActivityView, type SavedServer } from './api';
-import type { GgsSnapshot } from './types';
+import type { FsSnapshot, GgsSnapshot } from './types';
 import type { Account } from './components/accounts';
 import { t } from './i18n';
 import { Caption, popoverStyle, StatusBar, useDismiss } from './components/layout';
@@ -39,8 +39,8 @@ const B = ({ children }: { children: React.ReactNode }) => (
  * The bar shows the whole app, never one screen. Left: what is running now (it appears and goes away).
  * Right: what is always there — CPU, memory and the GGS connection.
  */
-export function GlobalStatus({ snap, cpu, analyzing, thinking, thinkSecs, nodes, nps, servers }: {
-  snap: GgsSnapshot | null; cpu: ActivityView | null; analyzing: { done: number; total: number } | null;
+export function GlobalStatus({ snap, fs, cpu, analyzing, thinking, thinkSecs, nodes, nps, servers }: {
+  snap: GgsSnapshot | null; fs: FsSnapshot | null; cpu: ActivityView | null; analyzing: { done: number; total: number } | null;
   thinking: boolean; thinkSecs: number; nodes: number; nps: number; servers: SavedServer[];
 }) {
   const online = snap?.conn === 'online';
@@ -82,7 +82,21 @@ export function GlobalStatus({ snap, cpu, analyzing, thinking, thinkSecs, nodes,
         {cpu && <Load label={t('app.meter.memory')} ratio={cpu.mem_total > 0 ? cpu.mem / cpu.mem_total : 0}
                       value={(cpu.mem / 1e9).toFixed(1)} unit={' ' + t('unit.gb')} />}
         <GgsConn snap={snap} servers={servers} />
+        {fs && fs.bots.length > 0 && <FsConn fs={fs} />}
       </>} />
+  );
+}
+
+/** "FlipSight Connected (1 / 2 bots)": the bots connected, of those saved. */
+function FsConn({ fs }: { fs: FsSnapshot }) {
+  const on = fs.bots.filter((b) => b.conn === 'online' || b.conn === 'draining').length;
+  const busy = fs.bots.some((b) => b.conn === 'connecting' || b.conn === 'retrying');
+  const state = on ? t('app.ggs.connected') : busy ? t('status.connecting') : t('app.ggs.offline');
+  return (
+    <span style={{ padding: '0 var(--sp-2)', color: 'var(--sub)', whiteSpace: 'nowrap' }}>
+      FlipSight <b style={{ color: on ? 'var(--text)' : busy ? 'var(--gold)' : 'var(--sub)', fontWeight: 600 }}>{state}</b>
+      {on > 0 && ` (${t('fs.status.bots', { on, n: fs.bots.length })})`}
+    </span>
   );
 }
 

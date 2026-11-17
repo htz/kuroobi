@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod control;
+mod fs;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -47,6 +48,7 @@ impl ::ggs::Host for GuiHost {
 
 struct App {
     game: Mutex<Reversi>,
+    fs: Mutex<Option<flipsight::manager::Handle>>,
     engine: Arc<Mutex<Option<Engine>>>,
     stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
     ggs: Mutex<Option<ggs::Handle>>,
@@ -386,9 +388,7 @@ fn auto_pass(game: &mut Reversi) {
 fn remember_found_weights() {
     let mut r = resources();
     let unset = r.dir.is_none() && r.weights.is_none() && r.nnue.is_none() && r.book.is_none();
-    // The bundle's own weights are found again from wherever the app is moved to.
-    let bundled = kuroobi::resources::bundled_weights().is_some_and(|b| r.dir() == b);
-    if unset && !bundled && std::env::var_os("KUROOBI_WEIGHTS_DIR").is_none() {
+    if unset && std::env::var_os("KUROOBI_WEIGHTS_DIR").is_none() {
         r.dir = Some(r.dir());
         let _ = r.save(&resources_path());
     }
@@ -1719,14 +1719,15 @@ fn ggs_connect(
     if login.trim().is_empty() || pw.is_empty() {
         return Err("err.login_and_password_required".into());
     }
-    ggs_send(
-        &app,
-        ggs::Cmd::Connect {
-            login: login.trim().to_string(),
-            pw,
-            server: server.unwrap_or_default(),
-        },
-    )
+    let tx = ggs_tx(&app)?;
+    let cmd = ggs::Cmd::Connect {
+        login: login.trim().to_string(),
+        pw,
+        server: server.unwrap_or_default(),
+    };
+    fs::release_then(&app, move || {
+        let _ = tx.send(cmd);
+    })
 }
 
 #[tauri::command]
@@ -1738,7 +1739,10 @@ fn ggs_accounts() -> Vec<ggs::SavedAccount> {
 fn ggs_connect_saved(app: State<App>, server: String, login: String) -> Result<(), String> {
     let pw = ggs::account_password(&server, &login)
         .ok_or_else(|| "err.saved_password_missing".to_string())?;
-    ggs_send(&app, ggs::Cmd::Connect { login, pw, server })
+    let tx = ggs_tx(&app)?;
+    fs::release_then(&app, move || {
+        let _ = tx.send(ggs::Cmd::Connect { login, pw, server });
+    })
 }
 
 /// Logs out and back in as a saved account; unlike a logout, auto-login stays on.
@@ -2163,6 +2167,7 @@ fn main() {
             engine: Arc::new(Mutex::new(None)),
             stop: Arc::new(Mutex::new(None)),
             ggs: Mutex::new(None),
+            fs: Mutex::new(None),
             learn_on: Mutex::new(true),
             activity: Arc::new(Mutex::new(Activity::default())),
             cpu_meter: Mutex::new(None),
@@ -2179,10 +2184,17 @@ fn main() {
                 }),
                 st.stop.clone(),
             );
+            let fs_handle = flipsight::manager::spawn(Arc::new(fs::FsHost {
+                app: app.handle().clone(),
+            }));
+            let fs_tx = fs_handle.tx.clone();
+            *st.fs.lock().unwrap() = Some(fs_handle);
+            // Only one of GGS and FlipSight connects at launch: the one used last.
+            let fs_first = flipsight::manager::connects_at_launch();
             let force = std::env::var("KUROOBI_GGS_AUTOCONNECT").is_ok();
             let demo = std::env::var("KUROOBI_AUTOPLAY").is_ok()
                 || std::env::var("KUROOBI_GGS_AUTOVIEW").is_ok();
-            let login = if (force || !demo) && !ggs::session_locked_by_other() {
+            let login = if (force || (!demo && !fs_first)) && !ggs::session_locked_by_other() {
                 ggs::auto_account()
             } else {
                 None
@@ -2197,6 +2209,8 @@ fn main() {
                     remember_found_weights();
                     if let Some((server, login, pw)) = login {
                         let _ = tx.send(ggs::Cmd::Connect { login, pw, server });
+                    } else if fs_first && !demo {
+                        let _ = fs_tx.send(flipsight::manager::Cmd::ConnectSaved);
                     }
                 },
             );
@@ -2227,6 +2241,17 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            fs::fs_snapshot,
+            fs::fs_add,
+            fs::fs_connect,
+            fs::fs_disconnect,
+            fs::fs_remove,
+            fs::fs_set,
+            fs::fs_challenge,
+            fs::fs_change_token,
+            fs::fs_clear_pending,
+            fs::fs_refresh,
+            fs::fs_results,
             set_backend_strings,
             clocks,
             set_clock,

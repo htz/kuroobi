@@ -205,8 +205,8 @@ GUI は `crates/`)。ルートでの `cargo` は GUI を含まない (`cargo fmt
 (Tauri はフロントをバイナリに埋め込むため、逆順だと変更が反映されない)。
 バイナリは GUI も含めてすべて `target/release/` に出る。GUI を操作する
 `kuroobi-mcp` はルートの `cargo build` で作られ、`crates/gui/` での build には含まれない。
-`crates/gui/tools/bundle-app.sh arm64|x86_64` は重みを中に入れた `Kuroobi.app`
-とその zip を作る ([GUI](docs/gui.md#the-app-bundle))。
+`crates/gui/tools/bundle-app.sh arm64|x86_64` は `Kuroobi.app` とその zip
+を作る (重みは入れない) ([GUI](docs/gui.md#the-app-bundle))。
 
 テストは perft による着手生成の網羅検証、差分パターンインデックスの全再計算
 との一致、確定石の対局不変性 (プロパティテスト)、探索の値等価性 (参照

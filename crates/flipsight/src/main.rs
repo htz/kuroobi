@@ -1,4 +1,5 @@
-//! FlipSight bot: `FS_BOT_TOKEN=... kuroobi-flipsight [options]`, run from the repository root.
+//! FlipSight bot: `FS_BOT_TOKEN=... kuroobi-flipsight [options]`, run from the repository root or
+//! given `--weights DIR`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -8,7 +9,7 @@ use std::sync::Arc;
 use flipsight::{Bot, Challenge, Options};
 
 const USAGE: &str =
-    "usage: FS_BOT_TOKEN=... kuroobi-flipsight [--base URL] [--threads N] [--book] \
+    "usage: FS_BOT_TOKEN=... kuroobi-flipsight [--base URL] [--weights DIR] [--threads N] [--book] \
 [--margin SECS] [--lag SECS] [--practice] [--pause NAMES] [--pause-log FILE] [--out DIR] \
 [--challenge builtin|stronger|ID,ID...] [--until-stable N:POINTS]";
 
@@ -20,9 +21,13 @@ fn main() -> ExitCode {
     let mut o = Options {
         base: "https://othelloclub.com".into(),
         token,
-        threads: ggs::env::resources()
+        // Per leg: a match's two legs think at once on half the configured threads.
+        threads: (ggs::env::resources()
             .threads
-            .unwrap_or_else(ggs::env::auto_threads),
+            .unwrap_or_else(ggs::env::auto_threads)
+            / 2)
+        .max(1),
+        weights: None,
         use_book: false,
         margin: 1.5,
         lag: 0.8,
@@ -39,6 +44,7 @@ fn main() -> ExitCode {
         let mut val = || it.next().unwrap_or_default();
         match a.as_str() {
             "--base" => o.base = val(),
+            "--weights" => o.weights = Some(PathBuf::from(val())),
             "--threads" => o.threads = val().parse().unwrap_or(o.threads),
             "--book" => o.use_book = true,
             "--margin" => o.margin = val().parse().unwrap_or(o.margin),

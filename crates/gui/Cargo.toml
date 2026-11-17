@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 kuroobi = { path = "../..", default-features = false }
 ggs = { path = "../ggs" }
+flipsight = { path = "../flipsight" }
 play = { path = "../play" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"

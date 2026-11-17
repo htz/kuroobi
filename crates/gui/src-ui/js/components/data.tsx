@@ -465,7 +465,7 @@ export function RateChart({ points, height, width, dates, labels, hover, onHover
   );
 }
 
-const W_OUTCOME = 28, W_DISCS = 44, W_RATING = 60, W_WHEN = 64, W_ENDING = 72, W_BOARD = 170;
+const W_OUTCOME = 28, W_DISCS = 44, W_RATING = 72, W_WHEN = 64, W_ENDING = 72, W_BOARD = 170;
 // The board columns give way first, so the opponent column survives the narrowest window.
 const W_OPP_MIN = 80;
 const BOARD_COL: React.CSSProperties = { flex: `0 1 ${W_BOARD}px`, minWidth: 100 };
@@ -477,10 +477,12 @@ export type ResultBoard = { diff: number | null; tag?: string; tone?: 'gold' | '
 /** A match decided as a whole (a resignation, an adjournment). */
 export type ResultEnding = { text: string; tone: 'gold' | 'bad' | 'sub' };
 
-export function ResultHead({ note, rating, boards }: {
+export function ResultHead({ note, rating, boards, boardLabel, ratingLabel }: {
   note?: boolean; rating?: boolean;
   /** The ending and the two board columns (my own games, where they are recorded). */
   boards?: boolean;
+  /** Another server's words for a board and the rating (FlipSight's 局 and レーティング). */
+  boardLabel?: (n: number) => string; ratingLabel?: string;
 }) {
   const cell = (w: number): React.CSSProperties => ({
     width: w, flex: 'none', textAlign: 'right', ...ONE_LINE,
@@ -493,10 +495,10 @@ export function ResultHead({ note, rating, boards }: {
       <span style={cell(W_DISCS)}>{t('data.result.head_discs')}</span>
       {boards && <>
         <span style={{ width: W_ENDING, flex: 'none', ...ONE_LINE }}>{t('data.result.head_ending')}</span>
-        <span style={{ ...BOARD_COL, ...ONE_LINE }}>{t('data.result.head_board', { n: 1 })}</span>
-        <span style={{ ...BOARD_COL, ...ONE_LINE }}>{t('data.result.head_board', { n: 2 })}</span>
+        <span style={{ ...BOARD_COL, ...ONE_LINE }}>{boardLabel ? boardLabel(1) : t('data.result.head_board', { n: 1 })}</span>
+        <span style={{ ...BOARD_COL, ...ONE_LINE }}>{boardLabel ? boardLabel(2) : t('data.result.head_board', { n: 2 })}</span>
       </>}
-      {rating && <span style={cell(W_RATING)}>{t('data.result.head_rating')}</span>}
+      {rating && <span style={cell(W_RATING)}>{ratingLabel ?? t('data.result.head_rating')}</span>}
       <span style={cell(W_WHEN)}>{t('data.result.head_date')}</span>
     </TableHead>
   );

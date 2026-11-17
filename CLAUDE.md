@@ -151,9 +151,8 @@ real incident behind it.
 
 Locations are resolved by `resources`: a config file (the OS config
 dir; on macOS `~/Library/Application Support/kuroobi/resources.conf`)
-can re-point them, otherwise `weights/` is found by walking up, then
-inside the app bundle (`Contents/Resources/weights`). The GUI gear menu
-can set it too.
+can re-point them, otherwise `weights/` is found by walking up. The
+GUI gear menu can set it too.
 
 **Call `quantize()` after loading NNUE weights**, or the SIMD path
 crashes.

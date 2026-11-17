@@ -13,14 +13,12 @@ Display → Language). The build steps and the pitfalls are in
 ## The app bundle
 
 `crates/gui/tools/bundle-app.sh arm64` (or `x86_64`) builds
-`target/bundle/<arch>/Kuroobi.app` with the weights and the book inside,
-signed ad hoc, and a zip beside it. The Intel build needs AVX2 (any
-Intel Mac from 2013 on). The app finds its weights in
-`Contents/Resources/weights` unless Settings → Engine points elsewhere,
-and keeps what it writes outside the bundle, in
-`~/Library/Application Support/kuroobi/`: the GGS accounts and games
-(`ggs_games/`) and the learned book (`book_learn.txt`, starting from the
-copy shipped inside). Launched from a checkout instead, it uses
+`target/bundle/<arch>/Kuroobi.app`, signed ad hoc, and a zip beside it.
+The Intel build needs AVX2 (any Intel Mac from 2013 on). The weights and
+the book are not inside: the first launch reports them missing until
+Settings → Engine points at their folder. The app writes nothing into
+itself; the GGS accounts and games go to `ggs_games/` in
+`~/Library/Application Support/kuroobi/`. Launched from a checkout instead, it uses
 `ggs_games/` and `weights/` found from the launch folder.
 
 ## The window
@@ -279,8 +277,7 @@ position, and games on a server not marked Public are not. The one switch,
 (on by default). The import advances one search at a time in the
 background and yields to games in progress (the status bar shows
 Learning). What is learned is saved in a file separate from the book
-itself (`book_learn.txt` beside it; the app bundle keeps it in the
-settings folder) and overlaid at startup, so it does not clash
+itself (`book_learn.txt` beside it) and overlaid at startup, so it does not clash
 while `bookgen` is updating the main file, and even where there is no
 book file a "book of experience" grows from the positions real games
 went through.
@@ -524,6 +521,38 @@ written to `ggs_wire.log` in the account's data folder.
   count or an increment, and a main time whose timeout is not a loss.
 
 ---
+
+## FlipSight (bots on othelloclub.com)
+
+The left menu has a FlipSight section below GGS. **My bots** adds a bot
+by its connection token alone (the token the site shows when the bot is
+registered): its name, number, rating and games at once are read from
+the site, and its threads per game (as FlipSight counts them, one
+engine per game, 1 to 4) are taken from the threads this machine has free. Adding does not connect the bot; Connect does. Several bots run at once on one copy of the weights;
+the bar at the top right shows threads × 2 games × games at once over the
+bots against what the machine runs at once, without refusing more (a bot
+on a level uses far less than its threads). Games at once can be
+set lower than the site's (the extra challenges are declined here),
+threads changed per bot, direct challenges turned away (the matches
+the site's auto matching sets up still start; that is set on the site), and the strength set to
+the clock or to a level as in Play (depth and solve; each game keeps the
+setting it started with); the token itself cannot change the bot's
+settings on the site, which stay under Manage on the bot page.
+
+**Matches** shows every bot's matches, the two games of a match side by
+side; **Bots** lists the site's standard bots (an icon tells FlipSight's
+own from registered ones) with a button to challenge one; **Results** keeps
+each bot's finished matches, rating history and records.
+
+GGS and FlipSight are never connected at once, so the two never compete
+for the CPU: connecting one disconnects the other, refused while the
+other has a game on, and at launch only the one used last connects. A
+token the site refuses (reissued there) stops that bot with a notice and
+is replaced from My bots; a bot keeps its settings and records.
+
+The tokens and settings are kept in `flipsight/bots.json` in the settings
+folder, readable by the user only; each bot's moves and results in
+`flipsight/<bot number>/`.
 
 ## What GGS taught us
 

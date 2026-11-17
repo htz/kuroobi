@@ -1,12 +1,11 @@
 #!/bin/bash
-# Builds Kuroobi.app for one Mac architecture with the weights inside, and zips it.
-#   usage: crates/gui/tools/bundle-app.sh <arm64|x86_64> [weights dir] [out dir]
+# Builds Kuroobi.app for one Mac architecture, without the weights, and zips it.
+#   usage: crates/gui/tools/bundle-app.sh <arm64|x86_64> [out dir]
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 
-arch=${1:?usage: bundle-app.sh <arm64|x86_64> [weights dir] [out dir]}
-weights=${2:-weights}
-out=${3:-target/bundle/$arch}
+arch=${1:?usage: bundle-app.sh <arm64|x86_64> [out dir]}
+out=${2:-target/bundle/$arch}
 case $arch in
   arm64) triple=aarch64-apple-darwin ;;
   # AVX2 and BMI2: every Intel Mac since 2013 has them, and the vector kernels need them.
@@ -16,10 +15,6 @@ case $arch in
     ;;
   *) echo "unknown architecture: $arch (arm64 or x86_64)" >&2; exit 1 ;;
 esac
-for f in nnue.bin linear.bin book.txt; do
-  [[ -f $weights/$f ]] || { echo "$weights/$f is missing" >&2; exit 1; }
-done
-
 (cd crates/gui && npm run build)
 cargo build --release -p gui --target "$triple"
 
@@ -31,15 +26,9 @@ identifier=$(field identifier)
 
 app=$out/$name.app
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/weights"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "target/$triple/release/kuroobi-gui" "$app/Contents/MacOS/kuroobi-gui"
 cp crates/gui/icons/icon.icns "$app/Contents/Resources/icon.icns"
-for f in nnue.bin linear.bin book.txt book_learn.txt; do
-  [[ -f $weights/$f ]] || continue
-  # A clone on APFS: the 1.2 GB of weights cost no space until either copy changes.
-  cp -c "$weights/$f" "$app/Contents/Resources/weights/" 2>/dev/null ||
-    cp "$weights/$f" "$app/Contents/Resources/weights/"
-done
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
