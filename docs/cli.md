@@ -263,10 +263,13 @@ position becomes one `.rec` record (see [learning.md](learning.md))
 carrying its search value and the game's final disc difference. Random
 moves are neither searched nor recorded. Each job also appends one line
 per game (moves, final disc difference for Black, random plies) to
-`games_NN.txt`.
+`games_NN.txt`; a game from `--starts` puts its start board in front.
 
 ```sh
 gendata --out-dir data/records/selfplay/new --jobs 8 --games 10000
+
+# One game from each position the opening records reach at ply 7
+gendata --out-dir out-val --starts-ply 7 --starts data/records/openings/shard_00_0000.rec
 ```
 
 | Option | Default | Meaning |
@@ -284,6 +287,8 @@ gendata --out-dir data/records/selfplay/new --jobs 8 --games 10000
 | `--weights <path>` / `--nnue <path>` | `weights/linear.bin` / `weights/nnue.bin` | Evaluators |
 | `--shard-size <n>` | 100000 | Records per `shard_WW_NNNN.rec` |
 | `--seed <n>` | random | Seed for the random moves; the one used is printed at start |
+| `--starts <file.rec>` | — | Start each game from a position of these records (repeatable) instead of the opening: no random moves, every distinct start played once, in an order shuffled by the seed. A restart skips the starts the transcripts in `--out-dir` already hold |
+| `--starts-ply <n>` | every record | Take only the records at this ply as starts |
 
 **Each record says what its value is**: `Midgame` with the search
 depth, `Selective` with t in tenths in the depth field, or `Exact`. The

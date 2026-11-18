@@ -2,16 +2,19 @@
 //! 24 bytes, `.rec`) plus one transcript line per game. Random opening moves are
 //! not searched and not recorded; the transcript keeps them. Just above the solve,
 //! a selective endgame solve replaces the midgame search (`SELECTIVE_T`).
+//! With `--starts`, each game starts from one position of the given records instead:
+//! no random moves, every start played once, in an order shuffled by the seed.
 //!
 //! Usage: gendata [--out-dir DIR] [--jobs N] [--threads 1] [--games N] [--positions N]
 //!                [--random-plies 12,14,16] [--depth 16] [--no-mpc] [--solve-empties 20]
 //!                [--selective 21:1.1,22:0.8,23:0.6,24:0.4|none]
 //!                [--hash-mid 22] [--hash-end 22] [--weights PATH] [--nnue PATH]
-//!                [--shard-size N] [--seed N]
+//!                [--shard-size N] [--seed N] [--starts FILE.rec]... [--starts-ply N]
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use kuroobi::engine::{Engine, EngineAssets, EngineConfig};
 use kuroobi::record::{Record, ScoreKind, SIZE as RECORD};
@@ -35,6 +38,8 @@ struct Args {
     nnue: PathBuf,
     shard_size: usize,
     seed: u64,
+    starts: Vec<PathBuf>,
+    starts_ply: Option<u8>,
 }
 
 fn parse_args() -> Args {
@@ -60,6 +65,8 @@ fn parse_args_from(args: Vec<String>) -> Args {
         nnue: EngineConfig::default().nnue,
         shard_size: 100_000,
         seed: 0,
+        starts: Vec::new(),
+        starts_ply: None,
     };
     let mut it = args.into_iter();
     while let Some(f) = it.next() {
@@ -86,6 +93,8 @@ fn parse_args_from(args: Vec<String>) -> Args {
             "--nnue" => a.nnue = PathBuf::from(val()),
             "--shard-size" => a.shard_size = val().parse().expect("--shard-size"),
             "--seed" => a.seed = val().parse().expect("--seed"),
+            "--starts" => a.starts.push(PathBuf::from(val())),
+            "--starts-ply" => a.starts_ply = Some(val().parse().expect("--starts-ply")),
             other => panic!("unknown flag {other}"),
         }
     }
@@ -157,6 +166,70 @@ impl Rng {
         }
         Position(m.trailing_zeros() as u8)
     }
+}
+
+type StartKey = (u64, u64, bool);
+
+fn start_key(b: &Board) -> StartKey {
+    (b.black, b.white, b.player() == Color::Black)
+}
+
+/// The distinct positions of the `--starts` records (those at `--starts-ply`, when given) that no
+/// transcript in `out_dir` has played yet, shuffled by the seed.
+fn load_starts(a: &Args) -> std::io::Result<Vec<Board>> {
+    let mut seen = played_starts(&a.out_dir)?;
+    let mut starts = Vec::new();
+    for path in &a.starts {
+        kuroobi::record::for_each(path, |r| {
+            if a.starts_ply.is_none_or(|p| p == r.ply) {
+                let (black, white) = if r.black_to_move {
+                    (r.mover, r.opponent)
+                } else {
+                    (r.opponent, r.mover)
+                };
+                let b = Board {
+                    black,
+                    white,
+                    player: if r.black_to_move {
+                        Color::Black
+                    } else {
+                        Color::White
+                    },
+                    empty_count: 64 - (black | white).count_ones() as u8,
+                };
+                if seen.insert(start_key(&b)) {
+                    starts.push(b);
+                }
+            }
+            true
+        })?;
+    }
+    let mut rng = Rng(a.seed);
+    for i in (1..starts.len()).rev() {
+        starts.swap(i, (rng.next() % (i as u64 + 1)) as usize);
+    }
+    Ok(starts)
+}
+
+/// A game from a start writes its board first: `<64 squares> <X|O> <moves> <final> 0`.
+fn played_starts(dir: &Path) -> std::io::Result<HashSet<StartKey>> {
+    let mut played = HashSet::new();
+    for e in std::fs::read_dir(dir)? {
+        let p = e?.path();
+        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        if !name.starts_with("games_") || !name.ends_with(".txt") {
+            continue;
+        }
+        for line in std::fs::read_to_string(&p)?.lines() {
+            let f: Vec<&str> = line.split(' ').collect();
+            if f.len() == 5 {
+                if let Ok(b) = Board::from_string(&format!("{} {}", f[0], f[1])) {
+                    played.insert(start_key(&b));
+                }
+            }
+        }
+    }
+    Ok(played)
 }
 
 /// Written as `.part`, renamed to `.rec` when full. Numbering continues after
@@ -270,6 +343,21 @@ fn main() {
         a.out_dir.display(),
         a.seed
     );
+    let starts = if a.starts.is_empty() {
+        None
+    } else {
+        match load_starts(&a) {
+            Ok(s) => {
+                eprintln!("gendata: {} starts left to play", s.len());
+                Some(s)
+            }
+            Err(e) => {
+                eprintln!("gendata: cannot read the starts: {e}");
+                return;
+            }
+        }
+    };
+    let next_start = AtomicUsize::new(0);
     // One copy of the weights for every job; each is over a gigabyte.
     let assets = match EngineAssets::load(&config(&a)) {
         Ok(x) => x,
@@ -287,8 +375,9 @@ fn main() {
         for w in 0..a.jobs {
             let (a, assets, stop, positions, games, running) =
                 (&a, &assets, &stop, &positions, &games, &running);
+            let starts = starts.as_deref().map(|s| (s, &next_start));
             scope.spawn(move || {
-                worker(w, a, assets, stop, positions, games);
+                worker(w, a, assets, stop, positions, games, starts);
                 if running.fetch_sub(1, Ordering::Relaxed) == 1 {
                     stop.store(true, Ordering::Relaxed);
                 }
@@ -341,6 +430,7 @@ fn worker(
     stop: &AtomicBool,
     positions: &AtomicU64,
     games: &AtomicU64,
+    starts: Option<(&[Board], &AtomicUsize)>,
 ) {
     let mut engine = match Engine::with_assets(assets.clone(), config(a)) {
         Ok(e) => e,
@@ -371,11 +461,23 @@ fn worker(
         && (a.positions == 0 || positions.load(Ordering::Relaxed) < a.positions)
         && (a.games == 0 || games.load(Ordering::Relaxed) < a.games)
     {
-        let n_random = a.random_plies[rot];
-        rot = (rot + 1) % a.random_plies.len();
+        let start = match starts {
+            Some((list, next)) => match list.get(next.fetch_add(1, Ordering::Relaxed)) {
+                Some(&b) => Some(b),
+                None => break,
+            },
+            None => None,
+        };
+        let n_random = if start.is_some() {
+            0
+        } else {
+            let n = a.random_plies[rot];
+            rot = (rot + 1) % a.random_plies.len();
+            n
+        };
         searched.clear();
         let mut moves = String::new();
-        let mut b = Board::new();
+        let mut b = start.unwrap_or_default();
         let mut ply = 0u32;
         engine.clear_tables();
         loop {
@@ -414,7 +516,8 @@ fn worker(
             -final_black
         }
         .clamp(-64, 64) as i8;
-        if let Err(e) = writeln!(games_out, "{moves} {final_black:+} {n_random}")
+        let from = start.map_or(String::new(), |s| format!("{s} "));
+        if let Err(e) = writeln!(games_out, "{from}{moves} {final_black:+} {n_random}")
             .and_then(|()| games_out.flush())
         {
             eprintln!("worker {w}: write failed: {e}");
@@ -471,6 +574,52 @@ mod tests {
     #[should_panic(expected = "outside")]
     fn selective_t_must_fit_the_depth_field() {
         parse_selective("21:6.4");
+    }
+
+    #[test]
+    fn starts_are_the_distinct_unplayed_records_at_the_ply() {
+        let dir = std::env::temp_dir().join(format!("gendata-starts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rec = |b: &Board, ply: u8| Record {
+            mover: b.player_bb(),
+            opponent: b.opponent_bb(),
+            score: 0.0,
+            game_score: 0,
+            ply,
+            random: false,
+            sq: 0,
+            black_to_move: b.player() == Color::Black,
+            score_kind: ScoreKind::Unknown,
+            score_depth: 0,
+            game_score_from: 0,
+            game_start: false,
+        };
+        let root = Board::new();
+        let mut after = Vec::new();
+        for m in root.movable_iter() {
+            let mut b = root;
+            b.make_move(m).unwrap();
+            after.push(b);
+        }
+        let mut records = vec![rec(&root, 0)];
+        records.extend(after.iter().map(|b| rec(b, 1)));
+        records.push(rec(&after[0], 1));
+        let path = dir.join("in.rec");
+        kuroobi::record::write_all(&path, &records).unwrap();
+        std::fs::write(dir.join("games_00.txt"), format!("{} c4 +0 0\n", after[1])).unwrap();
+
+        let mut a = parse_args_from(Vec::new());
+        a.out_dir = dir.clone();
+        a.starts = vec![path];
+        a.starts_ply = Some(1);
+        let got: HashSet<StartKey> = load_starts(&a).unwrap().iter().map(start_key).collect();
+        let want: HashSet<StartKey> = after
+            .iter()
+            .filter(|b| start_key(b) != start_key(&after[1]))
+            .map(start_key)
+            .collect();
+        assert_eq!(got, want);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
