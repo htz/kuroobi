@@ -168,56 +168,63 @@ export function RateRow({ label, rate }: { label: string; rate: Rate }) {
 
 export type Match = {
   mine: boolean; live: boolean;
-  opponent?: string;
+  /** The two players, the first on the first line (the login name on one's own games). */
   black: string; white: string;
   kind: string;
-  result?: string;
+  /** A finished game's disc difference from the first player's side. */
+  diff?: number | null;
   ended?: string;
-  leftBy?: string;
 };
 
-// Both players by name, the same for one's own games and watched ones: only the actions differ.
-const matchTitle = (m: Match) => t('ggs.vs', { a: m.black, b: m.white });
-
+/** A GGS game in the list: one player per line, the format and the result at the right. */
 export function MatchRow({ m, active, onSelect, onClose }: {
   m: Match; active: boolean; onSelect: () => void; onClose: () => void;
 }) {
-  const closable = !m.live;
+  const over = !m.live;
+  const d = m.ended === 'finished' ? m.diff ?? null : null;
+  // Told per player, so one's own games and watched ones read the same: the winner green, the loser red, a draw grey.
+  const tone = (first: boolean): string =>
+    d == null ? 'transparent' : d === 0 ? 'var(--sub)' : (d > 0) === first ? 'var(--ok)' : 'var(--bad)';
+  const line = (name: string, first: boolean) => {
+    const won = d != null && d !== 0 && (d > 0) === first;
+    return (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)', minWidth: 0 }}>
+        <span aria-hidden="true" style={{ flex: 'none', width: 3, height: 14, borderRadius: 2, background: tone(first) }} />
+        <span className="k-sel" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 'var(--fs-5)',
+                                         fontWeight: won ? 600 : 400, color: over && !won ? 'var(--sub)' : 'var(--text)' }}>{name}</span>
+      </span>
+    );
+  };
   return (
     // Only the button is the row: a k-row on the wrapper too laid the hover over twice.
-    <div style={{
-      position: 'relative', borderBottom: '1px solid var(--border-weak)',
-      ...picked(active),
-    }}>
+    <div style={{ position: 'relative', borderBottom: '1px solid var(--border-weak)', ...picked(active) }}>
       <button type="button" onClick={onSelect} className={'k-row' + (active ? ' k-on' : '')}
               aria-current={active || undefined} style={{
-        width: '100%', border: 0, background: 'transparent', textAlign: 'left',
-        padding: '9px var(--sp-3)', paddingRight: closable ? 40 : undefined,
-        display: 'flex', flexDirection: 'column', gap: 5,
+        width: '100%', minWidth: 0, border: 0, background: 'transparent', textAlign: 'left',
+        padding: 'var(--sp-2) var(--sp-3)', paddingRight: over ? 32 : undefined,
+        display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
       }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-0)', minWidth: 0, whiteSpace: 'nowrap' }}>
-          {/* Watched games carry a quiet mark; one's own games need none. */}
-          {!m.mine && <Tag tone="sub">{t('ggs.tag.observing')}</Tag>}
-          {/* Live games sit under the "in progress" heading already; only an ended game says how it ended. */}
-          {!m.live && (
-            <Tag tone={m.ended === 'adjourned' ? 'bad' : 'sub'}>
-              {m.ended === 'adjourned' ? t('ggs.state.adjourned')
-                : m.ended === 'aborted' ? t('ggs.state.aborted') : t('ggs.state.finished')}
-            </Tag>
-          )}
-          <span style={{ fontSize: 'var(--fs-5)', color: m.live ? 'var(--text)' : 'var(--sub)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {matchTitle(m)}
-          </span>
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.3 }}>
+          {line(m.black, true)}{line(m.white, false)}
         </span>
-        <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)',
-                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {m.kind}
-          {m.ended === 'adjourned'
-            ? ' · ' + (m.leftBy ? t('ggs.play.left_by', { who: m.leftBy }) : t('ggs.play.opp_left'))
-            : m.result && ` · ${m.result}`}
+        <span style={{ flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, lineHeight: 1.2 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-1)' }}>
+            {!m.mine && (
+              <span role="img" aria-label={t('ggs.tag.observing')} title={t('ggs.tag.observing')}
+                    style={{ display: 'grid', placeItems: 'center', color: 'var(--sub)' }}><Icon name="watch" size={13} /></span>
+            )}
+            <Tag tone="sub">{m.kind}</Tag>
+          </span>
+          {d != null && (
+            <span style={{ fontSize: 'var(--fs-5)', fontWeight: 600, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', color: tone(true) }}>
+              {d > 0 ? '+' + d : d < 0 ? '\u2212' + -d : '0'}
+            </span>
+          )}
+          {m.ended === 'adjourned' && <Tag tone="bad">{t('ggs.state.adjourned')}</Tag>}
+          {m.ended === 'aborted' && <Tag tone="sub">{t('ggs.state.aborted')}</Tag>}
         </span>
       </button>
-      {closable && (
+      {over && (
         <span style={{ position: 'absolute', right: 4, top: 4 }}>
           <IconButton name="close" label={t('ggs.match.close')} onClick={onClose} size={14} />
         </span>

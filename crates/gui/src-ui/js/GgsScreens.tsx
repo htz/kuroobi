@@ -311,12 +311,10 @@ function matchRowOf(g: MatchView[], login: string): Match {
   const sum = matchSum(g, a);
   return {
     mine, live: !g.every((x) => x.over),
-    opponent: m.opp_name,
     black: a, white: b,
     kind: gtypeLabel(m.gtype),
-    result: sum != null ? pairOutcome(sum, a, b) : undefined,
+    diff: sum,
     ended: g.map((x) => x.ended).find(Boolean) || undefined,
-    leftBy: g.map((x) => x.left_by).find(Boolean) || undefined,
   };
 }
 

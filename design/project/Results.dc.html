@@ -74,7 +74,8 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </x-import>
 </sc-if>
 <sc-if value="{{isPool}}" hint-placeholder-val="{{true}}">
-<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="レートの推移">
+<!-- The rating section is an accordion, as on FlipSight Results: folded, its bar keeps the first three numbers -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="レートの推移" fold="{{fold}}">
 <x-import component-from-global-scope="KuroobiUI.RateChart" points="{{rates}}" width="{{chartW}}" height="{{chartH}}" dates="{{rateDates}}" labels="{{rateLabels}}" hover="{{pickedRate}}"></x-import>
 <div style="display: flex; align-items: center; height: var(--h-field); margin-top: var(--sp-2); border-top: 1px solid var(--border-weak); border-bottom: 1px solid var(--border-weak)">
 <sc-for list="{{stats}}" as="s" hint-placeholder-count="6">
@@ -87,10 +88,9 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </sc-if>
 <x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="終わった対局" aside="{{rowCount}}" grow="{{yes}}">
 <div style="height: 100%; display: flex; flex-direction: column">
-<!-- Columns: result · opponent · format · disc difference (recorded value) · how it was decided (whole match: resign, adjourn; on GGS per match, both boards for synchro) · board 1 · board 2 (per board, the on-board disc difference and a time tag; each board has its own clocks; a single-game match has board 1 only; empty for resigned/adjourned matches) · (clocks only in the detail pane) · rating · date.
+<!-- Columns: opponent · format · disc difference (recorded value; bold, green for a win, red for a loss, grey for a draw or an adjourned game, so no win/loss column) · how it was decided (whole match: resign, adjourn; on GGS per match, both boards for synchro) · board 1 · board 2 (per board, the on-board disc difference and a time tag; each board has its own clocks; a single-game match has board 1 only; empty for resigned/adjourned matches) · (clocks only in the detail pane) · rating · date.
      Boards that ended normally get no tag. Out of time (extension used up too, ±64) / over time (entered the extension first and ended there; the minimum loss even when ahead). Win tags use --gold, loss tags --bad. Adjourned shows just "Adjourned" -->
 <div style="flex: none; height: var(--h-head); display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-2); border-bottom: 1px solid var(--border)">
-<span style="width: 28px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">勝敗</span>
 <span style="flex: 1; min-width: 0; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">相手</span>
 <span style="width: var(--w-gtype); flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">形式</span></sc-if>
 <span style="width: 44px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right">石差</span>
@@ -98,19 +98,21 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <span style="width: 150px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">1 面目</span>
 <span style="width: 150px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">2 面目</span>
 <span style="width: 60px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right">レート</span>
+<span style="width: 44px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; text-align: right">増減</span>
 <span style="width: 64px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right">日時</span>
 </div>
 <div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
 <sc-for list="{{rows}}" as="r" hint-placeholder-count="12">
 <div class="k-row" style="flex: none; display: flex; gap: var(--sp-2); height: var(--h-field); align-items: center; padding: 0 var(--sp-2); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); background: {{r.bg}}; box-shadow: {{r.ring}}; opacity: {{r.opacity}}">
-<span style="width: 28px; flex: none; color: {{r.tone}}; white-space: nowrap">{{r.tag}}</span>
 <span class="k-sel" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.opp}}</span>
 <span style="width: var(--w-gtype); flex: none; color: var(--sub); font-size: var(--fs-6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.note}}</span>
-<span style="width: 44px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--sub)">{{r.discs}}</span>
+<span style="width: 44px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: {{r.tone}}">{{r.discs}}</span>
 <span style="width: 72px; flex: none; color: {{r.endColor}}; font-size: var(--fs-6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.end}}</span>
 <span style="width: 150px; flex: none; display: flex; gap: 6px; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums"><span style="width: 28px; flex: none; text-align: right; color: var(--text)">{{r.b1.d}}</span><span style="color: {{r.b1.tagColor}}; font-size: var(--fs-6)">{{r.b1.tag}}</span></span>
 <span style="width: 150px; flex: none; display: flex; gap: 6px; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums"><span style="width: 28px; flex: none; text-align: right; color: var(--text)">{{r.b2.d}}</span><span style="color: {{r.b2.tagColor}}; font-size: var(--fs-6)">{{r.b2.tag}}</span></span>
 <span style="width: 60px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--sub); font-size: var(--fs-6)">{{r.rating}}</span>
+<!-- What the game did to the rating: against the rated game before it, of the same type -->
+<span style="width: 44px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: {{r.deltaColor}}; font-size: var(--fs-6)">{{r.delta}}</span>
 <span style="width: 64px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--sub); font-size: var(--fs-6)">{{r.when}}</span>
 </div>
 </sc-for>
@@ -197,7 +199,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </x-import>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"view":{"editor":"select","options":["random","all","empty"],"default":"random"},"detail":{"editor":"select","options":["closed","open"],"default":"closed"},"$preview":{"width":1280,"height":800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"view":{"editor":"select","options":["random","all","empty"],"default":"random"},"detail":{"editor":"select","options":["closed","open"],"default":"closed"},"chart":{"editor":"select","options":["on","off"],"default":"on"},"$preview":{"width":1280,"height":800}}'>
 class Component extends DCLogic {
   renderVals() {
     const ui = window.KuroobiUI;
@@ -236,6 +238,8 @@ class Component extends DCLogic {
     const PICK = open ? 0 : -1;
     const cellOf = ([d, k]) => ({ d: sgn(d), tag: k ? TAGS[k][0] : '', tagColor: k ? TAGS[k][1] : 'var(--sub)' });
     const sgn = (d) => (d > 0 ? '+' + d : d < 0 ? '−' + -d : '0');
+    const deltaOf = (i) => { if (games[i].r == null) return null; const p = games.slice(i + 1).find((x) => x.r != null); return p ? +(games[i].r - p.r).toFixed(1) : null; };
+    const deltaText = (i) => { const d = deltaOf(i); return d == null ? '' : d > 0 ? '+' + d.toFixed(1) : d < 0 ? '−' + (-d).toFixed(1) : '0.0'; };
     const rows = games.map((g, i) => ({
       opp: g.opp, note: g.kind,
       tag: g.d == null ? '中' : g.d > 0 ? '勝' : g.d < 0 ? '負' : '分',
@@ -246,6 +250,7 @@ class Component extends DCLogic {
       b2: g.end || g.bd.length < 2 ? { d: '', tag: '', tagColor: 'var(--sub)' } : cellOf(g.bd[1]),
       discs: g.d == null ? '—' : sgn(g.d),
       rating: g.r == null ? '' : g.r.toFixed(1), when: g.when,
+      delta: deltaText(i), deltaColor: deltaOf(i) == null || deltaOf(i) === 0 ? 'var(--sub)' : deltaOf(i) > 0 ? 'var(--ok)' : 'var(--bad)',
       bg: i === PICK ? 'var(--hover)' : 'transparent', ring: i === PICK ? 'inset 2px 0 0 var(--accent)' : 'none',
       opacity: g.dim ? 0.5 : 1,
     }));
@@ -301,6 +306,7 @@ class Component extends DCLogic {
       rateLabels: rated.map((g) => (g.when.includes(':') ? '10/26 ' + g.when : g.when + ' 20:00') + ' · ' + g.opp + ' · ' + sign(g.d) + ' · ' + g.r.toFixed(1)),
       pickedRate: rated.findIndex((g) => g.i === PICK),
       // With an opponent filter the change is the sum of what each of those games moved the rating.
+      fold: { open: (this.props.chart ?? 'on') === 'on', onToggle: () => {}, summary: [['レート', '1704.3'], ['期間の増減', '+4.2'], ['勝 / 負 / 分', '7 / 5 / 1']] },
       stats: view === 'opp' ? [
         { label: 'レート', value: '2596.0' },
         { label: '期間の増減', value: '−12.4' },

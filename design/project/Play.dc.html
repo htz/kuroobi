@@ -75,7 +75,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <sc-for list="{{matchGroups}}" as="g" hint-placeholder-count="2">
 <div style="flex: none; height: var(--h-head); display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); padding: 0 var(--sp-3); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">{{g.title}}<span style="margin-left: auto; font-weight: 400; letter-spacing: 0">{{g.count}}</span></div>
 <sc-for list="{{g.items}}" as="m" hint-placeholder-count="6">
-<x-import component-from-global-scope="KuroobiUI.MatchRow" m="{{m.m}}" active="{{m.active}}"></x-import>
+<x-import component-from-global-scope="KuroobiUI.MatchRow" m="{{m.m}}" active="{{m.active}}" on-select="{{noop}}" on-close="{{noop}}"></x-import>
 </sc-for>
 </sc-for>
 </div>
@@ -244,7 +244,7 @@ class Component extends DCLogic {
         secs: n <= 14 ? undefined : +(1 + (n % 6) * 0.9).toFixed(1), src: n <= 14 ? 'book' : n % 2 ? 'search' : undefined };
     });
     return {
-      yes: true, one: 1, noop: () => {},
+      yes: true, one: 1, n11: 11, n13: 13, n14: 14, noop: () => {},
       navLocal: ui ? ui.navLocal() : [],
       ggsItems: ui ? ui.ggsNav('online', { 'ggs-lobby': { count: 2, alert: true }, 'ggs-play': { count: 3 }, 'ggs-chat': { count: 3, alert: true } }).filter((it) => it.id !== 'ggs-standby') : [],
       isSelf: self, isWatch: !self,
@@ -302,10 +302,17 @@ class Component extends DCLogic {
         const items = (xs, base) => xs.map((m, i) => ({ m, active: base + i === sel }));
         const liveItems = done ? live.slice(1) : live;
         const overItems = done ? [live[0], ...over] : over;
+        // MatchRow's `m`: the disc difference from the first line's player, taken from the result text of the sample
+        const item = (m, active) => {
+          const fin = m.ended === 'finished';
+          const won = fin ? /^(.+) の勝ち \+(\d+)$/.exec(m.result ?? '') : null;
+          return { active, m: { mine: m.mine, live: m.live, black: m.black, white: m.white, kind: m.kind, ended: m.ended,
+                                diff: !fin ? undefined : !won ? 0 : won[1] === m.black ? +won[2] : -won[2] } };
+        };
         return {
           matchGroups: [
-            { title: '進行中', count: liveItems.length + ' 局', items: liveItems.map((m) => ({ m, active: !done && m === live[sel] })) },
-            { title: '終局', count: overItems.length + ' 局', items: overItems.map((m, i) => ({ m, active: done && i === 0 })) },
+            { title: '進行中', count: liveItems.length + ' 局', items: liveItems.map((m) => item(m, !done && m === live[sel])) },
+            { title: '終局', count: overItems.length + ' 局', items: overItems.map((m, i) => item(m, done && i === 0)) },
           ],
           closeAllLabel: '終局した ' + overItems.length + ' 局を閉じる',
         };

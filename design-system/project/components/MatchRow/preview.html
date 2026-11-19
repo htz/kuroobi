@@ -1,4 +1,4 @@
-<!-- @dsCard group="Lists" height=380 -->
+<!-- @dsCard group="Lists" height=540 -->
 <div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
 <script>
 KuroobiUI.setLang('ja');
@@ -8,10 +8,14 @@ const cap = (label, ...kids) => h('div', { style: { display: 'flex', flexDirecti
   h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, label), ...kids);
 const { MatchRow } = KuroobiUI;
 const ROWS = [
-  { mine: true, live: true, opponent: 'ymatioun', black: 'htz', white: 'ymatioun', kind: '同期・ランダム14手' },
+  { mine: true, live: true, black: 'htz', white: 'ymatioun', kind: '同期・ランダム14手' },
   { mine: false, live: true, black: 'saio', white: 'kbcli', kind: '通常' },
-  { mine: true, live: false, opponent: 'eona', black: 'eona', white: 'htz', kind: '通常', ended: 'adjourned', leftBy: 'eona' },
-  { mine: true, live: false, opponent: 'kbcli', black: 'htz', white: 'kbcli', kind: '同期・ランダム16手', result: 'htz の勝ち +6', ended: 'finished' },
+  { mine: true, live: true, black: 'htz', white: 'a-very-long-login-name-2026', kind: 'ランダム開局' },
+  { mine: true, live: false, black: 'htz', white: 'kbcli', kind: '同期・ランダム16手', diff: 6, ended: 'finished' },
+  { mine: true, live: false, black: 'htz', white: 'ymatioun', kind: '同期・ランダム14手', diff: -4, ended: 'finished' },
+  { mine: false, live: false, black: 'saio', white: 'rabbit', kind: '通常', diff: -12, ended: 'finished' },
+  { mine: true, live: false, black: 'htz', white: 'regu', kind: '通常', diff: 0, ended: 'finished' },
+  { mine: true, live: false, black: 'htz', white: 'eona', kind: '通常', ended: 'adjourned' },
   { mine: false, live: false, black: 'saio', white: 'rabbit', kind: 'ランダム開局', ended: 'aborted' },
 ];
 function Demo() {
@@ -20,5 +24,5 @@ function Demo() {
     ROWS.map((m, i) => h(MatchRow, { key: i, m, active: i === cur, onSelect: () => setCur(i), onClose: noop })));
 }
 ReactDOM.createRoot(document.getElementById('root')).render(
-  cap('Own game in progress (selected) / watching in progress / adjourned / finished / aborted — only finished rows have the close ✕', h(Demo)));
+  cap('In progress: own (selected) / watching / a long name. Finished: won / lost / watched / drawn / adjourned / aborted', h(Demo)));
 </script>

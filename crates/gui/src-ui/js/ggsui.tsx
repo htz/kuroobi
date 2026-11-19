@@ -204,6 +204,15 @@ export function useWidth(): [(el: HTMLDivElement | null) => void, number] {
   return [setEl, w];
 }
 
+/** A choice of how a screen shows its content (a folded section, a list filter), kept across launches. */
+export function useKept<T>(name: string, initial: T): [T, (v: T) => void] {
+  const key = 'kuroobi.view.' + name;
+  const [v, setV] = useState<T>(() => {
+    try { const raw = localStorage.getItem(key); return raw == null ? initial : JSON.parse(raw) as T; } catch { return initial; }
+  });
+  return [v, (next) => { setV(next); try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* storage off */ } }];
+}
+
 /** The clock, ticking every `ms` while `on`. */
 export function useNow(on: boolean, ms: number): number {
   const [now, setNow] = useState(() => Date.now());

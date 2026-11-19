@@ -1216,6 +1216,15 @@
    "w": 1280,
    "x": 4080,
    "y": 1840
+  },
+  "ResultsFolded.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "results",
+   "title": "Results · Rating section folded",
+   "w": 1280,
+   "x": 8160,
+   "y": 0
   }
  },
  "createdOnFiles": {
@@ -1545,6 +1554,24 @@
    "x": -1200,
    "y": 4340,
    "text": "Results and Bots: the rating accordion, the rating's change, the list switches\n\n• Results: the \"レーティングの推移\" section is an accordion. Its heading is a bar with a chevron; pressing it puts the chart and the numbers away. Folded, the bar takes the panel ground and keeps the rating, its change over the period and W / L / D at its right, so it shows that something is folded and what.\n• Results: an \"増減\" column after the rating, what the match did to it (after minus before): green up, red down.\n• Bots: two switches in the toolbar, \"FlipSightボットを非表示\" and \"オンラインのみ\"; each narrows the list when on. Ranks stay the ranks among all bots; the count is of the rows shown.\n• The chart's state and the two switches are kept across launches."
+  },
+  "prop-ggs-watch": {
+   "fill": "blue",
+   "page": "watch",
+   "size": "s",
+   "w": 520,
+   "x": -1200,
+   "y": 900,
+   "text": "The list rows (`MatchRow`): the FlipSight match row without pictures\n\n• One player per line. No \"対\", no stone marks (in a synchro match each plays both colours).\n• At the right, as on FlipSight: the format as a tag and, under it, the disc difference in bold. A watched game has the eye before the tag.\n• Who won is told by a bar before each name of a finished game: green for the winner (name in bold), red for the loser, grey for both in a draw. The difference under the tag is the first line's player's: \"+6\" when that player won, \"−4\" when it lost, \"0\" for a draw, in that player's bar colour. The login name is on the first line of one's own games, so there it reads as on FlipSight.\n• An adjourned or aborted game has \"中断\" (red) / \"中止\" in the difference's place.\n• Names give way with an ellipsis; the right column never does. Two lines high, as the FlipSight row. No \"終局\" tag: the list is headed 進行中 / 終局."
+  },
+  "prop-ggs-results": {
+   "fill": "blue",
+   "page": "results",
+   "size": "s",
+   "w": 520,
+   "x": -1200,
+   "y": 900,
+   "text": "Results follows FlipSight Results\n\n• No win/loss column: the disc difference is bold in the result's colour (green / red / grey; an adjourned game stays \"—\", told by \"中断\" under 決着).\n• \"増減\" after the rating: the change against the rated game before it, of the same type.\n• The rating section is an accordion: folded, its bar keeps the rating, its change over the period and W / L / D."
   }
  },
  "order": [
@@ -1682,7 +1709,8 @@
   "FsConnectDraining.dc.html",
   "FsBotPhoto.dc.html",
   "FsResultsNoChart.dc.html",
-  "FsBotsFiltered.dc.html"
+  "FsBotsFiltered.dc.html",
+  "ResultsFolded.dc.html"
  ],
  "pages": [
   {

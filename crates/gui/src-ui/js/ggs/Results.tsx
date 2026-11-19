@@ -7,7 +7,7 @@ import { captionStyle, Combobox, Divider, Drawer, KeyValue, Section, Toolbar, us
 import { Button, Segmented, Select } from '../components/primitives';
 import { EvalTrend, RateChart, ResultHead, ResultRow, StoneDot, type ResultBoard, type ResultEnding } from '../components/data';
 import { askSheet } from '../AskSheet';
-import { Blank, clockLabel, Page, RankRates, rateLabel, Rows, Sections, signed, sumBoards, Table, type TrendPoint, useWidth, useWindowHeight } from '../ggsui';
+import { Blank, clockLabel, Page, RankRates, rateLabel, Rows, Sections, signed, sumBoards, Table, type TrendPoint, useKept, useWidth, useWindowHeight } from '../ggsui';
 import { whenFull, whenShort } from '../when';
 
 type Pool = '8r' | '8' | 'all';
@@ -134,6 +134,7 @@ export function Results({ snap, onKifu }: {
   const cur = Math.min(page, pages - 1);
   const shown = rows.slice(cur * perPage, (cur + 1) * perPage);
   const hasRating = rows.some((r) => r.my_rating != null);
+  const [chart, setChart] = useKept('ggs.results.chart', true);
   const rated = rows.filter((r) => r.my_rating != null).reverse();
   const sel = rows.find((r) => rowKey(r) === pick) ?? null;
 
@@ -215,7 +216,8 @@ export function Results({ snap, onKifu }: {
                 <RankRates ranks={snap.my_ranks} />
               </Section>
             ) : (
-              <Section title={t('ggs.results.rating_trend')}>
+              <Section title={t('ggs.results.rating_trend')}
+                       fold={{ open: chart, onToggle: () => setChart(!chart), summary: stats.slice(0, 3) }}>
                 <div ref={chartRef} style={{ padding: '0 var(--sp-3)' }}>
                   <RateChart points={rates} width={chartW} height={short ? 96 : 168} dates={rated.map((r) => whenShort(r.at ?? 0))}
                              labels={rated.map((r) => rateLabel(whenFull(r.at ?? 0), r.opp, r.my_diff ?? null, r.my_rating as number))}
@@ -235,11 +237,11 @@ export function Results({ snap, onKifu }: {
             )}
             <Section title={t('ggs.results.finished')} aside={t('ggs.lobby.game_count', { n: rows.length })} grow>
               <Table>
-                <ResultHead note rating={hasRating} boards />
+                <ResultHead noOutcome note rating={hasRating} delta={hasRating} boards />
                 {/* A new page or filter starts at the top of the list. */}
                 <Rows key={`${pool}|${period}|${opp}|${perPage}|${cur}`}>
                   {shown.map((r) => (
-                    <ResultRow key={rowKey(r)} opponent={r.opp}
+                    <ResultRow key={rowKey(r)} noOutcome opponent={r.opp}
                                picked={rowKey(r) === pick}
                                onHover={(on) => {
                                  const i = rated.findIndex((x) => rowKey(x) === rowKey(r));
@@ -250,6 +252,7 @@ export function Results({ snap, onKifu }: {
                                note={gtypeLabel(baseType(r.base, r.raw))}
                                ending={endingOf(r, login)} boards={boardsOf(r, login)}
                                rating={hasRating ? r.my_rating : undefined}
+                               delta={hasRating ? moves.get(rowKey(r)) ?? null : undefined}
                                onClick={() => setPick(rowKey(r))}
                                dim={!r.ggf && !r.kifu && !r.archive} />
                   ))}
