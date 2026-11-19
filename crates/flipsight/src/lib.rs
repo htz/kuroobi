@@ -30,7 +30,7 @@ pub struct Options {
     pub use_book: bool,
     /// Seconds kept back from the clock on every move.
     pub margin: f64,
-    /// First guess of the seconds a move loses outside the engine (polling, network); then measured.
+    /// First guess of the seconds the site's clock loses on a move outside the search; then measured.
     pub lag: f64,
     pub practice: bool,
     /// Process names (`pgrep -x` pattern) of background jobs stopped while a match runs; empty leaves them.
@@ -350,6 +350,16 @@ enum Asked {
     Failed,
 }
 
+/// The least the site's clock loses on a move outside the search: instant replies cost most, and with
+/// a 4 s margin this covered the last ten moves of all 1,545 logged legs.
+const MOVE_COST: f64 = 1.0;
+
+/// The seconds a search may take with `left` on the site's clock and `empties` squares to fill.
+fn budget(left: f64, margin: f64, lag: f64, empties: u8) -> f64 {
+    let later = f64::from(empties.div_ceil(2)).max(1.0) - 1.0;
+    (left - margin - MOVE_COST.max(1.1 * lag) * later).max(0.05)
+}
+
 /// A search sent for one leg at one revision.
 struct Sent {
     key: (i64, usize),
@@ -381,6 +391,8 @@ pub struct Bot {
     answered: HashSet<(i64, usize, i64)>,
     finished: HashSet<i64>,
     lag: f64,
+    /// Each leg's clock when its last search began, and the seconds that search took.
+    spent: HashMap<(i64, usize), (f64, f64)>,
     /// A challenge was just accepted: poll again at once for the started match.
     answered_any_pending: bool,
     /// Bots still to challenge, once the list is known.
@@ -483,6 +495,7 @@ impl Bot {
             api: Api::new(&o.base, o.token.clone()),
             pauser: pause::Pauser::new(&o.pause, o.pause_log.clone(), o.ggs_wire.clone()),
             lag: o.lag,
+            spent: HashMap::new(),
             answered_any_pending: false,
             to_challenge: None,
             drain: Arc::new(AtomicBool::new(false)),
@@ -1161,10 +1174,11 @@ impl Bot {
                 .unwrap_or(0.0)
                 / 1000.0
                 - waited;
-            self.lag = 0.8 * self.lag + 0.2 * (waited + 0.2);
-            let mine_left = f64::from(board.empty_count().div_ceil(2));
-            let budget =
-                (left - self.o.margin - 1.3 * self.lag * (mine_left - 1.0).max(0.0)).max(0.05);
+            if let Some((before, searched)) = self.spent.remove(&key) {
+                let lost = (before - left - searched).clamp(0.0, 5.0);
+                self.lag = 0.8 * self.lag + 0.2 * lost;
+            }
+            let budget = budget(left, self.o.margin, self.lag, board.empty_count());
             let Some(k) = self.slot_for(key) else {
                 log("no engine free for a leg");
                 continue;
@@ -1248,6 +1262,7 @@ impl Bot {
                 "lag": (self.lag * 1000.0).round() / 1000.0,
             });
             let _ = writeln!(self.moves, "{rec}");
+            self.spent.insert(sent.key, (sent.left, secs));
             if let Some(h) = self.hist.get_mut(&sent.key) {
                 h.evals
                     .push((61 - sent.empties as usize, mv.value, secs as f32));
@@ -1319,6 +1334,7 @@ impl Bot {
             .enumerate()
             .map(|(i, l)| {
                 let h = self.hist.remove(&(m.id, i));
+                self.spent.remove(&(m.id, i));
                 let moves = h
                     .as_ref()
                     .filter(|h| h.complete)
@@ -1369,6 +1385,14 @@ impl Bot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn budget_keeps_the_margin_and_a_cost_for_every_later_move() {
+        assert_eq!(budget(30.0, 4.0, 0.8, 20), 30.0 - 4.0 - 9.0);
+        assert!((budget(30.0, 4.0, 1.5, 20) - (30.0 - 4.0 - 1.65 * 9.0)).abs() < 1e-9);
+        assert_eq!(budget(10.0, 4.0, 0.8, 1), 6.0);
+        assert_eq!(budget(5.0, 4.0, 0.8, 12), 0.05);
+    }
 
     fn after(moves: &[&str]) -> Vec<u8> {
         let mut b = Board::new();

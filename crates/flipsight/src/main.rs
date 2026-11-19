@@ -29,7 +29,7 @@ fn main() -> ExitCode {
         .max(1),
         weights: None,
         use_book: false,
-        margin: 1.5,
+        margin: 4.0,
         lag: 0.8,
         practice: false,
         pause: String::new(),
