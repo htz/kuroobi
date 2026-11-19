@@ -19,7 +19,8 @@
   ],
   "sections": {},
   "groups": [
-    "Logos"
+    "Logos",
+    "Bot icons"
   ],
   "assetGroups": {
     "Logos": {
@@ -38,8 +39,86 @@
         },
         "icon.svg": {
           "name": "icon.svg",
-          "blob": "aff70893acee44d37134acf2ef05ead9",
-          "size": 6688,
+          "blob": "402d0c60443d90783a5b481e2dfdee37",
+          "size": 6684,
+          "type": "image/svg+xml"
+        }
+      }
+    },
+    "Bot icons": {
+      "name": "Bot icons",
+      "tile": "m",
+      "order": [
+        "dan01.svg",
+        "dan02.svg",
+        "dan03.svg",
+        "dan04.svg",
+        "dan05.svg",
+        "dan06.svg",
+        "dan07.svg",
+        "dan08.svg",
+        "dan09.svg",
+        "dan10.svg"
+      ],
+      "files": {
+        "dan01.svg": {
+          "name": "dan01.svg",
+          "blob": "e01fab06590debf7f9eed474a7bcb63c",
+          "size": 11753,
+          "type": "image/svg+xml"
+        },
+        "dan02.svg": {
+          "name": "dan02.svg",
+          "blob": "58e763cf1878cf4f1838134cc4fb6144",
+          "size": 10393,
+          "type": "image/svg+xml"
+        },
+        "dan03.svg": {
+          "name": "dan03.svg",
+          "blob": "b3ba86ef499fc028b7e38efed9f2eb93",
+          "size": 10608,
+          "type": "image/svg+xml"
+        },
+        "dan04.svg": {
+          "name": "dan04.svg",
+          "blob": "858010b0a1a03647fb396eaa65003812",
+          "size": 10958,
+          "type": "image/svg+xml"
+        },
+        "dan05.svg": {
+          "name": "dan05.svg",
+          "blob": "5154a55de4497be50408924de9797ecf",
+          "size": 10799,
+          "type": "image/svg+xml"
+        },
+        "dan06.svg": {
+          "name": "dan06.svg",
+          "blob": "cdc7d0fdd8b06d523b0a5b19641f7b2e",
+          "size": 10772,
+          "type": "image/svg+xml"
+        },
+        "dan07.svg": {
+          "name": "dan07.svg",
+          "blob": "f263e4fe1ebdeef02f5b07fd7ec4844f",
+          "size": 10648,
+          "type": "image/svg+xml"
+        },
+        "dan08.svg": {
+          "name": "dan08.svg",
+          "blob": "69b53c009ade854177176d6e1075f68a",
+          "size": 10724,
+          "type": "image/svg+xml"
+        },
+        "dan09.svg": {
+          "name": "dan09.svg",
+          "blob": "03da6e71f1c36688674a2c5200e73c9d",
+          "size": 10908,
+          "type": "image/svg+xml"
+        },
+        "dan10.svg": {
+          "name": "dan10.svg",
+          "blob": "8052d4d919f2691951c7965b08ff2a37",
+          "size": 10583,
           "type": "image/svg+xml"
         }
       }
@@ -51,8 +130,8 @@
   },
   "lastChange": {
     "by": "htz",
-    "at": "2026-10-27T14:29:10Z",
+    "at": "2026-11-17T16:40:00Z",
     "via": "Claude Code",
-    "note": "Cleared the rest: clicking the board starts a game, and with no side assigned and a level selected \"Start game\" cannot be pressed (resolves the unmet Play-1); Study loads from one place on the toolbar (resolves the unmet Study-1); shortcuts are disabled while an overlay is shown; the player detail's acceptance state moves to the heading."
+    "note": "The app icon is square: the platform it is shown on rounds or crops the corners itself."
   }
 }
