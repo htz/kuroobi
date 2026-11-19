@@ -401,11 +401,14 @@ export interface FsOtherBot {
   online: boolean;
   playing: boolean;
   builtin: boolean;
+  /** The bot's picture on the site (a full address). */
+  photo: string | null;
 }
 
 export interface FsBotView {
   id: number;
   name: string;
+  photo: string | null;
   rating: number | null;
   max_games: number | null;
   conn: string;
@@ -421,6 +424,7 @@ export type FsConn = 'off' | 'connecting' | 'online' | 'draining' | 'retrying' |
 export interface FsBotRow {
   id: number;
   name: string;
+  photo: string | null;
   threads: number;
   cap: number | null;
   max_games: number | null;
@@ -450,6 +454,7 @@ export interface FsResult {
   opponent: number;
   opponent_name?: string | null;
   opponent_rating?: number | null;
+  opponent_photo?: string | null;
   status: string;
   result: 'win' | 'loss' | 'draw' | 'aborted';
   mine: number;

@@ -9,7 +9,7 @@ O=$D/tools/harness/out; mkdir -p $O
   echo "<!doctype html><html data-theme=\"$T\"><head><meta charset=utf-8>"
   echo "<style>"; cat $D/../crates/gui/src-ui/tokens.css; echo "body{margin:0;background:var(--bg);color:var(--text)}</style>"
   echo "<style>"; cat $D/project/components/bundle.css; echo "</style>"
-  echo "<script src=\"../react.js\"></script><script src=\"../../project/components/bundle.js\"></script></head><body>"
+  echo "<script src=\"../react.js\"></script><script src=\"../../../project/components/bundle.js\"></script></head><body>"
   tail -n +2 $P
   echo "</body></html>"
 } > $O/$C.html

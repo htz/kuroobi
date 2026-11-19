@@ -100,6 +100,7 @@ pub struct Control {
 pub struct BotView {
     pub id: i64,
     pub name: String,
+    pub photo: Option<String>,
     pub rating: Option<f64>,
     /// The site's matches at once (`max_games`).
     pub max_games: Option<usize>,
@@ -129,6 +130,8 @@ pub struct OtherBot {
     pub online: bool,
     pub playing: bool,
     pub builtin: bool,
+    /// The bot's picture on the site, as a full address.
+    pub photo: Option<String>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -175,6 +178,13 @@ struct LegHist {
     opp_secs: Vec<(usize, f32)>,
     /// The opponent's clock when its turn began.
     opp_clock: Option<f64>,
+}
+
+/// A bot's `photo` is a path on the site; anything else (another host) is not shown.
+fn photo_url(base: &str, photo: &Value) -> Option<String> {
+    let p = photo.as_str()?;
+    (p.starts_with('/') && !p.starts_with("//"))
+        .then(|| format!("{}{p}", base.trim_end_matches('/')))
 }
 
 fn cells_of_board(b: &Board) -> Vec<u8> {
@@ -718,6 +728,7 @@ impl Bot {
                     online: b["online"] == Value::Bool(true),
                     playing: b["games_now"].as_u64().is_some_and(|n| n > 0),
                     builtin: b["is_builtin"] == Value::Bool(true),
+                    photo: photo_url(&self.o.base, &b["photo"]),
                 },
             );
         }
@@ -861,6 +872,7 @@ impl Bot {
         v.id = self.me;
         if let Some(me) = me {
             v.name = me.name;
+            v.photo = me.photo;
         }
         v.rating = self.ratings.last().copied();
         v.max_games = self.max_games;
@@ -1323,6 +1335,7 @@ impl Bot {
         let rec = json!({
             "t": now_ms(), "match": m.id, "opponent": opp, "status": m.status, "result": result,
             "opponent_name": o.map(|b| b.name.clone()), "opponent_rating": o.and_then(|b| b.rating),
+            "opponent_photo": o.and_then(|b| b.photo.clone()),
             "my_rating": m.rating_after.get(part).and_then(rating_of),
             "my_rating_before": m.rating_before.get(part).and_then(rating_of),
             "mine": mine, "theirs": theirs, "diff": mine - theirs, "finish_reason": s.finish_reason,

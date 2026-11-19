@@ -2,6 +2,7 @@ import React from 'react';
 import { Icon, IconButton, type IconName } from './Icons';
 import { Dot, Button, Select, TextField } from './primitives';
 import { Caption, Note, picked } from './layout';
+import { BotPhoto } from './data';
 import { t } from '../i18n';
 import logo from '../../assets/kuroobi.svg?raw';
 import {
@@ -217,6 +218,51 @@ export function MatchRow({ m, active, onSelect, onClose }: {
         </span>
       </button>
       {closable && (
+        <span style={{ position: 'absolute', right: 4, top: 4 }}>
+          <IconButton name="close" label={t('ggs.match.close')} onClick={onClose} size={14} />
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** A bot's match in the list: the opponent with this machine's bot under it; at the right the format over the disc difference. */
+export function BotMatchRow({ name, photo, own, ownPhoto, kind, diff, active, onSelect, onClose }: {
+  name: string; photo?: string | null; own: string; ownPhoto?: string | null; kind: string;
+  /** undefined: still playing; null: ended without a result. */
+  diff?: number | null;
+  active: boolean; onSelect: () => void;
+  /** Given on a finished match: it can be closed. */
+  onClose?: () => void;
+}) {
+  const over = diff !== undefined;
+  const one: React.CSSProperties = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+  return (
+    <div style={{ position: 'relative', borderBottom: '1px solid var(--border-weak)', ...picked(active) }}>
+      <button type="button" onClick={onSelect} className={'k-row' + (active ? ' k-on' : '')}
+              aria-current={active || undefined} style={{
+        width: '100%', minWidth: 0, border: 0, background: 'transparent', textAlign: 'left',
+        padding: 'var(--sp-2) var(--sp-3)', paddingRight: onClose ? 32 : undefined,
+        display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
+      }}>
+        <BotPhoto src={photo} name={name} size={28} />
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.3 }}>
+          <span className="k-sel" style={{ ...one, fontSize: 'var(--fs-5)', color: over ? 'var(--sub)' : 'var(--text)' }}>{name}</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', minWidth: 0, fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>
+            <BotPhoto src={ownPhoto} name={own} size={14} /><span style={one}>{own}</span>
+          </span>
+        </span>
+        <span style={{ flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, lineHeight: 1.2 }}>
+          <Tag tone="sub">{kind}</Tag>
+          {over && (
+            <span style={{ fontSize: 'var(--fs-5)', fontWeight: 600, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+                           color: !diff ? 'var(--sub)' : diff > 0 ? 'var(--ok)' : 'var(--bad)' }}>
+              {diff == null ? '\u2014' : diff > 0 ? '+' + diff : diff < 0 ? '\u2212' + -diff : '0'}
+            </span>
+          )}
+        </span>
+      </button>
+      {onClose && (
         <span style={{ position: 'absolute', right: 4, top: 4 }}>
           <IconButton name="close" label={t('ggs.match.close')} onClick={onClose} size={14} />
         </span>

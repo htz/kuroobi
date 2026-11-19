@@ -1,0 +1,25 @@
+<!-- @dsCard group="Lists" height=440 -->
+<div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
+<script>
+KuroobiUI.setLang('ja');
+const h = React.createElement;
+const noop = () => {};
+const { BotMatchRow } = KuroobiUI;
+const pic = (hue) => 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="hsl(' + hue + ' 45% 42%)"/><circle cx="32" cy="32" r="15" fill="#fff"/></svg>');
+const own = { own: 'KUROOBI', ownPhoto: pic(95), kind: '標準' };
+const ROWS = [
+  { name: 'nova', photo: pic(20), ...own },
+  { name: 'kuroobi-experimental-build-2026-11', photo: pic(200), ...own },
+  { name: 'atlas', photo: pic(300), ...own, diff: 22, onClose: noop },
+  { name: 'lynx', photo: null, ...own, diff: -4, onClose: noop },
+  { name: 'vega', photo: pic(160), ...own, diff: 0, onClose: noop },
+  { name: 'orion', photo: pic(250), ...own, diff: null, onClose: noop },
+];
+function Demo() {
+  const [cur, setCur] = React.useState(0);
+  return h('div', { style: { width: 'var(--w-list)', background: 'var(--panel)', border: '1px solid var(--border-weak)' } },
+    ROWS.map((m, i) => h(BotMatchRow, { key: i, ...m, active: i === cur, onSelect: () => setCur(i) })));
+}
+ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' } },
+  h('div', { style: { fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, 'In progress (selected) / a long name / won / lost, no picture / drawn / ended without a result'), h(Demo)));
+</script>

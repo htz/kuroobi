@@ -1,11 +1,11 @@
 A 24×24 SVG icon drawn with lines. The symbols used in the left menu, gauges, buttons and so on are collected here.
 
 ## When to use
-- Symbols for screen names (play, study, book and each GGS screen), gauges (CPU, memory), states (check, warning), actions (back, close, panel) and watching (people watching).
+- Symbols for screen names (play, study, book and each GGS screen), gauges (CPU, memory), states (check, warning), actions (back, close, panel), watching (people watching) and folding (chevron).
 - Not for: clickable icons; wrap them in `IconButton`. Disc colours use `StoneDot`.
 
 ## Props
-- `name`: one of `IconName`. 20 kinds: play / study / book / results / prefs / ggs-play / ggs-lobby / ggs-users / ggs-chat / ggs-tourney / ggs-console / login / cpu / memory / check / alert / back / close / panel / watch.
+- `name`: one of `IconName`. 21 kinds: play / study / book / results / prefs / ggs-play / ggs-lobby / ggs-users / ggs-chat / ggs-tourney / ggs-console / login / cpu / memory / check / alert / back / close / panel / watch / chevron (points right; a folding section turns it down while open).
 - `size`: px (default 17).
 
 ## Rules

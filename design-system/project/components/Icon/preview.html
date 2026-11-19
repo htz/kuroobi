@@ -11,7 +11,7 @@
   const render = (el) => ReactDOM.createRoot(document.getElementById('root')).render(el);
   const { Icon } = KuroobiUI;
   const NAMES = ['play', 'study', 'book', 'results', 'prefs', 'ggs-play', 'ggs-lobby', 'ggs-users', 'ggs-chat',
-    'ggs-tourney', 'ggs-console', 'login', 'cpu', 'memory', 'check', 'alert', 'back', 'close', 'panel'];
+    'ggs-tourney', 'ggs-console', 'login', 'cpu', 'memory', 'check', 'alert', 'back', 'close', 'panel', 'chevron'];
   const cell = (name) => h('div', { key: name, style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--sp-1)',
     padding: 'var(--sp-2) 0', borderRadius: 'var(--r-1)', background: 'var(--card)' } },
     h(Icon, { name }), h('code', { style: { fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-7)', color: 'var(--sub)' } }, name));

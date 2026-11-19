@@ -1,4 +1,4 @@
-<!-- @dsCard group="Layout" height=340 -->
+<!-- @dsCard group="Layout" height=560 -->
 <div id="root" style="padding: var(--sp-4); background: var(--bg); color: var(--text); font: var(--fs-4)/1.6 var(--ff);"></div>
 <script>
   KuroobiUI.setLang('ja');
@@ -9,7 +9,17 @@
   // Three cases in columns matching the Dock width (w-dock)
   const col = (children) => h('div', { style: { width: 'var(--w-dock)', height: 300, display: 'flex', flexDirection: 'column',
                                                   background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 'var(--r-3)' } }, children);
-  ReactDOM.createRoot(document.getElementById('root')).render(
+  // fold: an accordion. Folded, the bar keeps a summary at its right
+  const summary = [['レーティング', '3591.0'], ['期間の増減', '+21.8'], ['勝 / 負 / 分', '506 / 47 / 124']];
+  function Fold({ start }) {
+    const [open, setOpen] = React.useState(start);
+    return h('div', { style: { width: 620, background: 'var(--bg)', border: '1px solid var(--border-weak)', paddingTop: 'var(--sp-2)' } },
+      h(Section, { title: 'レーティングの推移', fold: { open, onToggle: () => setOpen(!open), summary } },
+        h('div', { style: { height: 56, display: 'grid', placeItems: 'center', color: 'var(--sub)', fontSize: 'var(--fs-6)', border: '1px dashed var(--border)' } }, 'グラフ'),
+        h('div', { style: { display: 'flex', gap: 'var(--sp-5)' } }, summary.map(([l, v]) => h('div', { key: l, style: { flex: 1 } }, h(KeyValue, { label: l, value: v }))))));
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div', { style: { display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' } },
+    h('div', { style: { display: 'flex', gap: 'var(--sp-4)', flexWrap: 'wrap', alignItems: 'flex-start' } }, h(Fold, { start: true }), h(Fold, { start: false })),
     h('div', { style: { display: 'flex', gap: 'var(--sp-4)', flexWrap: 'wrap' } },
       // Heading + content (keeps the content's height)
       col(h(Section, { title: '探索' },
@@ -22,5 +32,5 @@
         h(KeyValue, { label: '石差', value: '黒 +6' }))),
       // grow + head: fills the remaining height and scrolls only the content. A table header placed in head stays fixed
       col(h(Section, { title: '棋譜', grow: true, head: h(TableHead, { cols }) },
-        moves.map(([m, v], i) => h(TableRow, { key: i, cols, on: i === 4 }, i + 1, m, v))))));
+        moves.map(([m, v], i) => h(TableRow, { key: i, cols, on: i === 4 }, i + 1, m, v)))))));
 </script>

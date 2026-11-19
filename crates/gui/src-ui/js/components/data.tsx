@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Button } from './primitives';
 import { Col, Divider, Empty, TableHead, TableRow, picked as pickedStyle } from './layout';
 import { t } from '../i18n';
@@ -345,8 +345,28 @@ export function ScoreRow({ black, white, turn, meta, blackClock, whiteClock }: {
   );
 }
 
-export function PlayerRow({ color, name, rate, meta, clock, active }: {
+/** A bot's picture from its site; the first letter of its name when it has none or it does not load. */
+export function BotPhoto({ src, name, size }: { src?: string | null; name: string; size: number }) {
+  const [failed, setFailed] = useState<string | null>(null);
+  const box: React.CSSProperties = {
+    flex: 'none', width: size, height: size, boxSizing: 'border-box', background: 'var(--card)',
+    borderRadius: size >= 40 ? 'var(--r-2)' : size >= 28 ? 'var(--r-1)' : 'var(--r-0)',
+  };
+  if (!src || failed === src) {
+    return (
+      <span aria-hidden="true" style={{ ...box, display: 'grid', placeItems: 'center', border: '1px solid var(--border)',
+                                        color: 'var(--sub)', fontWeight: 600, fontSize: Math.round(size * 0.5), lineHeight: 1 }}>
+        {[...name][0] ?? ''}
+      </span>
+    );
+  }
+  return <img src={src} alt="" loading="lazy" onError={() => setFailed(src)} style={{ ...box, objectFit: 'cover' }} />;
+}
+
+export function PlayerRow({ color, name, rate, meta, clock, active, photo }: {
   color: StoneColor; name: string;
+  /** A bot's picture, between the stone and the name; null draws the letter tile, undefined nothing. */
+  photo?: string | null;
   rate?: number; meta?: React.ReactNode;
   clock?: string; active?: boolean;
 }) {
@@ -358,6 +378,7 @@ export function PlayerRow({ color, name, rate, meta, clock, active }: {
     }}>
       <span style={{ ...turnBox(!!active), flex: '0 1 auto', minWidth: 0 }}>
         <span style={{ flex: 'none', display: 'flex' }}><StoneDot color={color} size={14} /></span>
+        {photo !== undefined && <BotPhoto src={photo} name={name} size={22} />}
         <b className="k-sel" style={{ fontSize: 'var(--fs-4)', fontWeight: 600, flex: '0 1 auto', minWidth: '3em', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</b>
         {rate !== undefined && (
           <span style={{ flex: 'none', color: 'var(--sub)', fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>
@@ -465,7 +486,7 @@ export function RateChart({ points, height, width, dates, labels, hover, onHover
   );
 }
 
-const W_OUTCOME = 28, W_DISCS = 44, W_RATING = 72, W_WHEN = 64, W_ENDING = 72, W_BOARD = 170;
+const W_OUTCOME = 28, W_DISCS = 44, W_RATING = 72, W_DELTA = 44, W_WHEN = 64, W_ENDING = 72, W_BOARD = 170;
 // The board columns give way first, so the opponent column survives the narrowest window.
 const W_OPP_MIN = 80;
 const BOARD_COL: React.CSSProperties = { flex: `0 1 ${W_BOARD}px`, minWidth: 100 };
@@ -477,8 +498,12 @@ export type ResultBoard = { diff: number | null; tag?: string; tone?: 'gold' | '
 /** A match decided as a whole (a resignation, an adjournment). */
 export type ResultEnding = { text: string; tone: 'gold' | 'bad' | 'sub' };
 
-export function ResultHead({ note, rating, boards, boardLabel, ratingLabel }: {
+export function ResultHead({ note, rating, delta, boards, boardLabel, ratingLabel, noOutcome }: {
   note?: boolean; rating?: boolean;
+  /** The rating's change column, after the rating. */
+  delta?: boolean;
+  /** No win/loss column: the disc difference's colour says it. */
+  noOutcome?: boolean;
   /** The ending and the two board columns (my own games, where they are recorded). */
   boards?: boolean;
   /** Another server's words for a board and the rating (FlipSight's 局 and レーティング). */
@@ -489,7 +514,7 @@ export function ResultHead({ note, rating, boards, boardLabel, ratingLabel }: {
   });
   return (
     <TableHead pad="var(--sp-2)">
-      <span style={{ width: W_OUTCOME, flex: 'none', ...ONE_LINE }}>{t('data.result.head_outcome')}</span>
+      {!noOutcome && <span style={{ width: W_OUTCOME, flex: 'none', ...ONE_LINE }}>{t('data.result.head_outcome')}</span>}
       <span style={{ flex: 1, minWidth: W_OPP_MIN, ...ONE_LINE }}>{t('data.result.head_opponent')}</span>
       {note && <span style={{ width: 'var(--w-gtype)', flex: 'none', ...ONE_LINE }}>{t('data.result.head_kind')}</span>}
       <span style={cell(W_DISCS)}>{t('data.result.head_discs')}</span>
@@ -499,6 +524,7 @@ export function ResultHead({ note, rating, boards, boardLabel, ratingLabel }: {
         <span style={{ ...BOARD_COL, ...ONE_LINE }}>{boardLabel ? boardLabel(2) : t('data.result.head_board', { n: 2 })}</span>
       </>}
       {rating && <span style={cell(W_RATING)}>{ratingLabel ?? t('data.result.head_rating')}</span>}
+      {delta && <span style={cell(W_DELTA)}>{t('data.result.head_delta')}</span>}
       <span style={cell(W_WHEN)}>{t('data.result.head_date')}</span>
     </TableHead>
   );
@@ -517,7 +543,13 @@ export function ResultBoardCell({ b }: { b?: ResultBoard | null }) {
 
 const signedDiff = (d: number) => (d > 0 ? '+' + d : d < 0 ? '\u2212' + -d : '0');
 
-export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, rating, dim, picked, onHover, onClick, ending, boards }: {
+export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, rating, dim, picked, onHover, onClick, ending, boards, noOutcome, photo, delta }: {
+  /** What the game did to the rating: undefined = the table has no such column; null = not known. */
+  delta?: number | null;
+  /** No win/loss column: the disc difference takes its colour instead. */
+  noOutcome?: boolean;
+  /** The opponent's picture before the name (a bot); null draws the letter tile, undefined nothing. */
+  photo?: string | null;
   ending?: ResultEnding | null;
   /** Given: the ending and the two board columns are drawn (empty when not known). */
   boards?: (ResultBoard | null)[];
@@ -535,23 +567,26 @@ export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, r
   onHover?: (on: boolean) => void;
   onClick?: () => void;
 }) {
+  const tone = adjourned || draw ? 'var(--sub)' : win ? 'var(--ok)' : 'var(--bad)';
   const body = <>
-    <span style={{ width: W_OUTCOME, flex: 'none', ...ONE_LINE,
-                   color: adjourned || draw ? 'var(--sub)' : win ? 'var(--ok)' : 'var(--bad)' }}>
-      {t(adjourned ? 'data.result.adjourned'
-         : draw ? 'data.result.draw' : win ? 'data.result.win' : 'data.result.loss')}
-    </span>
-    <span className="k-sel" style={{ flex: 1, minWidth: W_OPP_MIN, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-      {opponent}
+    {!noOutcome && (
+      <span style={{ width: W_OUTCOME, flex: 'none', ...ONE_LINE, color: tone }}>
+        {t(adjourned ? 'data.result.adjourned'
+           : draw ? 'data.result.draw' : win ? 'data.result.win' : 'data.result.loss')}
+      </span>
+    )}
+    <span style={{ flex: 1, minWidth: W_OPP_MIN, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', overflow: 'hidden' }}>
+      {photo !== undefined && <BotPhoto src={photo} name={opponent} size={20} />}
+      <span className="k-sel" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{opponent}</span>
     </span>
     {note && (
       <span style={{ width: 'var(--w-gtype)', flex: 'none', color: 'var(--sub)',
                      fontSize: 'var(--fs-6)', overflow: 'hidden', textOverflow: 'ellipsis',
                      whiteSpace: 'nowrap' }}>{note}</span>
     )}
-    <span style={{ width: W_DISCS, flex: 'none', textAlign: 'right', color: 'var(--sub)',
-                   fontVariantNumeric: 'tabular-nums', ...ONE_LINE }}>
-      {adjourned ? '\u2014' : discs > 0 ? '+' + discs : discs}
+    <span style={{ width: W_DISCS, flex: 'none', textAlign: 'right', color: noOutcome ? tone : 'var(--sub)',
+                   fontWeight: noOutcome ? 600 : undefined, fontVariantNumeric: 'tabular-nums', ...ONE_LINE }}>
+      {adjourned ? '\u2014' : noOutcome ? signedDiff(discs) : discs > 0 ? '+' + discs : discs}
     </span>
     {boards && <>
       <span style={{ width: W_ENDING, flex: 'none', fontSize: 'var(--fs-6)', color: ending ? `var(--${ending.tone})` : undefined, ...ONE_LINE }}>
@@ -564,6 +599,12 @@ export function ResultRow({ win, draw, adjourned, opponent, discs, when, note, r
       <span style={{ width: W_RATING, flex: 'none', textAlign: 'right', color: 'var(--sub)',
                      fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums', ...ONE_LINE }}>
         {rating == null ? '' : rating.toFixed(1)}
+      </span>
+    )}
+    {delta !== undefined && (
+      <span style={{ width: W_DELTA, flex: 'none', textAlign: 'right', fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums', ...ONE_LINE,
+                     color: !delta ? 'var(--sub)' : delta > 0 ? 'var(--ok)' : 'var(--bad)' }}>
+        {delta == null ? '' : delta > 0 ? '+' + delta.toFixed(1) : delta < 0 ? '\u2212' + (-delta).toFixed(1) : '0.0'}
       </span>
     )}
     <span style={{ width: W_WHEN, flex: 'none', textAlign: 'right', color: 'var(--sub)',

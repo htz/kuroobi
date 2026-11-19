@@ -8,6 +8,8 @@ The header row of the game results table (result, opponent, format, disc differe
 - `note`: shows the "Format" column (in the app: when the game type in results is set to "All", and in a player's match history).
 - `rating`: shows the "Rating" column (when at least one row has a rating record).
 - `boards`: the "Decided by" column and the two board columns.
+- `delta`: the "Change" column after the rating (paired with `ResultRow delta`).
+- `noOutcome`: no win/loss column (paired with `ResultRow noOutcome`, where the disc difference carries the result's colour).
 - `boardLabel`, `ratingLabel`: another server's words for a board and the rating (FlipSight's "Game n" and its rating word).
 
 ## Rules

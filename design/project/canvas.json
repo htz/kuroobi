@@ -1189,6 +1189,33 @@
    "x": 20400,
    "y": 0,
    "page": "flipsight"
+  },
+  "FsBotPhoto.dc.html": {
+   "expand": "fill",
+   "h": 560,
+   "page": "flipsight",
+   "title": "FlipSight · Bot photos (where the photo goes on each screen)",
+   "w": 1280,
+   "x": 0,
+   "y": 3680
+  },
+  "FsResultsNoChart.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "flipsight",
+   "title": "FlipSight · Results · Rating section folded",
+   "w": 1280,
+   "x": 2720,
+   "y": 2760
+  },
+  "FsBotsFiltered.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "page": "flipsight",
+   "title": "FlipSight · Bots · Registered bots online only",
+   "w": 1280,
+   "x": 4080,
+   "y": 1840
   }
  },
  "createdOnFiles": {
@@ -1502,6 +1529,22 @@
    "x": -1200,
    "y": 920,
    "size": "s"
+  },
+  "uc-fs-3680": {
+   "page": "flipsight",
+   "size": "s",
+   "w": 520,
+   "x": -1200,
+   "y": 3680,
+   "text": "Bot photos\n\n• Every bot on FlipSight has a photo (the bot's `photo` from the site: an uploaded 175x175 picture for a registered bot, a drawing for a FlipSightボット). It is shown as the bot's identity wherever its name stands.\n• The photo sits right before the name, square with slightly rounded corners: 20 in the Bots and Results rows, 22 beside the boards, in the match list the opponent's at 28 across the row's two lines and this Mac's bot's at 14 on the second (names give way with an ellipsis; the disc difference at the right, +22 or −4, never does and needs no win/loss word), 32 and 48 in My bots.\n• A FlipSightボット keeps a mark: the chip icon after the name. A registered bot has none.\n• A photo that cannot be read: a tile with the first letter of the name.\n• All FlipSight boards above show it, through the design system's BotPhoto, BotMatchRow, PlayerRow (photo) and ResultRow (photo)."
+  },
+  "uc-fs-prop2": {
+   "page": "flipsight",
+   "size": "s",
+   "w": 520,
+   "x": -1200,
+   "y": 4340,
+   "text": "Results and Bots: the rating accordion, the rating's change, the list switches\n\n• Results: the \"レーティングの推移\" section is an accordion. Its heading is a bar with a chevron; pressing it puts the chart and the numbers away. Folded, the bar takes the panel ground and keeps the rating, its change over the period and W / L / D at its right, so it shows that something is folded and what.\n• Results: an \"増減\" column after the rating, what the match did to it (after minus before): green up, red down.\n• Bots: two switches in the toolbar, \"FlipSightボットを非表示\" and \"オンラインのみ\"; each narrows the list when on. Ranks stay the ranks among all bots; the count is of the rows shown.\n• The chart's state and the two switches are kept across launches."
   }
  },
  "order": [
@@ -1636,7 +1679,10 @@
   "FsConnectTokenOther.dc.html",
   "FsPlayRevoked.dc.html",
   "FsConnectLevel.dc.html",
-  "FsConnectDraining.dc.html"
+  "FsConnectDraining.dc.html",
+  "FsBotPhoto.dc.html",
+  "FsResultsNoChart.dc.html",
+  "FsBotsFiltered.dc.html"
  ],
  "pages": [
   {

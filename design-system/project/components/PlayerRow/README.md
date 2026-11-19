@@ -8,6 +8,7 @@ Lays out one player's stone colour, name, rating, note and clock in a single row
 - `color` (`'b'`/`'w'`), `name` (required).
 - `rate`: rating. Shown beside the name with one decimal place.
 - `meta`: a right-aligned note (in the app, evals such as "Opponent -1.8 · 6s" or "You +12 solved").
+- `photo`: a bot's picture (`BotPhoto`, 22) between the stone and the name; `null` draws the letter tile, `undefined` nothing (GGS players have none).
 - `clock`: the remaining-time string.
 - `active`: the side to move. Gives the stone, name and rating frame an `accent` edge and background (16%), and gives the clock an `accent` edge too (the same frame as `ScoreRow`). The side not to move also has a transparent frame, so the name never shifts.
 
@@ -18,4 +19,4 @@ Lays out one player's stone colour, name, rating, note and clock in a single row
 ## Similar components
 - `ScoreRow`: black and white disc counts and both clocks in one row. PlayerRow is one player at a time.
 
-Used in: GgsScreens.tsx, the board of GGS "Play / observe" (MatchBoard).
+Used in: GgsScreens.tsx, the board of GGS "Play / observe" (MatchBoard); `fs/FsScreens.tsx`, beside each board of a FlipSight match (with `photo`).

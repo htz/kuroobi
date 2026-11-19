@@ -51,6 +51,9 @@ pub struct Saved {
     /// `threads` is per leg; settings saved before were per match, twice as many.
     #[serde(default)]
     pub per_leg: bool,
+    /// The bot's picture on the site, kept so a bot that is not connected still shows it.
+    #[serde(default)]
+    pub photo: Option<String>,
 }
 
 pub enum Cmd {
@@ -104,6 +107,7 @@ pub struct Pending {
 pub struct BotRow {
     pub id: i64,
     pub name: String,
+    pub photo: Option<String>,
     pub threads: usize,
     pub cap: Option<usize>,
     pub max_games: Option<usize>,
@@ -615,6 +619,7 @@ impl Manager {
                     connect: false,
                     max_games: who.max_games,
                     per_leg: true,
+                    photo: None,
                 };
                 let m = matches_of(&b);
                 b.threads = threads.unwrap_or(free / (2 * m)).clamp(1, MAX_THREADS);
@@ -691,6 +696,10 @@ impl Manager {
                     b.max_games = v.max_games;
                     learned = true;
                 }
+                if v.photo.is_some() && v.photo != b.photo {
+                    b.photo = v.photo.clone();
+                    learned = true;
+                }
                 playing |= !v.matches.is_empty();
             }
             if let Some(r) = r {
@@ -709,6 +718,7 @@ impl Manager {
             rows.push(BotRow {
                 id: b.id,
                 name: b.name.clone(),
+                photo: b.photo.clone(),
                 threads: b.threads,
                 cap: b.cap,
                 max_games: b.max_games,

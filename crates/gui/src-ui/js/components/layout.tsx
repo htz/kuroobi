@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { Board, BoardDefs, START_CELLS } from './board';
 import { Button, Dot, Segmented, selectBox, TextField } from './primitives';
-import { IconButton } from './Icons';
+import { Icon, IconButton } from './Icons';
 import { t, useLang } from '../i18n';
 import icon from '../../assets/icon.svg?raw';
 
@@ -159,8 +159,13 @@ export function Dock({ tabs, active, onTab, children, open, scroll = true }: {
   );
 }
 
-export function Section({ title, aside, grow, head, children }: {
+/** A folding section: `summary` is what the folded bar keeps in sight, as label and value pairs. */
+export type SectionFold = { open: boolean; onToggle: () => void; summary?: [string, string][] };
+
+export function Section({ title, aside, grow, head, fold, children }: {
   title: string; aside?: React.ReactNode; children?: React.ReactNode;
+  /** An accordion: the heading becomes a bar that folds everything under it. */
+  fold?: SectionFold;
   grow?: boolean;
   head?: React.ReactNode;   // outside the scroller, so a table header stays put
 }) {
@@ -170,7 +175,30 @@ export function Section({ title, aside, grow, head, children }: {
       padding: '0 var(--sp-3) var(--sp-4)',
       ...(grow ? { flex: 1, minHeight: 0, overflow: 'hidden' } : { flex: 'none' }),
     }}>
-      <h3 style={{
+      {fold && (
+        <h3 style={{ margin: 0 }}>
+          <button type="button" className="k-row" aria-expanded={fold.open} onClick={fold.onToggle} style={{
+            width: '100%', height: 'var(--h-field)', display: 'flex', alignItems: 'center', gap: 'var(--sp-1)',
+            padding: '0 var(--sp-2) 0 var(--sp-1)', border: 0, borderBottom: '1px solid var(--border)',
+            borderRadius: fold.open ? 0 : 'var(--r-1) var(--r-1) 0 0', background: fold.open ? 'transparent' : 'var(--panel)',
+            textAlign: 'left', ...captionStyle,
+          }}>
+            <span style={{ flex: 'none', width: 16, display: 'grid', placeItems: 'center', transform: fold.open ? 'rotate(90deg)' : undefined }}>
+              <Icon name="chevron" size={12} />
+            </span>
+            {title}
+            {!fold.open && fold.summary && (
+              <span style={{ marginLeft: 'auto', minWidth: 0, display: 'flex', gap: 'var(--sp-4)', overflow: 'hidden', whiteSpace: 'nowrap',
+                             fontWeight: 400, letterSpacing: 0, fontSize: 'var(--fs-6)', fontVariantNumeric: 'tabular-nums' }}>
+                {fold.summary.map(([label, value]) => (
+                  <span key={label}>{label} <b style={{ color: 'var(--text)', fontWeight: 600 }}>{value}</b></span>
+                ))}
+              </span>
+            )}
+          </button>
+        </h3>
+      )}
+      {!fold && <h3 style={{
         margin: 0, minHeight: aside ? 'var(--h-field)' : 'var(--h-head)',
         display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
         paddingBottom: aside ? 'var(--sp-1)' : 0,
@@ -178,9 +206,9 @@ export function Section({ title, aside, grow, head, children }: {
         borderBottom: '1px solid var(--border)',
       }}>{title}{aside && <span style={{
         marginLeft: 'auto', letterSpacing: 0, fontWeight: 400, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)',
-      }}>{aside}</span>}</h3>
-      {head}
-      {grow
+      }}>{aside}</span>}</h3>}
+      {(!fold || fold.open) && head}
+      {fold && !fold.open ? null : grow
         ? <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>{children}</div>
         : children}
     </section>

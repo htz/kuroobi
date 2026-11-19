@@ -23,6 +23,15 @@ export function useFs() {
   return snap;
 }
 
+/** A choice of how a FlipSight screen shows its list, kept across launches. */
+export function useKept<T>(name: string, initial: T): [T, (v: T) => void] {
+  const key = 'kuroobi.fs.' + name;
+  const [v, setV] = useState<T>(() => {
+    try { const raw = localStorage.getItem(key); return raw == null ? initial : JSON.parse(raw) as T; } catch { return initial; }
+  });
+  return [v, (next) => { setV(next); try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* storage off */ } }];
+}
+
 /** The board component's order (file * 8 + rank) from the site's (a1 = 0, b1 = 1, ...). */
 export const boardIndex = (i: number): number => (i % 8) * 8 + Math.floor(i / 8);
 

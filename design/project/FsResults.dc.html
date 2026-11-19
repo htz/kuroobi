@@ -52,8 +52,9 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </x-import>
 <sc-if value="{{hasRows}}" hint-placeholder-val="{{true}}">
 <div style="flex: 1; min-height: 0; padding: var(--sp-4) var(--sp-1) 0; display: flex; flex-direction: column; gap: var(--sp-2)">
-<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="レーティングの推移">
-<x-import component-from-global-scope="KuroobiUI.RateChart" points="{{rates}}" width="{{chartW}}" height="{{chartH}}" dates="{{rateDates}}" labels="{{rateLabels}}"></x-import>
+<!-- The rating section is an accordion (`Section fold`): pressing its heading bar puts the chart and the numbers away. Folded, the bar takes the panel ground and keeps three numbers at its right, so what is hidden stays in sight. Kept across launches -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="レーティングの推移" fold="{{fold}}">
+<div style="padding: 0 var(--sp-3)"><x-import component-from-global-scope="KuroobiUI.RateChart" points="{{rates}}" width="{{chartW}}" height="{{chartH}}" dates="{{rateDates}}" labels="{{rateLabels}}"></x-import></div>
 <div style="display: flex; align-items: center; height: var(--h-field); margin-top: var(--sp-2); border-top: 1px solid var(--border-weak); border-bottom: 1px solid var(--border-weak)">
 <sc-for list="{{stats}}" as="s" hint-placeholder-count="6">
 <div style="flex: 1; min-width: 0; padding: 0 var(--sp-3); border-right: 1px solid var(--border-weak); white-space: nowrap">
@@ -64,27 +65,28 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </x-import>
 <x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="終わった対局" aside="{{rowCount}}" grow="{{yes}}">
 <div style="height: 100%; display: flex; flex-direction: column">
-<!-- Columns: result · opponent · disc difference (sum of both boards) · decided by (time-outs only; FlipSight has no resign or adjourn) · board 1 · board 2 · rating after · date -->
+<!-- Columns: opponent (photo and name) · disc difference (sum of both boards; green for a win, red for a loss, grey for a draw, so no win/loss column) · decided by (time-outs only; FlipSight has no resign or adjourn) · board 1 · board 2 · rating after · its change · date -->
 <div style="flex: none; height: var(--h-head); display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-2); border-bottom: 1px solid var(--border)">
-<span style="width: 28px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">勝敗</span>
 <span style="flex: 1; min-width: 0; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">相手</span>
 <span style="width: 44px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; text-align: right">石差</span>
 <span style="width: 88px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">決着</span>
 <span style="width: 150px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">1 局目</span>
 <span style="width: 150px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">2 局目</span>
 <span style="width: 72px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; text-align: right">レーティング</span>
+<span style="width: 44px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; text-align: right">増減</span>
 <span style="width: 64px; flex: none; font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap; text-align: right">日時</span>
 </div>
 <div class="k-scroll" style="flex: 1; min-height: 0; display: flex; flex-direction: column">
 <sc-for list="{{rows}}" as="r" hint-placeholder-count="12">
 <div class="k-row" style="flex: none; display: flex; gap: var(--sp-2); height: var(--h-field); align-items: center; padding: 0 var(--sp-2); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); background: {{r.bg}}; box-shadow: {{r.ring}}">
-<span style="width: 28px; flex: none; color: {{r.tone}}; white-space: nowrap">{{r.tag}}</span>
-<span class="k-sel" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.opp}}</span>
-<span style="width: 44px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--sub)">{{r.discs}}</span>
+<span style="flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-2); overflow: hidden"><img src="{{r.photo}}" alt="" style="flex: none; width: 20px; height: 20px; border-radius: var(--r-0); object-fit: cover; background: var(--card)"><span class="k-sel" style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.opp}}</span></span>
+<span style="width: 44px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 600; color: {{r.tone}}">{{r.discs}}</span>
 <span style="width: 88px; flex: none; color: {{r.endColor}}; font-size: var(--fs-6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.end}}</span>
 <span style="width: 150px; flex: none; display: flex; gap: 6px; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums"><span style="width: 28px; flex: none; text-align: right; color: var(--text)">{{r.b1}}</span></span>
 <span style="width: 150px; flex: none; display: flex; gap: 6px; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums"><span style="width: 28px; flex: none; text-align: right; color: var(--text)">{{r.b2}}</span></span>
 <span style="width: 72px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--sub); font-size: var(--fs-6)">{{r.rating}}</span>
+<!-- What the match did to the rating: after minus before -->
+<span style="width: 44px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: {{r.deltaColor}}; font-size: var(--fs-6)">{{r.delta}}</span>
 <span style="width: 64px; flex: none; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--sub); font-size: var(--fs-6)">{{r.when}}</span>
 </div>
 </sc-for>
@@ -106,7 +108,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <sc-if value="{{detailOpen}}" hint-placeholder-val="{{false}}">
 <aside role="dialog" aria-label="対局の詳細" style="position: absolute; z-index: 26; right: 0; top: var(--h-window); bottom: var(--h-status); width: 480px; max-width: calc(100% - 120px); display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--border); box-shadow: var(--sh-2)">
 <div style="flex: none; height: var(--h-bar); display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-2) 0 var(--sp-3); border-bottom: 1px solid var(--border); white-space: nowrap">
-<span class="k-sel" style="min-width: 0; font-size: var(--fs-3); font-weight: 600; overflow: hidden; text-overflow: ellipsis">nova</span>
+<img src="{{detailPhoto}}" alt="" style="flex: none; width: 24px; height: 24px; border-radius: var(--r-0); object-fit: cover; background: var(--card)"><span class="k-sel" style="min-width: 0; font-size: var(--fs-3); font-weight: 600; overflow: hidden; text-overflow: ellipsis">nova</span>
 <span style="margin-left: auto"><x-import component-from-global-scope="KuroobiUI.IconButton" name="close" label="閉じる"></x-import></span>
 </div>
 <div class="k-scroll" style="flex: 1; min-height: 0">
@@ -144,7 +146,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </x-import>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"view":{"editor":"select","options":["list","empty"],"default":"list"},"detail":{"editor":"select","options":["closed","open"],"default":"closed"},"$preview":{"width":1280,"height":800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"view":{"editor":"select","options":["list","empty"],"default":"list"},"detail":{"editor":"select","options":["closed","open"],"default":"closed"},"chart":{"editor":"select","options":["on","off"],"default":"on"},"$preview":{"width":1280,"height":800}}'>
 class Component extends DCLogic {
   renderVals() {
     const ui = window.KuroobiUI;
@@ -152,6 +154,11 @@ class Component extends DCLogic {
     const view = this.props.view ?? 'list';
     const open = this.props.detail === 'open' && view !== 'empty';
     const opps = ['nova', 'orion', 'vega', 'zebra', 'lynx', 'atlas'];
+    // Stand-ins for the photos the site serves: registered bots upload one (175x175)
+    const tile = (i) => {
+      const mark = ['<circle cx="32" cy="32" r="15" fill="#fff"/>', '<path d="M32 14 50 46H14z" fill="#fff"/>', '<path d="M32 13 51 32 32 51 13 32z" fill="#fff"/>', '<circle cx="32" cy="32" r="13" fill="none" stroke="#fff" stroke-width="7"/>'][i % 4];
+      return 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="hsl(' + ((i * 47 + 20) % 360) + ' 45% 42%)"/>' + mark + '</svg>');
+    };
     const sgn = (d) => (d > 0 ? '+' + d : d < 0 ? '−' + -d : '0');
     const games = [];
     for (let i = 0; i < 50; i++) {
@@ -160,11 +167,15 @@ class Component extends DCLogic {
       games.push({ opp: opps[i % opps.length], a, b, d: a + b, end: timeout, r: +(2463.4 - i * 0.9 + (i % 4) * 1.6).toFixed(1),
         when: i < 18 ? String(3 - Math.floor(i / 6)).padStart(2, '0') + ':' + String(59 - (i * 7) % 60).padStart(2, '0') : '11/' + String(15 - Math.floor((i - 18) / 8)) });
     }
+    const deltaOf = (i) => (i + 1 < games.length ? +(games[i].r - games[i + 1].r).toFixed(1) : 0);
+    const delta = (i) => { const d = deltaOf(i); return d > 0 ? '+' + d.toFixed(1) : d < 0 ? '−' + (-d).toFixed(1) : '0.0'; };
+    const chartOn = (this.props.chart ?? 'on') === 'on';
     const rows = games.map((g, i) => ({
-      opp: g.opp, tag: g.d > 0 ? '勝' : g.d < 0 ? '負' : '分',
+      opp: g.opp, photo: tile(opps.indexOf(g.opp)), tag: g.d > 0 ? '勝' : g.d < 0 ? '負' : '分',
       tone: g.d === 0 ? 'var(--sub)' : g.d > 0 ? 'var(--ok)' : 'var(--bad)',
       discs: sgn(g.d), end: g.end, endColor: g.end.endsWith('勝ち') ? 'var(--gold)' : 'var(--bad)',
       b1: sgn(g.a), b2: sgn(g.b), rating: g.r.toFixed(1), when: g.when,
+      delta: delta(i), deltaColor: deltaOf(i) > 0 ? 'var(--ok)' : deltaOf(i) < 0 ? 'var(--bad)' : 'var(--sub)',
       bg: open && i === 0 ? 'var(--hover)' : 'transparent', ring: open && i === 0 ? 'inset 2px 0 0 var(--accent)' : 'none',
     }));
     const rated = games.slice().reverse();
@@ -191,7 +202,7 @@ class Component extends DCLogic {
       rates: rated.map((g) => g.r),
       rateDates: rated.map((g) => g.when),
       rateLabels: rated.map((g) => g.when + ' · ' + g.opp + ' · ' + sgn(g.d) + ' · ' + g.r.toFixed(1)),
-      chartW: 1030, chartH: 168,
+      chartW: 1030, chartH: 168, chartOn, fold: { open: chartOn, onToggle: () => {}, summary: [['レーティング', '2463.4'], ['期間の増減', '+446.2'], ['勝 / 負 / 分', '167 / 4 / 11']] },
       stats: [
         { label: 'レーティング', value: '2463.4' },
         { label: '期間の増減', value: '+446.2' },
@@ -211,6 +222,7 @@ class Component extends DCLogic {
       ],
       trend, plies: 60, trendH: 180,
       trendNames: { mine: 'KUROOBI', opp: 'nova' },
+      detailPhoto: tile(0),
     };
   }
 }

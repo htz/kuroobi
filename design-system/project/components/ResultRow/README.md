@@ -10,6 +10,9 @@ Shows one finished game as a single row: result, opponent, format, disc differen
 - `when`: the date string (in the app, today's games show the time). `note`: the format (type name). `rating`: the rating after that game (1 decimal place).
 - `boards`: when passed, shows the "Decided by", "Board 1" and "Board 2" columns (paired with `ResultHead boards`). Each board is `{ diff, tag?, tone? }` (`ResultBoardCell`: the disc difference on the board (empty squares go to the winning side), and a clock tag "Won on time/Lost on time" or "Won on over time/Lost on over time"). If the array passed is empty, the columns are empty.
 - `ending`: how the whole match was decided, `{ text, tone }` ("Opp. resigned" `gold`, "Resigned" `bad`, "Adjourned" `sub`).
+- `delta`: what the game did to the rating, in its own column after the rating (paired with `ResultHead delta`): "+1.6" `ok`, "−0.9" `bad`, "0.0" `sub`; `null` leaves the cell empty, `undefined` means the table has no such column.
+- `photo`: the opponent's picture (`BotPhoto`, 20) before the name, for a bot; `null` draws the letter tile, `undefined` nothing.
+- `noOutcome` (paired with `ResultHead noOutcome`): no win/loss column; the disc difference is bold in the result's colour instead (`ok` / `bad` / `sub`).
 - `picked`: highlight (in the app, linked to hover on the rating chart). `onHover(on)`.
 - `onClick`: when present the row becomes a button titled "Open in study". With `dim` (a game without a record) it cannot be pressed and has opacity 0.5.
 
@@ -20,4 +23,4 @@ Shows one finished game as a single row: result, opponent, format, disc differen
 ## Similar components
 - `TableRow`: a row whose columns you define freely. ResultRow has fixed result columns.
 
-Used in: GgsScreens.tsx, "Finished games" on the GGS "Results" screen.
+Used in: GgsScreens.tsx, "Finished games" on the GGS "Results" screen; `fs/FsScreens.tsx`, FlipSight "Results" (with `photo` and `noOutcome`).

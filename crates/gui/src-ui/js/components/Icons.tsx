@@ -2,9 +2,10 @@ export type IconName =
   | 'play' | 'study' | 'ggs-play' | 'ggs-lobby' | 'ggs-users' | 'ggs-chat'
   | 'ggs-tourney' | 'ggs-console' | 'login' | 'cpu' | 'memory'
   | 'check' | 'alert' | 'back' | 'close' | 'panel'
-  | 'book' | 'results' | 'prefs' | 'watch';
+  | 'book' | 'results' | 'prefs' | 'watch' | 'chevron';
 
 const PATHS: Record<IconName, React.ReactNode> = {
+  chevron: <path d="M9 5l7 7-7 7" />,
   watch: <>
     <path d="M2.5 12s3.6-6.5 9.5-6.5S21.5 12 21.5 12s-3.6 6.5-9.5 6.5S2.5 12 2.5 12z" />
     <circle cx="12" cy="12" r="2.8" />

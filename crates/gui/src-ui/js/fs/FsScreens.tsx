@@ -4,15 +4,15 @@ import { t, tErr } from '../i18n';
 import type { FsBotRow, FsLeg, FsMatch, FsResult, FsSnapshot, GgsSnapshot } from '../types';
 import type { Prefs } from '../prefs';
 import type { NavId } from '../components/ggs';
-import { MatchRow, Tag, type Match } from '../components/ggs';
+import { BotMatchRow, Tag } from '../components/ggs';
 import { Board } from '../components/board';
 import { Icon } from '../components/Icons';
 import { Button, Dot, Segmented, Select, TextField, Toggle } from '../components/primitives';
 import { Combobox, Divider, Drawer, EmptyBoard, Field, KeyValue, Modal, Overlay, Section, Toolbar } from '../components/layout';
-import { EvalTrend, PlayerRow, RateChart, ResultHead, ResultRow } from '../components/data';
+import { BotPhoto, EvalTrend, PlayerRow, RateChart, ResultHead, ResultRow } from '../components/data';
 import { Band, Blank, ListHead, ListPane, Page, Rows, Sections, Table, TitleBit, useNow, useWidth, useWindowHeight } from '../ggsui';
 import { whenFull, whenShort } from '../when';
-import { boardCells, boardIndex, clockText, legDiff, liveConn, matchesOf, myRating, pliesOf, splitOf, threadsOf, trendOf } from '../fs';
+import { boardCells, boardIndex, clockText, legDiff, liveConn, matchesOf, myRating, pliesOf, splitOf, threadsOf, trendOf, useKept } from '../fs';
 import { flipped } from '../prefs';
 import { Strength, presetOf } from '../components/strength';
 import { LEVELS } from '../state';
@@ -33,6 +33,16 @@ export function FsScreen({ nav, fs, ggs, onNav, prefs, onKifu, confirm, say }: {
 /** A bot's name, or its number when the site gave none. */
 const nm = (b: FsBotRow): string => b.name || t('fs.bot_n', { n: b.id });
 const opp = (m: FsMatch): string => m.opponent_name || t('fs.bot_n', { n: m.opponent });
+
+/** Every bot's picture by its number: this machine's bots, then all the bots a connected one sees. */
+const photosOf = (fs: FsSnapshot): Map<number, string> => {
+  const m = new Map<number, string>();
+  for (const b of fs.bots) {
+    for (const o of b.view?.bots ?? []) if (o.photo) m.set(o.id, o.photo);
+    if (b.photo) m.set(b.id, b.photo);
+  }
+  return m;
+};
 
 const act = (say: (s: string) => void) => (p: Promise<unknown>) => { p.catch((e) => say(tErr(e))); };
 
@@ -181,16 +191,15 @@ function FsMine({ fs, ggs, confirm, say }: { fs: FsSnapshot; ggs: GgsSnapshot | 
     detail = (
       <>
         {blocked}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
+        <BotPhoto src={sel.photo} name={nm(sel)} size={48} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
             <span className="k-sel" style={{ fontSize: 'var(--fs-1)', fontWeight: 700 }}>{nm(sel)}</span>
             <Tag tone={refused ? 'bad' : st.tone === 'gold' ? 'sub' : st.tone}>{st.word}</Tag>
           </span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
-            <span style={{ fontSize: 'var(--fs-5)' }}>{t('fs.mine.bot_id', { n: sel.id })}</span>
-            <span className="k-sel" style={{ fontFamily: 'var(--ff-mono)', fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>othelloclub.com</span>
-            {sel.view?.rating != null && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('fs.rating')} {sel.view.rating.toFixed(1)}</span>}
-          </span>
+          {sel.view?.rating != null && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('fs.rating')} {sel.view.rating.toFixed(1)}</span>}
+        </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', marginTop: 'var(--sp-2)', borderTop: '1px solid var(--border-weak)' }}>
           <div style={row}><span style={rowLabel}>{t('fs.mine.cap')}</span>
@@ -287,10 +296,12 @@ function FsMine({ fs, ggs, confirm, say }: { fs: FsSnapshot; ggs: GgsSnapshot | 
               return (
                 <button key={b.id} type="button" className="k-row" onClick={() => setPick(b.id)}
                         style={{ flex: 'none', width: '100%', height: 'var(--h-row2)', padding: '0 var(--sp-3)', border: 0,
-                                 borderBottom: '1px solid var(--border-weak)', display: 'flex', flexDirection: 'column',
-                                 justifyContent: 'center', gap: 2, lineHeight: 1.3, textAlign: 'left', color: 'var(--text)',
+                                 borderBottom: '1px solid var(--border-weak)', display: 'flex', alignItems: 'center',
+                                 gap: 'var(--sp-2)', lineHeight: 1.3, textAlign: 'left', color: 'var(--text)',
                                  font: 'inherit', background: on ? 'var(--card)' : 'transparent',
                                  boxShadow: on ? 'inset 2px 0 0 var(--accent)' : 'none', whiteSpace: 'nowrap' }}>
+                  <BotPhoto src={b.photo} name={nm(b)} size={32} />
+                  <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 2 }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', overflow: 'hidden' }}>
                     <b style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{nm(b)}</b>
                     <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-1)', fontSize: 'var(--fs-7)', color: st.color }}>
@@ -298,6 +309,7 @@ function FsMine({ fs, ggs, confirm, say }: { fs: FsSnapshot; ggs: GgsSnapshot | 
                     </span>
                   </span>
                   <span style={{ fontSize: 'var(--fs-7)', color: 'var(--sub)' }}>{t('fs.mine.use', { t: b.threads, m: matchesOf(b) })}{b.level && ` · ${levelName(b.level)}`}</span>
+                  </span>
                 </button>
               );
             })}
@@ -352,6 +364,8 @@ function FsPlay({ fs, onNav, prefs, onKifu }: { fs: FsSnapshot; onNav: (id: NavI
     .slice(0, 100);
   const [filter, setFilter] = useState<'all' | 'live' | 'over'>('all');
   const [pick, setPick] = useState('');
+  const photos = photosOf(fs);
+  const overPhoto = (r: FsResult) => r.opponent_photo ?? photos.get(r.opponent);
   const pickedLive = live.find((x) => `live:${x.m.id}` === pick) ?? (pick === '' ? live[0] : undefined);
   // A match that just ended stays picked as finished; with nothing picked, the latest finished one shows.
   const pickedOver = pickedLive ? undefined
@@ -383,11 +397,7 @@ function FsPlay({ fs, onNav, prefs, onKifu }: { fs: FsSnapshot; onNav: (id: NavI
     );
   }
 
-  const liveRow = (x: Live): Match => ({ mine: true, live: true, opponent: opp(x.m), black: nm(x.bot),
-                                         white: opp(x.m), kind: t('fs.kind') });
-  const overRow = (x: Over): Match => ({ mine: true, live: false, opponent: oppName(x.r), black: nm(x.bot),
-                                         white: oppName(x.r), kind: t('fs.kind'),
-                                         result: resultWord(x.r, nm(x.bot), oppName(x.r)), ended: 'finished' });
+  const ownSide = (b: FsBotRow) => ({ own: nm(b), ownPhoto: b.photo, kind: t('fs.kind') });
   const title = pickedLive ? t('fs.vs', { a: nm(pickedLive.bot), b: opp(pickedLive.m) })
     : pickedOver ? t('fs.vs', { a: nm(pickedOver.bot), b: oppName(pickedOver.r) }) : '';
   const kifuParts = pickedOver ? pickedOver.r.legs.map((l) => l.moves ?? '').filter(Boolean) : [];
@@ -411,22 +421,25 @@ function FsPlay({ fs, onNav, prefs, onKifu }: { fs: FsSnapshot; onNav: (id: NavI
           {filter !== 'over' && live.length > 0 && <>
             <ListHead aside={t('fs.count', { n: live.length })}>{t('play.group_live')}</ListHead>
             {live.map((x) => (
-              <MatchRow key={x.m.id} m={liveRow(x)} active={pickedLive === x} onSelect={() => setPick(`live:${x.m.id}`)} onClose={() => {}} />
+              <BotMatchRow key={x.m.id} name={opp(x.m)} photo={photos.get(x.m.opponent)}
+                           {...ownSide(x.bot)} active={pickedLive === x} onSelect={() => setPick(`live:${x.m.id}`)} />
             ))}
           </>}
           {filter !== 'live' && over.length > 0 && <>
             <ListHead aside={t('fs.count', { n: over.length })}>{t('play.group_over')}</ListHead>
             {over.map((x) => {
               const k = `over:${x.bot.id}:${x.r.match}`;
-              return <MatchRow key={k} m={overRow(x)} active={pickedOver === x} onSelect={() => setPick(k)}
-                               onClose={() => setClosed(new Set([...closed, `${x.bot.id}:${x.r.match}`]))} />;
+              return <BotMatchRow key={k} name={oppName(x.r)} photo={overPhoto(x.r)}
+                                  {...ownSide(x.bot)} diff={x.r.result === 'aborted' ? null : x.r.diff}
+                                  active={pickedOver === x} onSelect={() => setPick(k)}
+                                  onClose={() => setClosed(new Set([...closed, `${x.bot.id}:${x.r.match}`]))} />;
             })}
           </>}
         </ListPane>
         <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          {pickedLive && <Boards legs={pickedLive.m.legs} bot={pickedLive.bot} them={opp(pickedLive.m)}
+          {pickedLive && <Boards legs={pickedLive.m.legs} bot={pickedLive.bot} them={opp(pickedLive.m)} themPhoto={photos.get(pickedLive.m.opponent)}
                                  themRate={pickedLive.m.opponent_rating} meRate={pickedLive.bot.view?.rating} prefs={prefs} />}
-          {pickedOver && <OverStrip x={pickedOver} prefs={prefs} />}
+          {pickedOver && <OverStrip x={pickedOver} themPhoto={overPhoto(pickedOver.r)} prefs={prefs} />}
         </div>
       </Page>
     </>
@@ -443,7 +456,7 @@ const overLegs = (r: FsResult): FsLeg[] | null =>
       }))
     : null;
 
-function OverStrip({ x, prefs }: { x: Over; prefs: Prefs }) {
+function OverStrip({ x, themPhoto, prefs }: { x: Over; themPhoto?: string; prefs: Prefs }) {
   const r = x.r;
   const pts = trendOf(r.legs);
   const legs = overLegs(r);
@@ -458,7 +471,7 @@ function OverStrip({ x, prefs }: { x: Over; prefs: Prefs }) {
           {myRating(r) != null && ` · ${t('fs.rating')} ${r.my_rating_before?.toFixed(1) ?? '?'} → ${myRating(r)!.toFixed(1)}`}
         </span>
       </div>
-      {legs && <Boards legs={legs} bot={x.bot} them={oppName(r)} themRate={r.opponent_rating} meRate={myRating(r)} prefs={prefs} />}
+      {legs && <Boards legs={legs} bot={x.bot} them={oppName(r)} themPhoto={themPhoto} themRate={r.opponent_rating} meRate={myRating(r)} prefs={prefs} />}
       {!legs && pts.length > 0 && (
         <div style={{ padding: 'var(--sp-2) var(--sp-4)' }}>
           <EvalTrend points={pts} plies={pliesOf(r.legs)} height={180} title={t('play.trend_title', { name: nm(x.bot) })} split={splitOf(r.legs)}
@@ -471,7 +484,7 @@ function OverStrip({ x, prefs }: { x: Over; prefs: Prefs }) {
 
 const signed = (d: number | null) => (d == null ? '—' : d > 0 ? `+${d}` : d < 0 ? `−${-d}` : '0');
 
-type Sides = { bot: FsBotRow; them: string; themRate?: number | null; meRate?: number | null };
+type Sides = { bot: FsBotRow; them: string; themPhoto?: string | null; themRate?: number | null; meRate?: number | null };
 
 function Boards({ legs, prefs, ...who }: Sides & { legs: FsLeg[]; prefs: Prefs }) {
   const [ref, width] = useWidth();
@@ -501,7 +514,7 @@ function Boards({ legs, prefs, ...who }: Sides & { legs: FsLeg[]; prefs: Prefs }
   );
 }
 
-function LegBoard({ leg, n, bot, them, themRate, meRate, side, prefs, now }: Sides & {
+function LegBoard({ leg, n, bot, them, themPhoto, themRate, meRate, side, prefs, now }: Sides & {
   leg: FsLeg; n?: number; side: number; prefs: Prefs; now: number;
 }) {
   // The clock of the side to move runs on between polls.
@@ -523,14 +536,14 @@ function LegBoard({ leg, n, bot, them, themRate, meRate, side, prefs, now }: Sid
         {n !== undefined && <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t('fs.leg_n', { n })}</span>}
         <span style={{ marginLeft: 'auto' }}>{leg.discs[0] ?? 0} – {leg.discs[1] ?? 0} · {t('ggs.play.moves', { n: leg.ply })}</span>
       </div>
-      <PlayerRow color={color(theirs)} name={them} rate={themRate ?? undefined}
+      <PlayerRow color={color(theirs)} name={them} rate={themRate ?? undefined} photo={themPhoto ?? null}
                  clock={clock(theirs)} active={leg.active && leg.turn === theirs} />
       <div style={{ width: side, height: side }}>
         <Board cells={boardCells(leg.cells)} last={leg.last != null ? boardIndex(leg.last) : null} disabled
                turn={leg.turn === 2 ? 'w' : 'b'} coords={prefs.coords} grain={prefs.grain}
                flip={flipped(prefs.facing, mine === 1 ? 'black' : 'white')} />
       </div>
-      <PlayerRow color={color(mine)} name={nm(bot)} rate={meRate ?? undefined}
+      <PlayerRow color={color(mine)} name={nm(bot)} rate={meRate ?? undefined} photo={bot.photo}
                  meta={eval0 != null ? t('play.eval', { v: (eval0 > 0 ? '+' : '') + eval0.toFixed(1) }) : undefined}
                  clock={clock(mine)} active={leg.active && leg.turn === mine} />
       <div style={{ display: 'flex', alignItems: 'center', height: 'var(--h-row)', whiteSpace: 'nowrap', overflow: 'hidden', fontSize: 'var(--fs-6)',
@@ -554,10 +567,14 @@ function FsBots({ fs, say }: { fs: FsSnapshot; say: (s: string) => void }) {
   const rev = sel ? `${sel.id}:${sel.view?.finished ?? 0}` : '';
   const results = useResults(sel ? [sel.id] : [], rev).get(sel?.id ?? -1) ?? [];
   const now = useNow(!!sel?.view?.outstanding, 1000);
+  const [hideBuiltin, setHideBuiltin] = useKept('bots.hide_builtin', false);
+  const [onlineOnly, setOnlineOnly] = useKept('bots.online_only', false);
   if (!sel) return <><Toolbar><span /></Toolbar><Page><Blank title={t('fs.bots.none')} /></Page></>;
   const v = sel.view;
   const bots = v?.bots ?? [];
   const rank = bots.findIndex((b) => b.id === sel.id);
+  // Ranks are among all bots, whatever the list is narrowed to.
+  const shown = bots.map((b, i) => ({ b, i })).filter(({ b }) => (!hideBuiltin || !b.builtin) && (!onlineOnly || b.online || b.playing));
   const w = results.filter((r) => r.diff > 0).length;
   const l = results.filter((r) => r.diff < 0).length;
   const d = results.filter((r) => r.diff === 0 && r.result !== 'aborted').length;
@@ -572,6 +589,9 @@ function FsBots({ fs, say }: { fs: FsSnapshot; say: (s: string) => void }) {
     <>
       <Toolbar>
         <Select value={String(sel.id)} options={opts} width={132} title={t('fs.bots.mine')} onChange={(x) => setPick(Number(x))} />
+        <Divider />
+        <Toggle checked={hideBuiltin} onChange={setHideBuiltin} label={t('fs.bots.hide_builtin')} />
+        <Toggle checked={onlineOnly} onChange={setOnlineOnly} label={t('fs.bots.online_only')} />
       </Toolbar>
       <Page>
         {!sel.accept && <Band>{t('fs.bots.not_accepting')}</Band>}
@@ -591,7 +611,7 @@ function FsBots({ fs, say }: { fs: FsSnapshot; say: (s: string) => void }) {
               ))}
             </div>
           </Section>
-          <Section title={t('fs.bots.title')} aside={t('fs.bots.count', { n: bots.length })} grow>
+          <Section title={t('fs.bots.title')} aside={t('fs.bots.count', { n: shown.length })} grow>
             <Table>
               <div style={{ flex: 'none', height: 'var(--h-head)', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', padding: '0 var(--sp-3)',
                             borderBottom: '1px solid var(--border)', fontSize: 'var(--fs-7)', fontWeight: 600, letterSpacing: '.08em', color: 'var(--sub)' }}>
@@ -602,24 +622,26 @@ function FsBots({ fs, say }: { fs: FsSnapshot; say: (s: string) => void }) {
                 <span style={{ width: 120, flex: 'none' }} />
               </div>
               <Rows>
-                {bots.map((b, i) => {
+                {shown.map(({ b, i }) => {
                   const me = b.id === sel.id;
                   const asked = out?.target === b.id;
                   const st = cooling.has(b.id) ? [t('fs.bots.declined'), 'var(--sub)']
                     : b.playing ? [t('fs.state.playing'), 'var(--ok)']
                     : b.online ? [t('fs.bots.online'), 'var(--accent)'] : [t('fs.bots.offline'), 'var(--sub)'];
-                  const kind = b.builtin ? t('fs.bots.builtin') : t('fs.bots.registered');
                   return (
                     <div key={b.id} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-field)',
                                              padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)', fontSize: 'var(--fs-5)',
                                              whiteSpace: 'nowrap', fontWeight: me ? 600 : 400 }}>
                       <span style={{ width: 36, flex: 'none', color: i === 0 ? 'var(--gold)' : 'var(--sub)', fontVariantNumeric: 'tabular-nums' }}>#{i + 1}</span>
                       <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', overflow: 'hidden' }}>
-                        <span role="img" aria-label={kind} title={kind}
-                              style={{ flex: 'none', display: 'grid', placeItems: 'center', color: b.builtin ? 'var(--accent)' : 'var(--sub)' }}>
-                          <Icon name={b.builtin ? 'cpu' : 'ggs-users'} size={15} />
-                        </span>
+                        <BotPhoto src={b.photo} name={b.name} size={20} />
                         <span className="k-sel" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.name}</span>
+                        {b.builtin && (
+                          <span role="img" aria-label={t('fs.bots.builtin')} title={t('fs.bots.builtin')}
+                                style={{ flex: 'none', display: 'grid', placeItems: 'center', color: 'var(--accent)' }}>
+                            <Icon name="cpu" size={15} />
+                          </span>
+                        )}
                       </span>
                       <span style={{ width: 72, flex: 'none', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{b.rating != null ? b.rating.toFixed(1) : '—'}</span>
                       <span style={{ width: 96, flex: 'none', color: st[1], fontSize: 'var(--fs-6)', fontWeight: 400 }}>{st[0]}</span>
@@ -648,7 +670,9 @@ function FsResults({ fs, onKifu }: { fs: FsSnapshot; onKifu: (title: string, kif
   const [sel, setPick, opts] = useBotPick(fs);
   const rev = sel ? `${sel.id}:${sel.view?.finished ?? 0}` : '';
   const got = useResults(sel ? [sel.id] : [], rev);
+  const photos = photosOf(fs);
   const all = useMemo(() => got.get(sel?.id ?? -1) ?? [], [got, sel?.id]);
+  const [chart, setChart] = useKept('results.chart', true);
   const [period, setPeriod] = useState<Period>('all');
   const [since, setSince] = useState(0);
   const [opp, setOpp] = useState('');
@@ -676,6 +700,14 @@ function FsResults({ fs, onKifu }: { fs: FsSnapshot; onKifu: (title: string, kif
   const parts = picked ? picked.legs.map((x) => x.moves ?? '').filter(Boolean) : [];
   const ending = (r: FsResult) => (r.finish_reason && r.finish_reason.includes('timeout')
     ? { text: r.diff > 0 ? t('fs.result.time_win') : t('fs.result.time_loss'), tone: (r.diff > 0 ? 'gold' : 'bad') as 'gold' | 'bad' } : null);
+  const stats: [string, string][] = [
+    [t('fs.rating'), rates.length ? rates[rates.length - 1].toFixed(1) : '—'],
+    [t('results.change'), delta != null ? (delta > 0 ? '+' : '') + delta.toFixed(1) : '—'],
+    [t('results.wld'), `${w} / ${l} / ${d}`],
+    [t('results.win_rate'), rows.length ? `${Math.round((w / rows.length) * 100)}%` : '—'],
+    [t('results.avg_diff'), avg != null ? (avg > 0 ? '+' : '') + avg.toFixed(1) : '—'],
+    [t('results.best'), rates.length ? Math.max(...rates).toFixed(1) : '—'],
+  ];
   return (
     <>
       <Toolbar end={<>
@@ -699,21 +731,15 @@ function FsResults({ fs, onKifu }: { fs: FsSnapshot; onKifu: (title: string, kif
         {!all.length ? <Blank title={t('ggs.no_records')} />
           : !rows.length ? <Blank title={t('results.none_matching')} /> : (
           <Sections>
-            <Section title={t('fs.results.trend')}>
+            <Section title={t('fs.results.trend')}
+                     fold={{ open: chart, onToggle: () => setChart(!chart), summary: stats.slice(0, 3) }}>
               <div ref={chartRef} style={{ padding: '0 var(--sp-3)' }}>
                 <RateChart points={rates} width={chartW} height={168} dates={rated.map((r) => whenShort(r.t / 1000))}
                            labels={rated.map((r) => `${whenFull(r.t / 1000)} · ${oppName(r)} · ${signed(r.diff)} · ${myRating(r)!.toFixed(1)}`)}
                            hover={hover} onHover={setHover} />
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', marginTop: 'var(--sp-2)', borderTop: '1px solid var(--border-weak)' }}>
-                {([
-                  [t('fs.rating'), rates.length ? rates[rates.length - 1].toFixed(1) : '—'],
-                  [t('results.change'), delta != null ? (delta > 0 ? '+' : '') + delta.toFixed(1) : '—'],
-                  [t('results.wld'), `${w} / ${l} / ${d}`],
-                  [t('results.win_rate'), rows.length ? `${Math.round((w / rows.length) * 100)}%` : '—'],
-                  [t('results.avg_diff'), avg != null ? (avg > 0 ? '+' : '') + avg.toFixed(1) : '—'],
-                  [t('results.best'), rates.length ? Math.max(...rates).toFixed(1) : '—'],
-                ] as [string, string][]).map(([label, value]) => (
+                {stats.map(([label, value]) => (
                   <div key={label} style={{ flex: '1 0 auto', minWidth: 150, height: 'var(--h-field)', display: 'flex', alignItems: 'center',
                                             padding: '0 var(--sp-3)', borderRight: '1px solid var(--border-weak)', borderBottom: '1px solid var(--border-weak)' }}>
                     <span style={{ flex: 1, minWidth: 0 }}><KeyValue label={label} value={value} /></span>
@@ -723,14 +749,16 @@ function FsResults({ fs, onKifu }: { fs: FsSnapshot; onKifu: (title: string, kif
             </Section>
             <Section title={t('ggs.results.finished')} aside={t('fs.count', { n: rows.length })} grow>
               <Table>
-                <ResultHead rating boards boardLabel={(n) => t('fs.leg_n', { n })} ratingLabel={t('fs.rating')} />
+                <ResultHead noOutcome rating delta boards boardLabel={(n) => t('fs.leg_n', { n })} ratingLabel={t('fs.rating')} />
                 <Rows key={`${sel.id}|${period}|${opp}|${perPage}|${cur}`}>
                   {shown.map((r) => (
-                    <ResultRow key={r.match} opponent={oppName(r)} picked={r.match === pickRow}
+                    <ResultRow key={r.match} noOutcome opponent={oppName(r)} picked={r.match === pickRow}
+                               photo={r.opponent_photo ?? photos.get(r.opponent) ?? null}
                                onHover={(on) => { const i = rated.indexOf(r); setHover(on && i >= 0 ? i : null); }}
                                win={r.diff > 0} draw={r.diff === 0} discs={r.diff} when={whenShort(r.t / 1000)}
                                ending={ending(r)} boards={r.legs.map((x) => ({ diff: legDiff(x) }))}
-                               rating={myRating(r)} onClick={() => setPickRow(r.match)} dim={!r.legs.some((x) => x.moves)} />
+                               rating={myRating(r)} delta={myRating(r) != null && r.my_rating_before != null ? myRating(r)! - r.my_rating_before : null}
+                               onClick={() => setPickRow(r.match)} dim={!r.legs.some((x) => x.moves)} />
                   ))}
                 </Rows>
               </Table>
@@ -739,7 +767,9 @@ function FsResults({ fs, onKifu }: { fs: FsSnapshot; onKifu: (title: string, kif
         )}
         {picked && (
           <Drawer label={t('results.this_game')} onClose={() => setPickRow(null)}
-                  title={<span className="k-sel" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{oppName(picked)}</span>}>
+                  title={<span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', minWidth: 0 }}>
+                    <BotPhoto src={picked.opponent_photo ?? photos.get(picked.opponent)} name={oppName(picked)} size={24} />
+                    <span className="k-sel" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{oppName(picked)}</span></span>}>
             <div className="k-scroll" style={{ flex: 1, minHeight: 0 }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)', padding: 'var(--sp-4) var(--sp-4) var(--sp-5)' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
