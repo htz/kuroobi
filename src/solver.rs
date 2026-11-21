@@ -611,6 +611,11 @@ const PARITY_ODD_MASK: [u64; 16] = {
     t
 };
 
+/// The bytes the solver's table takes at `bits`.
+pub fn table_bytes(bits: u32) -> usize {
+    (1usize << bits) * std::mem::size_of::<HashEntry>()
+}
+
 #[derive(Clone, Copy)]
 #[repr(C, align(32))]
 struct HashEntry {

@@ -46,6 +46,19 @@ pub struct EngineConfig {
     pub book_tolerance: f32,
 }
 
+impl EngineConfig {
+    /// The megabytes of transposition tables a game searches with: on a clock, the clock
+    /// search's table and the solver's; at a level, the midgame search's and the solver's.
+    pub fn table_mb(&self, on_clock: bool) -> f64 {
+        let mid = if on_clock {
+            crate::clock::table_bytes(self.midgame_hash_bits)
+        } else {
+            SharedTt::bytes(self.midgame_hash_bits)
+        };
+        (mid + crate::solver::table_bytes(self.solver_hash_bits)) as f64 / (1u64 << 20) as f64
+    }
+}
+
 impl Default for EngineConfig {
     fn default() -> Self {
         EngineConfig {
@@ -743,6 +756,17 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_megabytes_count_the_tables_a_game_searches_with() {
+        let cfg = EngineConfig {
+            midgame_hash_bits: 26,
+            solver_hash_bits: 26,
+            ..Default::default()
+        };
+        assert_eq!(cfg.table_mb(true), 1024.0 + 2048.0);
+        assert_eq!(cfg.table_mb(false), 2048.0 + 2048.0);
+    }
 
     #[test]
     #[ignore = "requires weights/"]

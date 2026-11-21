@@ -772,11 +772,14 @@ impl Bot {
     }
 
     fn environment(&self) -> Value {
+        let ctl = self.ctl.lock().unwrap().clone();
         json!({
             "cpu": self.cpu,
             "engine": "KUROOBI",
             "os": std::env::consts::OS,
-            "engine_threads": self.ctl.lock().unwrap().threads,
+            "engine_threads": ctl.threads,
+            // One leg's: a match's two legs each have their own engine and tables.
+            "hash_mb": self.engine_cfg.table_mb(ctl.level.is_none()).round(),
             "practice": self.o.practice,
         })
     }

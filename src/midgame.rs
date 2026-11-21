@@ -163,6 +163,11 @@ unsafe impl Sync for SharedTt {}
 struct TtBucket([TtEntry; TT_WAYS]);
 
 impl SharedTt {
+    /// The bytes the table takes at `bits`.
+    pub fn bytes(bits: u32) -> usize {
+        (1usize << bits.saturating_sub(2)) * std::mem::size_of::<TtBucket>()
+    }
+
     pub fn new(bits: u32) -> SharedTt {
         let n = 1usize << bits.saturating_sub(2);
         SharedTt {

@@ -88,6 +88,11 @@ const EXT_MIN_EMPTIES: i32 = 38;
 const EXT_SHARE: f64 = 1.8;
 const EXT_MAX_SHARE_OF_CLOCK: f64 = 0.5;
 
+/// The bytes the clock search's table takes at `bits`.
+pub fn table_bytes(bits: u32) -> usize {
+    (1usize << bits.max(1)) * std::mem::size_of::<(AtomicU64, AtomicU64)>()
+}
+
 /// Two-way buckets of (key ^ data, data), so a torn write fails the key check.
 struct Table {
     slots: Vec<(AtomicU64, AtomicU64)>,
