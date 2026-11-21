@@ -146,7 +146,7 @@ def finish(m):
         s["status"] = "finished"
         s["finish_reason"] = "discs"
         m["status"] = "finished"
-        m["record"] = {"format": 1, "kind": "bot", "id": m["id"],
+        m["record"] = {"format": 1, "kind": "bot", "id": m["id"], "updated_ms": now(), "legs": [],
                        "opponent": {"kind": "bot", "bot_id": OPP, "name": "random", "rating_before": 1500.0}}
         print("FINISHED", m["id"], tot, flush=True)
     emit(m)
@@ -217,6 +217,16 @@ class H(BaseHTTPRequestHandler):
                 polls[0] += 1
                 print("POLL", polls[0], flush=True)
                 return self.reply(410, {"ok": False, "error": "agent_poll was removed; use bot-stream"})
+            if a == "agent_games":
+                recs = [m["record"] for m in matches.values()
+                        if "record" in m and m["record"]["updated_ms"] >= req.get("since", 0)]
+                body = "".join(json.dumps(r) + "\n" for r in recs).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if a == "agent_environment":
                 print("ENVIRONMENT", json.dumps(req["environment"]), flush=True)
                 return self.reply(200, {"ok": True})

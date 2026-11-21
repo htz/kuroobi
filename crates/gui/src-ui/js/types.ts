@@ -400,7 +400,8 @@ export interface FsOtherBot {
   id: number;
   name: string;
   rating: number | null;
-  online: boolean;
+  /** null: the site does not say (a bot known only from the games played against it). */
+  online: boolean | null;
   playing: boolean;
   builtin: boolean;
   /** The bot's picture on the site (a full address). */

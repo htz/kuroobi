@@ -540,8 +540,10 @@ setting it started with); the token itself cannot change the bot's
 settings on the site, which stay under Manage on the bot page.
 
 **Matches** shows every bot's matches, the two games of a match side by
-side; **Bots** lists the site's standard bots (an icon tells FlipSight's
-own from registered ones) with a button to challenge one; **Results** keeps
+side, each with both sides' evaluations (the opponent's as it sends them
+with its moves) and a graph of them; **Bots** lists the bots this one has
+played (the site names no others to a bot; an icon tells FlipSight's own
+from registered ones) with a button to challenge one; **Results** keeps
 each bot's finished matches, rating history and records.
 
 GGS and FlipSight are never connected at once, so the two never compete
@@ -551,8 +553,8 @@ token the site refuses (reissued there) stops that bot with a notice and
 is replaced from My bots; a bot keeps its settings and records.
 
 The tokens and settings are kept in `flipsight/bots.json` in the settings
-folder, readable by the user only; each bot's moves and results in
-`flipsight/<bot number>/`.
+folder, readable by the user only; each bot's moves, results and the
+site's own records of its games in `flipsight/<bot number>/`.
 
 ## What GGS taught us
 

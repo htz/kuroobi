@@ -473,8 +473,8 @@ FS_BOT_TOKEN=fsbm_... kuroobi-flipsight [--threads N] [--pause NAMES] [--out DIR
 | `--practice` | off | Report the bot as practising: kept out of automatic matching, games unrated |
 | `--pause <names>` | none | Process names (`pgrep -x` pattern, e.g. `gendata\|nnue_train`) stopped while a match runs and resumed after it, unless a GGS game of `kuroobi` is live then |
 | `--pause-log <file>` | `<out>/paused.txt` | Where each pause and resume is noted |
-| `--out <dir>` | `flipsight_games` | `moves.jsonl` (each move: empties, move, value, depth, exact, nodes, threads, seconds, time left and given) and `results.jsonl` (each match from our side: totals of both legs, per-leg discs, ratings) |
-| `--challenge <who>` | none | Challenge bots to standard matches, one at a time while no match of ours runs: `builtin` (the site's own bots, weakest first) or ids `3,4,5` in that order. Each is challenged once, as soon as it is online. `stronger` challenges every online bot rated above us, weakest first, over and over |
+| `--out <dir>` | `flipsight_games` | `moves.jsonl` (each move: empties, move, value, depth, exact, nodes, threads, seconds, time left and given) `results.jsonl` (each match from our side: totals of both legs, per-leg discs, ratings, both sides' evaluations) and `games.jsonl` (the site's own record of every game of the bot, read at the start and after each match) |
+| `--challenge <who>` | none | Challenge bots to standard matches, one at a time while no match of ours runs: `builtin` (the site's own bots, weakest first) or ids `3,4,5` in that order, each challenged once. `stronger` challenges every bot rated above us, weakest first, over and over. The site names only the bots we have played (in the records of those games), so `builtin` and `stronger` choose among them, and one that refuses (offline, or not taking challenges) is left alone for 10 minutes |
 | `--until-stable <n>:<points>` | off | Stop, as on a first Ctrl-C, once the last n rating changes moved the rating by no more than the points in all |
 | `--base <url>` | `https://othelloclub.com` | The server, e.g. the local stand-in |
 

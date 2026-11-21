@@ -127,7 +127,8 @@ pub struct OtherBot {
     pub id: i64,
     pub name: String,
     pub rating: Option<f64>,
-    pub online: bool,
+    /// `None`: the site does not say (it names only the bots we have played, in their records).
+    pub online: Option<bool>,
     pub playing: bool,
     pub builtin: bool,
     /// The bot's picture on the site, as a full address.
@@ -183,6 +184,110 @@ struct LegHist {
     opp_evals: Vec<(usize, f32)>,
     /// The opponent's clock when its turn began.
     opp_clock: Option<f64>,
+}
+
+fn record_key(r: &Value) -> (String, i64) {
+    (
+        r["kind"].as_str().unwrap_or("").to_string(),
+        r["id"].as_i64().unwrap_or(0),
+    )
+}
+
+/// The opponent of one of the site's records: the stream names no bot but ourselves, so the bots
+/// we know are the ones we have played.
+fn learn_opponent(names: &mut HashMap<i64, OtherBot>, r: &Value, base: &str) {
+    let o = &r["opponent"];
+    let (Some(id), Some(name)) = (o["bot_id"].as_i64(), o["name"].as_str()) else {
+        return;
+    };
+    let b = names.entry(id).or_default();
+    b.id = id;
+    b.name = name.to_string();
+    b.builtin = o["builtin"] == Value::Bool(true);
+    if let Some(r) = o["rating_after"].as_f64().or(o["rating_before"].as_f64()) {
+        b.rating = Some(r);
+    }
+    // Where the site's own pages take a bot's picture from.
+    b.photo.get_or_insert_with(|| {
+        let base = base.trim_end_matches('/');
+        format!("{base}/flipsight/bot_match_api.php?action=photo&bot_id={id}")
+    });
+}
+
+/// A line of results.jsonl from the site's record, for a match whose end we did not see.
+fn result_of_record(r: &Value) -> Value {
+    let opening: Vec<&str> = chunks2(r["opening"].as_str().unwrap_or(""));
+    let (mut mine, mut theirs) = (0, 0);
+    let legs: Vec<Value> = r["legs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|l| {
+            let black = l["my_color"] == "B";
+            let me = if black { 'B' } else { 'W' };
+            let discs = if l["result_discs"].is_array() {
+                &l["result_discs"]
+            } else {
+                &l["discs"]
+            };
+            let (b, w) = (
+                discs[0].as_i64().unwrap_or(0),
+                discs[1].as_i64().unwrap_or(0),
+            );
+            mine += if black { b } else { w };
+            theirs += if black { w } else { b };
+            let played = chunks2(l["moves"].as_str().unwrap_or(""));
+            let colors: Vec<char> = l["colors"].as_str().unwrap_or("").chars().collect();
+            let mut moves: String = opening.concat();
+            let mut ply = opening.iter().filter(|m| **m != "pa").count();
+            let (mut evals, mut opp_evals, mut opp_secs) = (Vec::new(), Vec::new(), Vec::new());
+            for (j, m) in played.iter().enumerate() {
+                if *m == "pa" {
+                    continue;
+                }
+                ply += 1;
+                moves.push_str(m);
+                let secs = l["used_ms"][j].as_f64().map(|ms| ms / 1000.0);
+                let eval = l["evals"][j].as_f64();
+                if colors.get(j) == Some(&me) {
+                    if let Some(e) = eval {
+                        evals.push(json!([ply, e, secs]));
+                    }
+                } else {
+                    if let Some(e) = eval {
+                        opp_evals.push(json!([ply, e]));
+                    }
+                    if let Some(s) = secs {
+                        opp_secs.push(json!([ply, s]));
+                    }
+                }
+            }
+            let end = final_board(&moves);
+            json!({"black": black, "discs": l["discs"], "result_discs": l["result_discs"],
+                   "status": l["status"], "moves": moves,
+                   "cells": end.as_ref().map(|e| e.0.clone()), "last": end.and_then(|e| e.1),
+                   "evals": evals, "opp_evals": opp_evals, "opp_secs": opp_secs})
+        })
+        .collect();
+    let result = match r["result"].as_str().unwrap_or("") {
+        x @ ("win" | "loss" | "draw") => x,
+        _ => "aborted",
+    };
+    json!({
+        "t": r["finished_ms"], "match": r["id"], "opponent": r["opponent"]["bot_id"],
+        "status": r["status"], "result": result,
+        "opponent_name": r["opponent"]["name"], "opponent_rating": r["opponent"]["rating_before"],
+        "my_rating": r["me"]["rating_after"], "my_rating_before": r["me"]["rating_before"],
+        "mine": mine, "theirs": theirs, "diff": mine - theirs,
+        "finish_reason": r["finish_reason"], "legs": legs, "record": r,
+    })
+}
+
+/// The site's notation: two characters a move, `pa` for a pass.
+fn chunks2(s: &str) -> Vec<&str> {
+    (0..s.len() / 2)
+        .filter_map(|i| s.get(i * 2..i * 2 + 2))
+        .collect()
 }
 
 /// A bot's `photo` is a path on the site; anything else (another host) is not shown.
@@ -418,6 +523,15 @@ pub struct Bot {
     pauser: pause::Pauser,
     moves: std::fs::File,
     results: std::fs::File,
+    /// The site's own records of our games, as it sends them.
+    games: std::fs::File,
+    /// The records already kept, as (kind, id), and the newest one's time.
+    kept: HashSet<(String, i64)>,
+    kept_until: i64,
+    /// Matches that ended while the stream was down: written from the site's record of them.
+    lost: HashSet<i64>,
+    /// When to ask the site for the records since the last one kept; `None` once read.
+    catch_up_at: Option<Instant>,
     ctl: Arc<Mutex<Control>>,
     view: Arc<Mutex<BotView>>,
     hist: HashMap<(i64, usize), LegHist>,
@@ -462,6 +576,19 @@ impl Bot {
             .lines()
             .filter_map(|l| serde_json::from_str::<Value>(l).ok()?["match"].as_i64())
             .collect();
+        let games = open("games.jsonl")?;
+        let mut kept = HashSet::new();
+        let mut kept_until = 0;
+        let mut names = HashMap::new();
+        for r in std::fs::read_to_string(o.out.join("games.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        {
+            kept.insert(record_key(&r));
+            kept_until = kept_until.max(r["updated_ms"].as_i64().unwrap_or(0));
+            learn_opponent(&mut names, &r, &o.base);
+        }
         let began = Instant::now();
         let mut slots = Vec::new();
         for _ in 0..WARM_WORKERS {
@@ -498,7 +625,12 @@ impl Bot {
             hist: HashMap::new(),
             challenge_key: String::new(),
             max_games: None,
-            names: HashMap::new(),
+            names,
+            games,
+            kept,
+            kept_until,
+            catch_up_at: Some(Instant::now()),
+            lost: HashSet::new(),
             cpu,
             api: Api::new(&o.base, o.token.clone()),
             pauser: pause::Pauser::new(&o.pause, o.pause_log.clone(), o.ggs_wire.clone()),
@@ -597,6 +729,9 @@ impl Bot {
             }
             last = Some(Instant::now());
             self.report_environment();
+            if self.catch_up_at.is_some_and(|t| t <= Instant::now()) {
+                self.catch_up();
+            }
             let v = self.world.snapshot();
             let leaving = stop.load(Ordering::Relaxed) || self.drain.load(Ordering::Relaxed);
             self.set_conn(match (self.world.up, leaving) {
@@ -649,6 +784,8 @@ impl Bot {
                 for (id, m) in &self.world.matches {
                     if m["status"] == "running" && !now.contains_key(id) {
                         log(&format!("match {id} ended while the stream was down"));
+                        self.lost.insert(*id);
+                        self.catch_up_at = Some(Instant::now());
                     }
                 }
                 self.world.matches = now;
@@ -671,6 +808,48 @@ impl Bot {
             self.world.bots = r["bots"].clone();
         }
         self.world.merge(&r["match"]);
+    }
+
+    /// Writes the site's records not kept yet, and learns the opponents in them.
+    fn keep(&mut self, records: &[Value]) {
+        for r in records {
+            self.kept_until = self.kept_until.max(r["updated_ms"].as_i64().unwrap_or(0));
+            learn_opponent(&mut self.names, r, &self.o.base);
+            if self.kept.insert(record_key(r)) {
+                let _ = writeln!(self.games, "{r}");
+            }
+            let id = r["id"].as_i64().unwrap_or(0);
+            if r["kind"] == "bot" && self.lost.remove(&id) && self.finished.insert(id) {
+                let _ = writeln!(self.results, "{}", result_of_record(r));
+                self.view.lock().unwrap().finished += 1;
+                log(&format!(
+                    "match {id} over, from the site's record: {}",
+                    r["result"]
+                ));
+            }
+        }
+    }
+
+    /// Asks the site for our games since the last record kept: the ones played before this
+    /// program kept records, and the ones that ended while the stream was down. One page a
+    /// call; a page that fails is asked for again a minute later.
+    fn catch_up(&mut self) {
+        match self.api.games(self.kept_until) {
+            Ok(records) => {
+                let before = self.kept.len();
+                self.keep(&records);
+                let new = self.kept.len() - before;
+                if !records.is_empty() {
+                    log(&format!("{} records read, {new} new", records.len()));
+                }
+                // The newest record's time comes back again, so a page with nothing new is the end.
+                self.catch_up_at = (new > 0).then(|| Instant::now() + Duration::from_secs(10));
+            }
+            Err(e) => {
+                log(&format!("records not read: {e}"));
+                self.catch_up_at = Some(Instant::now() + Duration::from_secs(60));
+            }
+        }
     }
 
     /// Tells the site the engine's details, at the start and when they change.
@@ -843,7 +1022,22 @@ impl Bot {
                 self.challenge_key = ctl.challenge.key().into();
                 self.to_challenge = None;
             }
-            self.challenge_next(v, &ctl.challenge);
+            // With no list from the site, the bots to challenge are the ones we have played;
+            // whether one is online shows only in its answer.
+            if v["bots"].is_array() {
+                self.challenge_next(v, &ctl.challenge);
+            } else {
+                let bots: Vec<Value> = self
+                    .names
+                    .values()
+                    .map(|b| {
+                        json!({"id": b.id, "name": b.name, "rating": {"rating": b.rating},
+                               "online": true, "is_builtin": b.builtin, "supported_games": ["std"]})
+                    })
+                    .collect();
+                let known = json!({"bot": v["bot"], "bots": bots});
+                self.challenge_next(&known, &ctl.challenge);
+            }
         }
         self.publish_view(&mine, server_now, recv);
         running > 0
@@ -874,7 +1068,7 @@ impl Bot {
                     id,
                     name: b["name"].as_str().unwrap_or("").to_string(),
                     rating: b["rating"]["rating"].as_f64(),
-                    online: b["online"] == Value::Bool(true),
+                    online: Some(b["online"] == Value::Bool(true)),
                     playing: b["games_now"].as_u64().is_some_and(|n| n > 0),
                     builtin: b["is_builtin"] == Value::Bool(true),
                     photo: photo_url(&self.o.base, &b["photo"]),
@@ -1231,6 +1425,8 @@ impl Bot {
             }
             Reply::Refused { error, .. } => {
                 log(&format!("challenge {name} ({id}): {error}"));
+                // Offline, or not taking challenges: asking again at once would only repeat it.
+                self.cooling.insert(id, Instant::now() + COOL_DOWN);
                 Asked::Refused
             }
             Reply::Failed(e) => {
@@ -1519,6 +1715,9 @@ impl Bot {
                        "opp_secs": h.map(|h| h.opp_secs).unwrap_or_default()})
             })
             .collect();
+        if let Some(r) = m.record.clone() {
+            self.keep(&[r]);
+        }
         let o = self.names.get(&opp);
         // The site's record names the opponent when no list of bots has.
         let theirs_in = |k: &str| m.record.as_ref().map(|r| r["opponent"][k].clone());
@@ -1592,6 +1791,34 @@ mod tests {
         assert_eq!(w.matches[&5]["state"]["revision"], 3, "the state is kept");
         assert_eq!(w.snapshot()["matches"][0]["status"], "finished");
         assert!(!w.merge(&Value::Null));
+    }
+
+    #[test]
+    fn a_result_is_read_from_the_sites_record() {
+        let r = json!({
+            "id": 9, "kind": "bot", "status": "finished", "result": "win", "finished_ms": 5,
+            "finish_reason": "discs", "opening": "f5d6",
+            "me": {"rating_before": 1500.0, "rating_after": 1510.0},
+            "opponent": {"bot_id": 3, "name": "nova", "rating_before": 1490.0},
+            "legs": [{"my_color": "B", "status": "finished", "discs": [40, 24],
+                      "moves": "c3pad3", "colors": "BWW", "used_ms": [1500, 0, 2000],
+                      "evals": [2.5, null, -3.0]},
+                     {"my_color": "W", "status": "timeout", "discs": [30, 20],
+                      "result_discs": [0, 64], "moves": "", "colors": ""}],
+        });
+        let x = result_of_record(&r);
+        assert_eq!(
+            (x["mine"].clone(), x["theirs"].clone(), x["diff"].clone()),
+            (json!(104), json!(24), json!(80))
+        );
+        assert_eq!(x["legs"][0]["moves"], "f5d6c3d3");
+        assert_eq!(x["legs"][0]["evals"], json!([[3, 2.5, 1.5]]));
+        assert_eq!(x["legs"][0]["opp_evals"], json!([[4, -3.0]]));
+        assert_eq!(x["legs"][0]["opp_secs"], json!([[4, 2.0]]));
+        assert_eq!(
+            (x["opponent_name"].clone(), x["my_rating"].clone()),
+            (json!("nova"), json!(1510.0))
+        );
     }
 
     fn after(moves: &[&str]) -> Vec<u8> {

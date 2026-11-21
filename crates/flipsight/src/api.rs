@@ -63,6 +63,33 @@ impl Api {
         }
     }
 
+    /// Our finished games from `since` (ms) on, oldest first, at most 300: the site's records, one
+    /// per line of its answer.
+    pub fn games(&self, since: i64) -> Result<Vec<Value>, String> {
+        let body = serde_json::json!({"action": "agent_games", "since": since, "max": 300});
+        let url = format!("{}/flipsight/bot_match_api.php", self.base);
+        let res = self
+            .agent
+            .post(&url)
+            .set("Authorization", &self.auth())
+            .set("Content-Type", "application/json")
+            .send_string(&body.to_string());
+        let text = match res {
+            Ok(r) => r.into_string().map_err(|e| e.kind().to_string())?,
+            Err(ureq::Error::Status(code, r)) => {
+                let v: Value = serde_json::from_str(&r.into_string().unwrap_or_default())
+                    .unwrap_or(Value::Null);
+                return Err(format!("{code}: {}", v["error"].as_str().unwrap_or("-")));
+            }
+            Err(e) => return Err(e.kind().to_string()),
+        };
+        Ok(text
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
+            .filter(|v| v["id"].is_i64() && v["legs"].is_array())
+            .collect())
+    }
+
     /// The `state` event a fresh stream begins with, then hangs up: who a token belongs to.
     /// It closes any stream the token already has, so it is for bots that are not running.
     pub fn first_state(&self) -> Reply {

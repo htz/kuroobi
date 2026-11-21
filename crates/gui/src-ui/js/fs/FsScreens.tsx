@@ -577,7 +577,7 @@ function FsBots({ fs, say }: { fs: FsSnapshot; say: (s: string) => void }) {
   const bots = v?.bots ?? [];
   const rank = bots.findIndex((b) => b.id === sel.id);
   // Ranks are among all bots, whatever the list is narrowed to.
-  const shown = bots.map((b, i) => ({ b, i })).filter(({ b }) => (!hideBuiltin || !b.builtin) && (!onlineOnly || b.online || b.playing));
+  const shown = bots.map((b, i) => ({ b, i })).filter(({ b }) => (!hideBuiltin || !b.builtin) && (!onlineOnly || b.online !== false || b.playing));
   const w = results.filter((r) => r.diff > 0).length;
   const l = results.filter((r) => r.diff < 0).length;
   const d = results.filter((r) => r.diff === 0 && r.result !== 'aborted').length;
@@ -630,7 +630,7 @@ function FsBots({ fs, say }: { fs: FsSnapshot; say: (s: string) => void }) {
                   const asked = out?.target === b.id;
                   const st = cooling.has(b.id) ? [t('fs.bots.declined'), 'var(--sub)']
                     : b.playing ? [t('fs.state.playing'), 'var(--ok)']
-                    : b.online ? [t('fs.bots.online'), 'var(--accent)'] : [t('fs.bots.offline'), 'var(--sub)'];
+                    : b.online == null ? ['', 'var(--sub)'] : b.online ? [t('fs.bots.online'), 'var(--accent)'] : [t('fs.bots.offline'), 'var(--sub)'];
                   return (
                     <div key={b.id} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-field)',
                                              padding: '0 var(--sp-3)', borderBottom: '1px solid var(--border-weak)', fontSize: 'var(--fs-5)',
@@ -650,7 +650,7 @@ function FsBots({ fs, say }: { fs: FsSnapshot; say: (s: string) => void }) {
                       <span style={{ width: 96, flex: 'none', color: st[1], fontSize: 'var(--fs-6)', fontWeight: 400 }}>{st[0]}</span>
                       <span style={{ width: 120, flex: 'none', display: 'flex', justifyContent: 'flex-end', fontWeight: 400 }}>
                         {asked ? <span style={{ fontSize: 'var(--fs-6)', color: 'var(--accent)' }}>{t('fs.bots.asking', { s: since })}</span>
-                          : !me && <Button size="row" disabled={!b.online || b.playing || !!out || full || !liveConn(sel.conn)}
+                          : !me && <Button size="row" disabled={b.online === false || b.playing || !!out || full || !liveConn(sel.conn)}
                                            onClick={() => run(fsApi.challenge(sel.id, b.id))}>{t('fs.bots.ask')}</Button>}
                       </span>
                     </div>
