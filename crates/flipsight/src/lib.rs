@@ -4,7 +4,7 @@ pub mod api;
 pub mod manager;
 mod pause;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,7 +18,7 @@ use play::{Done, EngineWorker, Job};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
-use api::{Api, Leg, Match, Reply};
+use api::{Api, Leg, Match, Reply, Wire};
 
 pub struct Options {
     pub base: String,
@@ -77,7 +77,7 @@ impl Challenge {
     }
 }
 
-/// What may change while the bot runs; read at every poll.
+/// What may change while the bot runs.
 #[derive(Clone)]
 pub struct Control {
     /// Take challenges at all.
@@ -95,7 +95,7 @@ pub struct Control {
     pub challenge_now: Option<i64>,
 }
 
-/// What the bot shows of itself, refreshed at every poll.
+/// What the bot shows of itself.
 #[derive(Clone, Default, Serialize)]
 pub struct BotView {
     pub id: i64,
@@ -149,7 +149,7 @@ pub struct LiveLeg {
     pub cells: Vec<u8>,
     pub turn: u8,
     pub my_color: u8,
-    /// Black's and white's time left as of this poll.
+    /// Black's and white's time left as of the last look at the state.
     pub clocks_ms: Vec<f64>,
     pub discs: Vec<i64>,
     pub last: Option<i64>,
@@ -164,7 +164,7 @@ pub struct LiveLeg {
     pub moves: String,
 }
 
-/// One leg as followed poll by poll, to keep its moves.
+/// One leg as followed state by state, to keep its moves.
 #[derive(Default)]
 struct LegHist {
     cells: Vec<u8>,
@@ -217,7 +217,7 @@ pub fn final_board(moves: &str) -> Option<(Vec<u8>, Option<usize>)> {
 }
 
 /// The moves that turned one board into the next: the newly filled squares, in an order that
-/// replays to it (a side with no move at a square passes). Polls can miss several moves, most
+/// replays to it (a side with no move at a square passes). Several moves can come at once, most
 /// often at the end of a game.
 fn infer_moves(prev: &[u8], turn: u8, now: &[u8]) -> Option<Vec<usize>> {
     let new: Vec<usize> = (0..64).filter(|&i| prev[i] == 0 && now[i] != 0).collect();
@@ -233,7 +233,7 @@ fn infer_moves(prev: &[u8], turn: u8, now: &[u8]) -> Option<Vec<usize>> {
     find_order(board_of(&leg)?, &new, &mut seq, now).then_some(seq)
 }
 
-/// Squares filled between two polls that are still searched for an order.
+/// Squares filled between two states that are still searched for an order.
 const MAX_INFERRED: usize = 12;
 
 fn find_order(b: Board, left: &[usize], seq: &mut Vec<usize>, now: &[u8]) -> bool {
@@ -393,8 +393,11 @@ pub struct Bot {
     lag: f64,
     /// Each leg's clock when its last search began, and the seconds that search took.
     spent: HashMap<(i64, usize), (f64, f64)>,
-    /// A challenge was just accepted: poll again at once for the started match.
-    answered_any_pending: bool,
+    /// Challenges answered (true: taken) that the stream still shows as waiting.
+    decided: HashMap<i64, bool>,
+    world: World,
+    /// The engine details the site was last told.
+    env_sent: Option<Value>,
     /// Bots still to challenge, once the list is known.
     to_challenge: Option<std::collections::VecDeque<(i64, String)>>,
     /// Set from outside: take no new match, and stop once the running ones are over.
@@ -415,7 +418,7 @@ pub struct Bot {
     hist: HashMap<(i64, usize), LegHist>,
     challenge_key: String,
     max_games: Option<usize>,
-    /// Every standard bot in the last poll.
+    /// Every standard bot the site has told us of.
     names: HashMap<i64, OtherBot>,
     cpu: Option<String>,
 }
@@ -496,7 +499,9 @@ impl Bot {
             pauser: pause::Pauser::new(&o.pause, o.pause_log.clone(), o.ggs_wire.clone()),
             lag: o.lag,
             spent: HashMap::new(),
-            answered_any_pending: false,
+            decided: HashMap::new(),
+            world: World::default(),
+            env_sent: None,
             to_challenge: None,
             drain: Arc::new(AtomicBool::new(false)),
             draining_logged: false,
@@ -517,7 +522,7 @@ impl Bot {
         })
     }
 
-    /// The switches the bot reads at every poll.
+    /// The switches the bot reads every time it acts.
     pub fn control(&self) -> Arc<Mutex<Control>> {
         self.ctl.clone()
     }
@@ -547,81 +552,198 @@ impl Bot {
     }
 
     pub fn run(&mut self, stop: Arc<AtomicBool>) -> Result<(), String> {
-        let (wake_tx, wake) = mpsc::channel::<()>();
+        let (tx, wire) = mpsc::channel::<Result<Wire, String>>();
         {
             let stop = stop.clone();
             let api = Api::new(&self.o.base, self.o.token.clone());
             std::thread::spawn(move || {
-                let r = api.stream(&stop, |ev| match ev["type"].as_str() {
-                    Some("hello") => {
-                        log(&format!("stream connected, bot id {}", ev["bot_id"]));
-                        let _ = wake_tx.send(());
-                    }
-                    Some("match") => {
-                        let _ = wake_tx.send(());
-                    }
-                    _ => {}
-                });
-                if let Err(e) = r {
-                    log(&format!("stream stopped: {e}"));
+                let events = tx.clone();
+                if let Err(e) = api.stream(&stop, |w| {
+                    let _ = events.send(Ok(w));
+                }) {
+                    let _ = tx.send(Err(e));
                 }
             });
         }
-        let mut last_poll: Option<Instant> = None;
+        let mut last: Option<Instant> = None;
         let mut busy = false;
-        let mut want_poll = true;
         while !stop.load(Ordering::Relaxed) {
-            if wake.recv_timeout(Duration::from_millis(30)).is_ok() {
-                want_poll = true;
+            let mut changed = false;
+            let mut next = wire.recv_timeout(Duration::from_millis(30)).ok();
+            while let Some(w) = next {
+                match w {
+                    Ok(w) => changed |= self.on_wire(w),
+                    Err(e) => {
+                        log(&format!("stream stopped: {e}"));
+                        self.set_conn("refused");
+                        self.pauser.hold(false);
+                        return Err(format!("{e}; check FS_BOT_TOKEN"));
+                    }
+                }
+                next = wire.try_recv().ok();
             }
             self.collect();
-            let since = last_poll.map_or(Duration::MAX, |t| t.elapsed());
-            let every = Duration::from_secs(if busy { 1 } else { 5 });
-            if since < Duration::from_secs(1) || !(want_poll || since >= every) {
+            if !self.world.synced {
                 continue;
             }
-            want_poll = false;
-            last_poll = Some(Instant::now());
-            let mut body = Map::new();
-            body.insert("environment".into(), self.environment());
-            match self.api.call("agent_poll", body) {
-                Reply::Ok(v) => {
-                    let recv = Instant::now();
-                    let leaving =
-                        stop.load(Ordering::Relaxed) || self.drain.load(Ordering::Relaxed);
-                    self.set_conn(if leaving { "draining" } else { "online" });
-                    busy = self.handle(&v, recv);
-                    if self.drain.load(Ordering::Relaxed) && !busy && !self.has_pending(&v) {
-                        log("no match running; stopped");
-                        break;
-                    }
-                    if self.answered_any_pending {
-                        self.answered_any_pending = false;
-                        want_poll = true;
-                    }
-                }
-                Reply::Refused { status: 401, .. } => {
-                    self.set_conn("refused");
-                    self.pauser.hold(false);
-                    return Err("invalid bot credential; check FS_BOT_TOKEN".into());
-                }
-                Reply::Refused { status, error } => {
-                    log(&format!("poll refused ({status}): {error}"))
-                }
-                Reply::Failed(e) => {
-                    self.set_conn("retrying");
-                    log(&format!("poll failed: {e}"))
-                }
+            let every = Duration::from_secs(if busy { 1 } else { 5 });
+            if !changed && last.is_some_and(|t| t.elapsed() < every) {
+                continue;
+            }
+            last = Some(Instant::now());
+            self.report_environment();
+            let v = self.world.snapshot();
+            let leaving = stop.load(Ordering::Relaxed) || self.drain.load(Ordering::Relaxed);
+            self.set_conn(match (self.world.up, leaving) {
+                (false, _) => "retrying",
+                (true, true) => "draining",
+                (true, false) => "online",
+            });
+            busy = self.handle(&v, Instant::now());
+            self.world
+                .matches
+                .retain(|_, m| matches!(m["status"].as_str(), Some("pending" | "running")));
+            let known = &self.world.matches;
+            self.decided.retain(|id, _| known.contains_key(id));
+            if self.drain.load(Ordering::Relaxed) && !busy && !self.has_pending(&v) {
+                log("no match running; stopped");
+                break;
             }
         }
         self.pauser.hold(false);
         self.set_conn("stopped");
         Ok(())
     }
+
+    /// Takes one thing from the stream; true when our state changed.
+    fn on_wire(&mut self, w: Wire) -> bool {
+        let ev = match w {
+            Wire::Down(why) => {
+                log(&format!("stream down ({why}); reconnecting"));
+                self.world.up = false;
+                return self.world.synced;
+            }
+            Wire::Event(ev) => ev,
+        };
+        if let Some(t) = ev["server_now_ms"].as_i64() {
+            let d = t - now_ms();
+            self.world.offset = Some(self.world.offset.map_or(d, |o| o.max(d)));
+        }
+        match ev["type"].as_str() {
+            Some("hello") => {
+                log(&format!("stream connected, bot id {}", ev["bot_id"]));
+                false
+            }
+            Some("state") if ev["ok"] != Value::Bool(false) => {
+                let mut now = BTreeMap::new();
+                for m in ev["matches"].as_array().into_iter().flatten() {
+                    if let Some(id) = m["id"].as_i64() {
+                        now.insert(id, m.clone());
+                    }
+                }
+                for (id, m) in &self.world.matches {
+                    if m["status"] == "running" && !now.contains_key(id) {
+                        log(&format!("match {id} ended while the stream was down"));
+                    }
+                }
+                self.world.matches = now;
+                self.world.synced = true;
+                self.world.up = true;
+                self.absorb(&ev);
+                true
+            }
+            Some("match") => self.world.merge(&ev["match"]),
+            _ => false,
+        }
+    }
+
+    /// Keeps what an answer or an event says of us, the other bots and a match of ours.
+    fn absorb(&mut self, r: &Value) {
+        if r["bot"].is_object() {
+            self.world.bot = r["bot"].clone();
+        }
+        if r["bots"].is_array() {
+            self.world.bots = r["bots"].clone();
+        }
+        self.world.merge(&r["match"]);
+    }
+
+    /// Tells the site the engine's details, at the start and when they change.
+    fn report_environment(&mut self) {
+        let env = self.environment();
+        if self.env_sent.as_ref() == Some(&env) {
+            return;
+        }
+        let mut body = Map::new();
+        body.insert("environment".into(), env.clone());
+        match self.api.call("agent_environment", body) {
+            Reply::Ok(r) => {
+                self.env_sent = Some(env);
+                self.absorb(&r);
+            }
+            Reply::Refused { status, error } => {
+                log(&format!("environment refused ({status}): {error}"));
+                self.env_sent = Some(env);
+            }
+            Reply::Failed(e) => log(&format!("environment not sent: {e}")),
+        }
+    }
+}
+
+/// Our state as the stream gives it: the last `state` event, kept current by `match` events.
+#[derive(Default)]
+struct World {
+    bot: Value,
+    bots: Value,
+    matches: BTreeMap<i64, Value>,
+    /// The server's clock minus ours, as the least delayed event showed it.
+    offset: Option<i64>,
+    /// A `state` event has come.
+    synced: bool,
+    /// The stream is connected.
+    up: bool,
+}
+
+impl World {
+    /// Our view of one match replaces the one held, unless it is older.
+    fn merge(&mut self, m: &Value) -> bool {
+        let Some(id) = m["id"].as_i64() else {
+            return false;
+        };
+        // An answer may carry less than our view; such a match would look like nobody's.
+        let whole =
+            m["status"].is_string() && (id < 0 || (m["bot_a"].is_i64() && m["bot_b"].is_i64()));
+        if !whole {
+            return false;
+        }
+        let rev = |x: &Value| x["state"]["revision"].as_i64();
+        let mut m = m.clone();
+        if let Some(old) = self.matches.get(&id) {
+            let same_game =
+                old["room_created_at"] == m["room_created_at"] && old["round_no"] == m["round_no"];
+            match (rev(old), rev(&m)) {
+                (Some(a), Some(b)) if same_game && b < a => return false,
+                (Some(_), None) if same_game => m["state"] = old["state"].clone(),
+                _ => {}
+            }
+        }
+        self.matches.insert(id, m);
+        true
+    }
+
+    /// The whole state as one object: us, the other bots and our matches.
+    fn snapshot(&self) -> Value {
+        json!({
+            "bot": self.bot,
+            "bots": self.bots,
+            "matches": self.matches.values().collect::<Vec<_>>(),
+            "server_now_ms": now_ms() + self.offset.unwrap_or(0),
+        })
+    }
 }
 
 impl Bot {
-    /// Acts on one poll; returns whether a match of ours is running.
+    /// Acts on the state as it stands; returns whether a match of ours is running.
     fn handle(&mut self, v: &Value, recv: Instant) -> bool {
         let ctl = self.ctl.lock().unwrap().clone();
         if ctl.use_book != self.engine_cfg.use_book {
@@ -635,6 +757,13 @@ impl Bot {
             self.max_games = Some(n as usize);
         }
         self.learn_bots(v);
+        if let (Some(id), Some(name)) = (v["bot"]["id"].as_i64(), v["bot"]["name"].as_str()) {
+            let me = self.names.entry(id).or_default();
+            me.id = id;
+            me.name = name.to_string();
+            me.rating = v["bot"]["rating"]["rating"].as_f64().or(me.rating);
+            me.photo = photo_url(&self.o.base, &v["bot"]["photo"]).or(me.photo.take());
+        }
         self.track_rating(v);
         let server_now = v["server_now_ms"].as_i64().unwrap_or_else(now_ms);
         let matches: Vec<Match> = v["matches"]
@@ -655,9 +784,11 @@ impl Bot {
         for m in &mine {
             match m.status.as_str() {
                 "pending" if m.bot_b == self.me || m.id < 0 => {
-                    if self.answer(m, &ctl, taking) {
-                        taking += 1;
-                    }
+                    let taken = match self.decided.get(&m.id) {
+                        Some(&taken) => taken,
+                        None => self.answer(m, &ctl, taking),
+                    };
+                    taking += usize::from(taken);
                 }
                 "running" => {
                     if let Some(s) = &m.state {
@@ -666,7 +797,7 @@ impl Bot {
                     }
                 }
                 "finished" | "aborted" if !self.finished.contains(&m.id) => {
-                    // the last moves came after the last poll of the running match
+                    // the last moves came with the event that ended the match
                     if let Some(s) = &m.state {
                         self.track_legs(m, s);
                     }
@@ -713,7 +844,7 @@ impl Bot {
         running > 0
     }
 
-    /// Names, ratings and states of the standard bots in the poll, and our matches at once.
+    /// Names, ratings and states of the standard bots, and our matches at once.
     fn learn_bots(&mut self, v: &Value) {
         let Some(bots) = v["bots"].as_array() else {
             return;
@@ -747,7 +878,7 @@ impl Bot {
         }
     }
 
-    /// Follows each leg poll by poll, keeping its moves.
+    /// Follows each leg state by state, keeping its moves.
     fn track_legs(&mut self, m: &Match, s: &api::State) {
         let part = if m.bot_a == self.me { 0 } else { 1 };
         for (i, leg) in s.legs.iter().enumerate() {
@@ -1071,7 +1202,7 @@ impl Bot {
                     "challenged {name} ({id}): match {}",
                     r["match_id"]
                 ));
-                self.answered_any_pending = true;
+                self.absorb(&r);
                 Asked::Yes
             }
             Reply::Refused { status: 409, error }
@@ -1118,13 +1249,20 @@ impl Bot {
             && held < self.cap(ctl);
         let action = if take { "agent_accept" } else { "agent_reject" };
         match self.api.call(action, body) {
-            Reply::Ok(_) if take => {
-                log(&format!("accepted match {}", m.id));
-                self.answered_any_pending = true;
-                return true;
+            Reply::Ok(r) => {
+                if take {
+                    log(&format!("accepted match {}", m.id));
+                } else {
+                    log(&format!("declined match {} ({})", m.id, m.game_mode));
+                }
+                self.decided.insert(m.id, take);
+                self.absorb(&r);
+                return take;
             }
-            Reply::Ok(_) => log(&format!("declined match {} ({})", m.id, m.game_mode)),
-            Reply::Refused { error, .. } => log(&format!("{action} {}: {error}", m.id)),
+            Reply::Refused { error, .. } => {
+                log(&format!("{action} {}: {error}", m.id));
+                self.decided.insert(m.id, false);
+            }
             Reply::Failed(e) => log(&format!("{action} {}: {e}", m.id)),
         }
         false
@@ -1157,7 +1295,7 @@ impl Bot {
             let human = (m.id < 0).then(|| (m.round_no, m.room_created_at.clone()));
             if leg.legal_moves.is_empty() {
                 if human.is_none() {
-                    self.send_move(m.id, i, leg.revision, -1, None);
+                    self.send_move(m.id, i, leg.revision, -1, None, None);
                 }
                 continue;
             }
@@ -1267,7 +1405,17 @@ impl Bot {
                 h.evals
                     .push((61 - sent.empties as usize, mv.value, secs as f32));
             }
-            self.send_move(sent.match_id, sent.key.1, sent.revision, idx, sent.human);
+            // In discs from our side; the site shows it only in bot matches.
+            let eval = (sent.human.is_none() && mv.pos.is_some() && mv.value.is_finite())
+                .then(|| (f64::from(mv.value).clamp(-64.0, 64.0) * 100.0).round() / 100.0);
+            self.send_move(
+                sent.match_id,
+                sent.key.1,
+                sent.revision,
+                idx,
+                sent.human,
+                eval,
+            );
         }
     }
 
@@ -1278,6 +1426,7 @@ impl Bot {
         revision: i64,
         mv: i64,
         human: Option<(Option<i64>, Option<String>)>,
+        eval: Option<f64>,
     ) {
         let mut body = Map::new();
         body.insert("match_id".into(), json!(match_id));
@@ -1288,10 +1437,14 @@ impl Bot {
             body.insert("round_no".into(), json!(round));
             body.insert("room_created_at".into(), json!(created));
         }
+        if let Some(e) = eval {
+            body.insert("eval".into(), json!(e));
+        }
         for attempt in 0..3 {
             match self.api.call("agent_move", body.clone()) {
-                Reply::Ok(_) => {
+                Reply::Ok(r) => {
                     self.answered.insert((match_id, leg, revision));
+                    self.absorb(&r);
                     return;
                 }
                 Reply::Refused { status, error } if status == 429 || status == 503 => {
@@ -1392,6 +1545,29 @@ mod tests {
         assert!((budget(30.0, 4.0, 1.5, 20) - (30.0 - 4.0 - 1.65 * 9.0)).abs() < 1e-9);
         assert_eq!(budget(10.0, 4.0, 0.8, 1), 6.0);
         assert_eq!(budget(5.0, 4.0, 0.8, 12), 0.05);
+    }
+
+    #[test]
+    fn a_match_event_replaces_ours_unless_it_is_older_or_partial() {
+        let ev = |status: &str, rev: Option<i64>| {
+            let mut m = json!({"id": 5, "bot_a": 1, "bot_b": 2, "status": status});
+            if let Some(r) = rev {
+                m["state"] = json!({"revision": r});
+            }
+            m
+        };
+        let mut w = World::default();
+        assert!(w.merge(&ev("pending", None)));
+        assert!(w.merge(&ev("running", Some(3))));
+        assert!(!w.merge(&ev("running", Some(2))), "a late event");
+        assert!(
+            !w.merge(&json!({"id": 5, "status": "running"})),
+            "an answer's short form"
+        );
+        assert!(w.merge(&ev("finished", None)));
+        assert_eq!(w.matches[&5]["state"]["revision"], 3, "the state is kept");
+        assert_eq!(w.snapshot()["matches"][0]["status"], "finished");
+        assert!(!w.merge(&Value::Null));
     }
 
     fn after(moves: &[&str]) -> Vec<u8> {

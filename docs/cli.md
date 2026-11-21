@@ -469,7 +469,7 @@ FS_BOT_TOKEN=fsbm_... kuroobi-flipsight [--threads N] [--pause NAMES] [--out DIR
 | `--threads <n>` | half the GUI's setting | Threads for each leg's engine, as FlipSight counts and limits them (declared to the site); a match's two legs think at once, so it takes twice that |
 | `--book` | off | Use the opening book |
 | `--margin <s>` | 1.5 | Seconds kept back from the clock on every move |
-| `--lag <s>` | 0.8 | First guess of the seconds a move loses to polling and the network; measured from then on, and 1.3 times it is kept back for each move still to play |
+| `--lag <s>` | 0.8 | First guess of the seconds a move loses to the stream and the network; measured from then on, and 1.3 times it is kept back for each move still to play |
 | `--practice` | off | Report the bot as practising: kept out of automatic matching, games unrated |
 | `--pause <names>` | none | Process names (`pgrep -x` pattern, e.g. `gendata\|nnue_train`) stopped while a match runs and resumed after it, unless a GGS game of `kuroobi` is live then |
 | `--pause-log <file>` | `<out>/paused.txt` | Where each pause and resume is noted |

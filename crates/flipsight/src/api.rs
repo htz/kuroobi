@@ -1,9 +1,10 @@
 //! The FlipSight bot API: JSON actions on one endpoint, and an NDJSON event stream.
 
+use std::collections::VecDeque;
 use std::io::BufRead;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -62,35 +63,98 @@ impl Api {
         }
     }
 
-    /// Reads the event stream until `stop`, reconnecting from 1 s up to 30 s apart.
-    /// Returns early only when the token is refused.
-    pub fn stream(
-        &self,
-        stop: &Arc<AtomicBool>,
-        mut on_event: impl FnMut(&Value),
-    ) -> Result<(), String> {
+    /// The `state` event a fresh stream begins with, then hangs up: who a token belongs to.
+    /// It closes any stream the token already has, so it is for bots that are not running.
+    pub fn first_state(&self) -> Reply {
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(10))
-            .timeout_read(Duration::from_secs(40))
+            .timeout_read(Duration::from_secs(10))
+            .build();
+        let url = format!("{}/flipsight_api/bot-stream", self.base);
+        match agent.get(&url).set("Authorization", &self.auth()).call() {
+            Ok(r) => {
+                for line in std::io::BufReader::new(r.into_reader()).lines().take(8) {
+                    let Ok(line) = line else { break };
+                    let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
+                        continue;
+                    };
+                    if v["type"] == "state" {
+                        return if v["ok"] == Value::Bool(false) {
+                            Reply::Failed("state unavailable".into())
+                        } else {
+                            Reply::Ok(v)
+                        };
+                    }
+                }
+                Reply::Failed("no state".into())
+            }
+            Err(ureq::Error::Status(status, _)) => Reply::Refused {
+                status,
+                error: "stream refused".into(),
+            },
+            Err(e) => Reply::Failed(e.kind().to_string()),
+        }
+    }
+
+    /// Reads the event stream until `stop`, reconnecting from 1 s up to 30 s apart.
+    /// Returns early only when the token is refused.
+    pub fn stream(&self, stop: &Arc<AtomicBool>, mut on: impl FnMut(Wire)) -> Result<(), String> {
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(10))
+            .timeout_read(STREAM_QUIET)
             .build();
         let url = format!("{}/flipsight_api/bot-stream", self.base);
         let mut delay = 1;
+        let mut opened: VecDeque<Instant> = VecDeque::new();
         while !stop.load(Ordering::Relaxed) {
-            match agent.get(&url).set("Authorization", &self.auth()).call() {
+            while opened
+                .front()
+                .is_some_and(|t| t.elapsed() >= CONNECT_WINDOW)
+            {
+                opened.pop_front();
+            }
+            if opened.len() >= MAX_CONNECTS {
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+            let began = Instant::now();
+            opened.push_back(began);
+            let why = match agent.get(&url).set("Authorization", &self.auth()).call() {
                 Ok(r) => {
-                    delay = 1;
+                    let mut why = "closed".to_string();
                     for line in std::io::BufReader::new(r.into_reader()).lines() {
-                        let Ok(line) = line else { break };
+                        let line = match line {
+                            Ok(l) => l,
+                            Err(e) => {
+                                why = e.kind().to_string();
+                                break;
+                            }
+                        };
                         if stop.load(Ordering::Relaxed) {
                             return Ok(());
                         }
-                        if let Ok(v) = serde_json::from_str::<Value>(line.trim()) {
-                            on_event(&v);
+                        let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
+                            continue;
+                        };
+                        let unavailable = v["type"] == "state" && v["ok"] == Value::Bool(false);
+                        on(Wire::Event(v));
+                        if unavailable {
+                            why = "state unavailable".into();
+                            break;
                         }
                     }
+                    why
                 }
                 Err(ureq::Error::Status(401, _)) => return Err("invalid bot credential".into()),
-                Err(_) => {}
+                Err(ureq::Error::Status(code, _)) => format!("HTTP {code}"),
+                Err(e) => e.kind().to_string(),
+            };
+            if stop.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            on(Wire::Down(why));
+            if began.elapsed() >= Duration::from_secs(60) {
+                delay = 1;
             }
             std::thread::sleep(Duration::from_secs(delay));
             delay = (delay * 2).min(30);
@@ -98,6 +162,19 @@ impl Api {
         Ok(())
     }
 }
+
+/// What the stream hands on: one event, or that the connection ended and why.
+pub enum Wire {
+    Event(Value),
+    Down(String),
+}
+
+/// The server pings every 10 s; no line for 15 s means the stream is stuck.
+const STREAM_QUIET: Duration = Duration::from_secs(15);
+
+/// The site leaves a bot out of automatic matching past 10 connections in 10 minutes.
+const MAX_CONNECTS: usize = 9;
+const CONNECT_WINDOW: Duration = Duration::from_secs(600);
 
 #[derive(Deserialize, Default, Clone)]
 #[serde(default)]
@@ -151,4 +228,6 @@ pub struct Leg {
 pub struct Played {
     #[serde(rename = "move")]
     pub mv: i64,
+    /// What the mover sent with the move, in discs from its own side.
+    pub eval: Option<f64>,
 }

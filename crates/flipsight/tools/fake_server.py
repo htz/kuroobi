@@ -5,15 +5,28 @@
     FS_BOT_TOKEN=local flipsight --base http://127.0.0.1:<port>
 
 It offers the bot one standard match (accepted) and one anti match (declined); the opponent
-answers every move with a random legal one after 0.2 s, the worst case for polling delays.
+answers every move with a random legal one after 0.2 s and sends an eval with it. The state
+goes out on the stream only (bot API v2): agent_poll answers 410.
+
+    FAKE_DROP=<seconds>  closes every stream after that long, to try reconnecting.
 """
-import json, random, sys, threading, time
+import json, os, random, sys, threading, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 ME, OPP, LIMIT = 7, 99, float(sys.argv[2]) if len(sys.argv) > 2 else 10.0
 lock = threading.Lock()
 rnd = random.Random(1)
 now = lambda: int(time.time() * 1000)
+DROP = float(os.environ.get("FAKE_DROP", 0))
+events, polls = [], [0]
+
+
+def public(m):
+    return {k: v for k, v in m.items() if not k.startswith("_")}
+
+
+def emit(m):
+    events.append(json.dumps({"type": "match", "view": "agent", "match": public(m)}))
 
 
 def legal(board, c):
@@ -87,7 +100,7 @@ def refresh(leg):
     leg["legal_moves"] = legal(leg["board"], leg["turn"]) if leg["status"] == "active" else []
 
 
-def play(m, li, mv):
+def play(m, li, mv, ev=None):
     leg = m["state"]["legs"][li]
     t = now()
     leg["clocks_ms"][leg["turn"] - 1] -= t - leg["turn_started_ms"]
@@ -100,7 +113,7 @@ def play(m, li, mv):
         c = leg["turn"]
         if mv >= 0:
             leg["board"] = _apply(leg["board"], c, mv)
-        leg["history"].append({"color": c, "move": mv, "at_ms": t})
+        leg["history"].append({"color": c, "move": mv, "at_ms": t, **({} if ev is None else {"eval": ev})})
         leg["turn"] = 3 - c
         if not legal(leg["board"], 1) and not legal(leg["board"], 2):
             leg["status"] = "finished"
@@ -110,12 +123,9 @@ def play(m, li, mv):
     finish(m)
 
 
-changes = [0]
-
-
 def finish(m):
-    changes[0] += 1
     s = m["state"]
+    s["revision"] += 1
     if all(l["status"] != "active" for l in s["legs"]):
         tot = [0, 0]
         for l in s["legs"]:
@@ -133,6 +143,7 @@ def finish(m):
         s["finish_reason"] = "discs"
         m["status"] = "finished"
         print("FINISHED", m["id"], tot, flush=True)
+    emit(m)
 
 
 def opponent_loop():
@@ -145,7 +156,10 @@ def opponent_loop():
                 for li, leg in enumerate(m["state"]["legs"]):
                     oc = 1 if leg["black_participant"] == 0 else 2
                     if leg["status"] == "active" and leg["turn"] == oc:
-                        play(m, li, rnd.choice(leg["legal_moves"]) if leg["legal_moves"] else -1)
+                        if leg["legal_moves"]:
+                            play(m, li, rnd.choice(leg["legal_moves"]), rnd.randint(-8, 8))
+                        else:
+                            play(m, li, -1)
 
 
 class H(BaseHTTPRequestHandler):
@@ -161,22 +175,32 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def line(self, obj):
+        if isinstance(obj, str):
+            obj = json.loads(obj)
+        obj["server_now_ms"] = now()
+        self.wfile.write((json.dumps(obj) + "\n").encode())
+        self.wfile.flush()
+
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write((json.dumps({"type": "hello", "bot_id": ME, "server_now_ms": now()}) + "\n").encode())
-        self.wfile.flush()
-        seen, last = changes[0], time.time()
-        while True:
-            time.sleep(0.05)
-            if changes[0] != seen:
-                seen = changes[0]
-                self.wfile.write((json.dumps({"type": "match", "match": {}, "server_now_ms": now()}) + "\n").encode())
-                self.wfile.flush()
+        print("STREAM", flush=True)
+        with lock:
+            at = len(events)
+            live = [public(m) for m in matches.values() if m["status"] in ("pending", "running")]
+        self.line({"type": "hello", "bot_id": ME, "state_follows": True, "api": 2})
+        self.line({"type": "state", "view": "agent", "ok": True, "scope": "active",
+                   "bot": {"id": ME, "name": "local", "max_games": 2}, "matches": live})
+        began = last = time.time()
+        while not DROP or time.time() - began < DROP:
+            time.sleep(0.02)
+            for e in events[at:]:
+                self.line(e)
+                at += 1
             if time.time() - last > 10:
                 last = time.time()
-                self.wfile.write((json.dumps({"type": "ping", "server_now_ms": now()}) + "\n").encode())
-                self.wfile.flush()
+                self.line({"type": "ping"})
 
     def do_POST(self):
         assert self.headers["Authorization"].startswith("Bearer ")
@@ -184,9 +208,12 @@ class H(BaseHTTPRequestHandler):
         a = req["action"]
         with lock:
             if a == "agent_poll":
-                ms = [{k: v for k, v in m.items() if not k.startswith("_")} for m in matches.values()]
-                return self.reply(200, {"ok": True, "bot": {"id": ME}, "bots": [], "record_bots": [],
-                                        "matches": ms, "me": "x"})
+                polls[0] += 1
+                print("POLL", polls[0], flush=True)
+                return self.reply(410, {"ok": False, "error": "agent_poll was removed; use bot-stream"})
+            if a == "agent_environment":
+                print("ENVIRONMENT", json.dumps(req["environment"]), flush=True)
+                return self.reply(200, {"ok": True})
             m = matches.get(req.get("match_id"))
             if a == "agent_accept":
                 m["status"], m["state"] = "running", m["_state"]
@@ -194,10 +221,12 @@ class H(BaseHTTPRequestHandler):
                     l["turn_started_ms"] = now()
                     refresh(l)
                 print("ACCEPT", m["id"], flush=True)
+                emit(m)
                 return self.reply(200, {"ok": True, "match": {"id": m["id"], "status": "running"}})
             if a == "agent_reject":
                 m["status"] = "rejected"
                 print("REJECT", m["id"], flush=True)
+                emit(m)
                 return self.reply(200, {"ok": True, "match": {"id": m["id"], "status": "rejected"}})
             if a == "agent_move":
                 leg = m["state"]["legs"][req["leg"]]
@@ -210,7 +239,7 @@ class H(BaseHTTPRequestHandler):
                 if (mv == -1 and leg["legal_moves"]) or (mv != -1 and mv not in leg["legal_moves"]):
                     print("ILLEGAL", req, flush=True)
                     return self.reply(409, {"ok": False, "error": "illegal_move"})
-                play(m, req["leg"], mv)
+                play(m, req["leg"], mv, req.get("eval"))
                 return self.reply(200, {"ok": True, "match": {"id": m["id"], "status": m["status"]}})
         self.reply(400, {"ok": False, "error": "unknown action"})
 

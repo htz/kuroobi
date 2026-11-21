@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use kuroobi::engine::{EngineAssets, EngineConfig};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use crate::api::{Api, Reply};
 use crate::{engine_config, Bot, BotView, Challenge, Control, Options};
@@ -89,8 +89,8 @@ pub enum Cmd {
     },
     /// Forgets the add form's or the token dialog's outcome.
     ClearPending,
-    /// Reads a disconnected bot's settings on the site again (a connected one reads them on
-    /// every poll).
+    /// Reads a disconnected bot's settings on the site again (a connected one has them from
+    /// its stream).
     Refresh(i64),
 }
 
@@ -263,12 +263,7 @@ struct Manager {
 }
 
 fn who(token: &str) -> Result<Who, String> {
-    let mut body = Map::new();
-    body.insert(
-        "environment".into(),
-        serde_json::json!({"engine": "KUROOBI"}),
-    );
-    match Api::new(&base(), token.to_string()).call("agent_poll", body) {
+    match Api::new(&base(), token.to_string()).first_state() {
         Reply::Ok(v) => {
             let id = v["bot"]["id"].as_i64().ok_or("err.fs_unreachable")?;
             let entry = v["bots"]
