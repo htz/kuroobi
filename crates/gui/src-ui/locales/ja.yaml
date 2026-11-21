@@ -854,6 +854,7 @@ ggs:
     log_channel_invalid: "「.」に続けて英数字・_・- を 1〜7 文字"
     log_channel_note: "1 手ごとの探索結果を流す。観戦者は同じチャンネルで読める。空欄なら流さない"
     logout: "ログアウト"
+    ponder: "先読み"
     watch_analysis: "観戦中の対局も解析する"
   stat:
     draws: "分"

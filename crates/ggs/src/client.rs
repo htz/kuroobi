@@ -87,6 +87,7 @@ pub enum Cmd {
     SetOpen(bool),
     SetOpenRequests(bool),
     SetWatchAnalysis(bool),
+    SetPonder(bool),
     SetLogChannel(String),
     SetUseBook(bool),
     SetLearn(bool),
@@ -389,6 +390,8 @@ pub struct Snapshot {
     /// The server's `request` flag: whether requests addressed to anyone reach us.
     pub open_requests: bool,
     pub watch_analysis: bool,
+    /// While the opponent is to move on every board of ours, search its position with the threads.
+    pub ponder: bool,
     /// Empty means the search log goes nowhere.
     pub log_channel: String,
     pub thinking: Option<String>,
@@ -494,6 +497,7 @@ pub fn spawn_with(
         open: true,
         open_requests: true,
         watch_analysis: true,
+        ponder: true,
         results: Arc::new(load_history()),
         ..Default::default()
     }));
@@ -908,6 +912,9 @@ impl Ctx {
                 w.sent_at = None;
                 w.stopped_at = None;
                 w.pending_hash = 0;
+                if w.pondering.take().is_some() {
+                    w.stop.stop();
+                }
             }
         }
     }
@@ -1162,6 +1169,7 @@ fn set_pref(ctx: &mut Ctx, cmd: &Cmd) -> bool {
         Cmd::SetOpenRequests(b) => ctx.snap.lock().unwrap().open_requests = b,
         Cmd::SetUseBook(b) => ctx.set_use_book(b),
         Cmd::SetWatchAnalysis(b) => ctx.snap.lock().unwrap().watch_analysis = b,
+        Cmd::SetPonder(b) => ctx.snap.lock().unwrap().ponder = b,
         Cmd::SetLearn(b) => ctx.snap.lock().unwrap().engine.learn = b,
         _ => return false,
     }
@@ -1756,6 +1764,7 @@ fn service(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
         think_and_play(ctx, &mid, &mut w.matches, |s| out.push(s));
     }
     out.extend(collect_workers(ctx, &mut w.matches));
+    ponder_idle(ctx, &w.matches);
     for line in out {
         say(ctx, &mut send, line);
     }
@@ -1952,6 +1961,7 @@ fn handle_cmd(
         | Cmd::SetOpenRequests(_)
         | Cmd::SetUseBook(_)
         | Cmd::SetWatchAnalysis(_)
+        | Cmd::SetPonder(_)
         | Cmd::SetLearn(_) => {
             set_pref(ctx, &cmd);
             if let Cmd::SetOpen(b) = cmd {
@@ -2976,6 +2986,73 @@ fn think_and_play(
 }
 
 /// One board at a time on every thread: the server charges the reported time, so the waiting board loses none.
+/// One board is searched at a time on every thread, so while the opponent is to move on every
+/// board of ours the threads would idle: they search the opponent's positions instead, split
+/// between them, until a move of ours is due or the position changes.
+fn ponder_idle(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
+    let on = ctx.snap.lock().unwrap().ponder && !opts().fixed_level;
+    let due = ctx.thinking() || ctx.workers.iter().any(|w| w.pending.is_some());
+    let theirs: Vec<(String, Board, u64, Duration)> = matches
+        .iter()
+        .filter(|(_, m)| {
+            !m.over && m.my_color.is_some() && m.turn != ' ' && Some(m.turn) != m.my_color
+        })
+        .filter_map(|(mid, m)| {
+            let b = board_of(m, m.turn)?;
+            if game_over(&b) || b.movable() == 0 {
+                return None;
+            }
+            let secs = match (m.opp_secs, m.opp_ext) {
+                (Some(0), Some(e)) | (None, Some(e)) => e,
+                (Some(s), _) => s,
+                (None, None) => 0,
+            };
+            Some((
+                mid.clone(),
+                b,
+                play_hash(&b, m.moves.len()),
+                Duration::from_secs(secs.max(1)),
+            ))
+        })
+        .collect();
+    let mine_waiting = matches
+        .values()
+        .any(|m| !m.over && m.my_color.is_some() && Some(m.turn) == m.my_color);
+    let keep = on && !due && !mine_waiting;
+    for w in &mut ctx.workers {
+        let Some(h) = w.pondering else { continue };
+        let current = theirs
+            .iter()
+            .any(|(mid, _, hash, _)| *hash == h && w.mid.as_deref() == Some(mid.as_str()));
+        if !keep || !current {
+            w.stop.stop();
+            w.pondering = None;
+        }
+    }
+    if !keep || theirs.is_empty() || ctx.ensure_engine().is_err() {
+        return;
+    }
+    let share = (ctx.total_threads() / theirs.len()).max(1);
+    for (mid, board, hash, span) in theirs {
+        let Some(i) = ctx.worker_for(&mid) else {
+            continue;
+        };
+        if ctx.workers[i].pondering == Some(hash) || ctx.workers[i].busy {
+            continue;
+        }
+        ctx.set_worker_threads(i, share);
+        ctx.workers[i].send(Job::Ponder { board, span });
+        ctx.workers[i].pondering = Some(hash);
+        ctx.log(
+            "info",
+            &format!(
+                "ponder: {mid} empties {} threads {share}",
+                board.empty_count()
+            ),
+        );
+    }
+}
+
 fn pump_next(ctx: &mut Ctx) {
     if ctx.thinking() {
         return;
@@ -2996,6 +3073,14 @@ fn pump_next(ctx: &mut Ctx) {
     if ponders {
         return;
     }
+    // A ponder clears the stop once it has ended; cleared here, it would run on ahead of the move.
+    let mut pondered = false;
+    for (j, w) in ctx.workers.iter_mut().enumerate() {
+        if w.pondering.take().is_some() {
+            w.stop.stop();
+            pondered |= j == i;
+        }
+    }
     let total = ctx.total_threads();
     ctx.set_worker_threads(i, total);
     let Some(p) = ctx.workers[i].pending.take() else {
@@ -3006,7 +3091,9 @@ fn pump_next(ctx: &mut Ctx) {
     ctx.workers[i].sent_at = Some((Instant::now(), p.clock));
     ctx.workers[i].sent_ms = epoch_ms();
     ctx.workers[i].sent_empties = p.board.empty_count();
-    ctx.workers[i].stop.reset();
+    if !pondered {
+        ctx.workers[i].stop.reset();
+    }
     let empties = p.board.empty_count();
     let movable = p.board.movable_count();
     ctx.log(

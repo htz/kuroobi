@@ -282,6 +282,8 @@ export interface GgsSnapshot {
   open: boolean;
   open_requests: boolean;
   watch_analysis: boolean;
+  /** While the opponent is to move on every board of ours, the threads search its position. */
+  ponder: boolean;
   log_channel: string;
   thinking: string | null;
   last_search: { nodes: number; secs: number } | null;

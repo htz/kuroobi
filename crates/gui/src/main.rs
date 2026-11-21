@@ -2011,6 +2011,11 @@ fn ggs_set_watch_analysis(app: State<App>, on: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn ggs_set_ponder(app: State<App>, on: bool) -> Result<(), String> {
+    ggs_send(&app, ggs::Cmd::SetPonder(on))
+}
+
+#[tauri::command]
 fn ggs_set_log_channel(app: State<App>, channel: String) -> Result<(), String> {
     if !ggs::valid_log_channel(&channel) {
         return Err("err.bad_log_channel".into());
@@ -2334,6 +2339,7 @@ fn main() {
             ggs_set_open,
             ggs_set_open_requests,
             ggs_set_watch_analysis,
+            ggs_set_ponder,
             ggs_set_log_channel,
             ggs_set_use_book,
             ggs_set_learn,

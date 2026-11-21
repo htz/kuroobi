@@ -81,6 +81,7 @@ const PASS: &[(&str, &str, &[&str], &str)] = &[
     ("ggs__set_auto_play", "ggs_set_auto_play", &["on:b"], "Whether the engine plays our GGS games."),
     ("ggs__set_use_book", "ggs_set_use_book", &["on:b"], "Whether GGS games use the opening book."),
     ("ggs__set_watch_analysis", "ggs_set_watch_analysis", &["on:b"], "Whether watched games are analysed."),
+    ("ggs__set_ponder", "ggs_set_ponder", &["on:b"], "Whether the threads search the opponent's positions while it is to move on every board of ours."),
     ("ggs__set_log_channel", "ggs_set_log_channel", &["channel:s"], "The channel the search log is told to (empty: none)."),
     ("ggs__set_learn", "ggs_set_learn", &["on:b"], "Whether finished GGS games are learned into the book."),
     ("ggs__set_list", "ggs_set_list", &["list:s", "name:s", "on:b"], "Put a player on or off a list: notify (log-ins and games, shown in ggs__state notices), track (watch their games automatically) or ignore (their chat and requests stop)."),

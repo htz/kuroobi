@@ -494,6 +494,7 @@ function GgsPlaySettings({ snap }: { snap: GgsSnapshot }) {
   const e = snap.engine;
   const [auto, setAuto] = useState(snap.auto_play);
   const [watch, setWatch] = useState(snap.watch_analysis);
+  const [ponder, setPonder] = useState(snap.ponder);
   const [logChannel, setLogChannel] = useState(snap.log_channel);
   const logChannelOk = validLogChannel(logChannel);
   const [book, setBook] = useState(e.use_book);
@@ -506,6 +507,7 @@ function GgsPlaySettings({ snap }: { snap: GgsSnapshot }) {
       try {
         await ggsApi.setAutoPlay(auto);
         await ggsApi.setWatchAnalysis(watch);
+        await ggsApi.setPonder(ponder);
         if (logChannelOk) await ggsApi.setLogChannel(logChannel);
         await ggsApi.setUseBook(book);
         setErr('');
@@ -513,7 +515,7 @@ function GgsPlaySettings({ snap }: { snap: GgsSnapshot }) {
       } catch (x) { setErr(t('ggs.settings.apply_failed', { error: tErr(x) })); }
     })(), 400);
     return () => clearTimeout(timer);
-  }, [auto, watch, logChannel, book, logChannelOk]);
+  }, [auto, watch, ponder, logChannel, book, logChannelOk]);
 
   return (
     <SettingGroup title={t('settings.cat.play')}>
@@ -530,6 +532,9 @@ function GgsPlaySettings({ snap }: { snap: GgsSnapshot }) {
       </SettingRow>
       <SettingRow label={t('ggs.settings.auto_play')}>
         <SettingToggle checked={auto} onChange={setAuto} />
+      </SettingRow>
+      <SettingRow label={t('ggs.settings.ponder')}>
+        <SettingToggle checked={ponder} onChange={setPonder} />
       </SettingRow>
       <SettingRow label={t('ggs.settings.watch_analysis')}>
         <SettingToggle checked={watch} onChange={setWatch} />

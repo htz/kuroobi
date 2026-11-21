@@ -865,6 +865,7 @@ ggs:
     log_channel_invalid: "Enter \".\" followed by 1-7 letters, digits, _ or -. This value is not used."
     log_channel_note: "Posts each move's search result to this channel, where spectators who join it can read it. Left empty, nothing is posted."
     logout: "Log out"
+    ponder: "Ponder"
     watch_analysis: "Analyze observed games too"
   stat:
     draws: "D"

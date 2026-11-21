@@ -399,6 +399,7 @@ struct SavedSettings {
     open: bool,
     open_requests: bool,
     watch_analysis: bool,
+    ponder: bool,
     log_channel: String,
     use_book: bool,
     learn: bool,
@@ -411,6 +412,7 @@ impl Default for SavedSettings {
             open: true,
             open_requests: true,
             watch_analysis: true,
+            ponder: true,
             log_channel: String::new(),
             use_book: true,
             learn: true,
@@ -429,6 +431,7 @@ pub(super) fn save_settings(ctx: &Ctx) {
         open: s.open,
         open_requests: s.open_requests,
         watch_analysis: s.watch_analysis,
+        ponder: s.ponder,
         log_channel: s.log_channel.clone(),
         use_book: e.use_book,
         learn: e.learn,
@@ -464,6 +467,7 @@ pub(super) fn restore_settings(ctx: &mut Ctx) {
     s.open = v.open;
     s.open_requests = v.open_requests;
     s.watch_analysis = v.watch_analysis;
+    s.ponder = v.ponder;
     if valid_log_channel(&v.log_channel) {
         s.log_channel = v.log_channel;
     }

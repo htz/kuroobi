@@ -338,6 +338,13 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <span style="display: flex; align-items: center; height: var(--h-ctrl)"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}"></x-import></span>
 </div>
 </div>
+<!-- Ponder: one board is searched at a time on every thread, so while the opponent thinks on every board of ours the threads are free; they search the opponent's position then (split between such boards), stopped when a move of ours is due. Not at a fixed level. On by default -->
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">先読み</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<span style="display: flex; align-items: center; height: var(--h-ctrl)"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}"></x-import></span>
+</div>
+</div>
 <div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
 <span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">観戦中の対局も解析する</span>
 <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">

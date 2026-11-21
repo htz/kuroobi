@@ -21,6 +21,8 @@ pub struct EngineWorker {
     pub threads: usize,
     pub sent_ms: u64,
     pub sent_empties: u8,
+    /// The position (a caller's hash of it) a ponder was sent for and not yet stopped.
+    pub pondering: Option<u64>,
 }
 
 pub const WORKER_GIVE_UP: Duration = Duration::from_secs(10);
@@ -176,6 +178,7 @@ impl EngineWorker {
             threads: 0,
             sent_ms: 0,
             sent_empties: 0,
+            pondering: None,
         })
     }
 

@@ -488,7 +488,10 @@ written to `ggs_wire.log` in the account's data folder.
 
 - **Servers and accounts** — see [Log in and accounts](#log-in-and-accounts).
 - **Playing and watching** — **Book** (use book moves in GGS games),
-  **Play automatically on my turn**, **Analyze observed games too**, and
+  **Play automatically on my turn**, **Ponder** (on by default: one board
+  is searched at a time on every thread, so while the opponent is to move
+  on every board of ours the threads search its positions until a move of
+  ours is due), **Analyze observed games too**, and
   **Search log channel** (see
   [Each move can be posted to a channel](#each-move-can-be-posted-to-a-channel)).
 - **Request rules** — the **Auto-accept condition** and **Auto-decline
