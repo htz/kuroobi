@@ -379,10 +379,12 @@ export interface FsLeg {
   ply: number;
   active: boolean;
   thinking: boolean;
-  /** Our moves: [move number, value, seconds]. */
-  evals: [number, number, number?][];
+  /** Our moves: [move number, value, seconds]; no seconds for a move read back from the site. */
+  evals: [number, number, (number | null)?][];
   /** The opponent's moves: [move number, seconds], from its clock. */
   opp_secs: [number, number][];
+  /** The opponent's moves: [move number, the value it sent, from its side]. */
+  opp_evals?: [number, number][];
   moves: string;
 }
 
@@ -461,7 +463,8 @@ export interface FsResult {
   theirs: number;
   diff: number;
   finish_reason?: string | null;
-  legs: { black: boolean; discs: number[]; result_discs?: number[] | null; status: string; moves?: string | null; evals?: [number, number, number?][]; opp_secs?: [number, number][];
+  legs: { black: boolean; discs: number[]; result_discs?: number[] | null; status: string; moves?: string | null; evals?: [number, number, (number | null)?][]; opp_secs?: [number, number][];
+          opp_evals?: [number, number][];
           /** The final board (site order) and last square, replayed from the moves. */
           cells?: number[]; last?: number | null }[];
   my_rating?: number | null;

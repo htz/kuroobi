@@ -160,6 +160,8 @@ pub struct LiveLeg {
     pub evals: Vec<(usize, f32, f32)>,
     /// The opponent's moves: (move number, seconds), from its clock.
     pub opp_secs: Vec<(usize, f32)>,
+    /// The opponent's moves: (move number, the value it sent, from its side).
+    pub opp_evals: Vec<(usize, f32)>,
     /// The moves so far (`f5d6...`), when known from the first.
     pub moves: String,
 }
@@ -172,10 +174,13 @@ struct LegHist {
     moves: Vec<i64>,
     /// Seen from the first move on, so `moves` is the whole game.
     complete: bool,
-    /// Our moves: (move number, value, seconds).
+    /// Our moves: (move number, value, seconds); the seconds are NaN for a move we did not see
+    /// ourselves search (the site's record of it, after a restart).
     evals: Vec<(usize, f32, f32)>,
     /// The opponent's moves: (move number, seconds).
     opp_secs: Vec<(usize, f32)>,
+    /// The opponent's moves: (move number, the value it sent, from its side).
+    opp_evals: Vec<(usize, f32)>,
     /// The opponent's clock when its turn began.
     opp_clock: Option<f64>,
 }
@@ -922,6 +927,18 @@ impl Bot {
                     .filter(|&q| q >= 0)
                     .collect();
                 h.complete = true;
+                let mut ply = s.opening_moves.iter().filter(|&&q| q >= 0).count();
+                h.opp_evals.clear();
+                for p in leg.history.iter().filter(|p| p.mv >= 0) {
+                    ply += 1;
+                    let Some(e) = p.eval else { continue };
+                    if p.color == opp {
+                        h.opp_evals.push((ply, e as f32));
+                    } else if !h.evals.iter().any(|x| x.0 == ply) {
+                        h.evals.push((ply, e as f32, f32::NAN));
+                        h.evals.sort_by_key(|x| x.0);
+                    }
+                }
             } else if h.cells != leg.board {
                 match infer_moves(&h.cells, h.turn, &leg.board) {
                     Some(ms) => h.moves.extend(ms.into_iter().map(|q| q as i64)),
@@ -983,6 +1000,7 @@ impl Bot {
                             thinking: thinking.contains(&(m.id, i)),
                             evals: h.map(|h| h.evals.clone()).unwrap_or_default(),
                             opp_secs: h.map(|h| h.opp_secs.clone()).unwrap_or_default(),
+                            opp_evals: h.map(|h| h.opp_evals.clone()).unwrap_or_default(),
                             moves: h
                                 .filter(|h| h.complete)
                                 .map(|h| h.moves.iter().map(|&q| coord(q)).collect())
@@ -1497,14 +1515,20 @@ impl Bot {
                        "result_discs": l.result_discs, "status": l.status, "moves": moves,
                        "cells": (l.board.len() == 64).then_some(&l.board), "last": last,
                        "evals": h.as_ref().map(|h| h.evals.clone()).unwrap_or_default(),
+                       "opp_evals": h.as_ref().map(|h| h.opp_evals.clone()).unwrap_or_default(),
                        "opp_secs": h.map(|h| h.opp_secs).unwrap_or_default()})
             })
             .collect();
         let o = self.names.get(&opp);
+        // The site's record names the opponent when no list of bots has.
+        let theirs_in = |k: &str| m.record.as_ref().map(|r| r["opponent"][k].clone());
         let rec = json!({
             "t": now_ms(), "match": m.id, "opponent": opp, "status": m.status, "result": result,
-            "opponent_name": o.map(|b| b.name.clone()), "opponent_rating": o.and_then(|b| b.rating),
+            "opponent_name": o.map(|b| json!(b.name)).or_else(|| theirs_in("name")),
+            "opponent_rating": o.and_then(|b| b.rating).map(|r| json!(r))
+                .or_else(|| theirs_in("rating_before")),
             "opponent_photo": o.and_then(|b| b.photo.clone()),
+            "record": m.record,
             "my_rating": m.rating_after.get(part).and_then(rating_of),
             "my_rating_before": m.rating_before.get(part).and_then(rating_of),
             "mine": mine, "theirs": theirs, "diff": mine - theirs, "finish_reason": s.finish_reason,

@@ -452,7 +452,7 @@ const overLegs = (r: FsResult): FsLeg[] | null =>
     ? r.legs.map((l) => ({
         cells: l.cells!, turn: 0, my_color: l.black ? 1 : 2, clocks_ms: [], discs: l.result_discs ?? l.discs,
         last: l.last ?? null, ply: (l.moves ?? '').length / 2, active: false, thinking: false,
-        evals: l.evals ?? [], opp_secs: l.opp_secs ?? [], moves: l.moves ?? '',
+        evals: l.evals ?? [], opp_secs: l.opp_secs ?? [], opp_evals: l.opp_evals ?? [], moves: l.moves ?? '',
       }))
     : null;
 
@@ -524,6 +524,8 @@ function LegBoard({ leg, n, bot, them, themPhoto, themRate, meRate, side, prefs,
   const mine = leg.my_color;
   const theirs = mine === 1 ? 2 : 1;
   const eval0 = leg.evals.length ? leg.evals[leg.evals.length - 1][1] : null;
+  const theirEval = leg.opp_evals?.length ? leg.opp_evals[leg.opp_evals.length - 1][1] : null;
+  const evalText = (v: number | null) => (v != null ? t('play.eval', { v: (v > 0 ? '+' : '') + v.toFixed(1) }) : undefined);
   const toMove = leg.turn === mine ? nm(bot) : them;
   const state = !leg.active ? t('fs.play.leg_over')
     : leg.thinking ? `${t('play.to_move', { name: toMove })} · ${t('ggs.play.thinking')}`
@@ -537,6 +539,7 @@ function LegBoard({ leg, n, bot, them, themPhoto, themRate, meRate, side, prefs,
         <span style={{ marginLeft: 'auto' }}>{leg.discs[0] ?? 0} – {leg.discs[1] ?? 0} · {t('ggs.play.moves', { n: leg.ply })}</span>
       </div>
       <PlayerRow color={color(theirs)} name={them} rate={themRate ?? undefined} photo={themPhoto ?? null}
+                 meta={evalText(theirEval)}
                  clock={clock(theirs)} active={leg.active && leg.turn === theirs} />
       <div style={{ width: side, height: side }}>
         <Board cells={boardCells(leg.cells)} last={leg.last != null ? boardIndex(leg.last) : null} disabled
@@ -544,7 +547,7 @@ function LegBoard({ leg, n, bot, them, themPhoto, themRate, meRate, side, prefs,
                flip={flipped(prefs.facing, mine === 1 ? 'black' : 'white')} />
       </div>
       <PlayerRow color={color(mine)} name={nm(bot)} rate={meRate ?? undefined} photo={bot.photo}
-                 meta={eval0 != null ? t('play.eval', { v: (eval0 > 0 ? '+' : '') + eval0.toFixed(1) }) : undefined}
+                 meta={evalText(eval0)}
                  clock={clock(mine)} active={leg.active && leg.turn === mine} />
       <div style={{ display: 'flex', alignItems: 'center', height: 'var(--h-row)', whiteSpace: 'nowrap', overflow: 'hidden', fontSize: 'var(--fs-6)',
                     color: leg.thinking ? 'var(--accent)' : 'var(--sub)' }}>{state}</div>

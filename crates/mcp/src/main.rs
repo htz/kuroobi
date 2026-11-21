@@ -110,7 +110,7 @@ const PASS: &[(&str, &str, &[&str], &str)] = &[
     ("fs__connect", "fs_connect", &["id:i"], "Connect a bot (logs out of GGS first; refused during a GGS game)."),
     ("fs__disconnect", "fs_disconnect", &["id:i"], "Disconnect a bot: at once with no match, else after its matches."),
     ("fs__set", "fs_set", &["id:i", "cap:i?", "threads:i?", "book:b?", "accept:b?", "level:a?"], "A bot's settings, each left out stays: cap matches at once (0: the site's), threads per game (1-4), book, accept direct challenges, level [depth, solve] ([0, 0]: by the clock). Apply from the next game."),
-    ("fs__refresh", "fs_refresh", &["id:i"], "Read a disconnected bot's settings on the site again (a connected one reads them on every poll)."),
+    ("fs__refresh", "fs_refresh", &["id:i"], "Read a disconnected bot's settings on the site again (a connected one has them from its stream)."),
     ("fs__challenge", "fs_challenge", &["id:i", "target:i"], "Challenge another bot (target: its id from fs__state)."),
     ("fs__results", "fs_results", &["id:i"], "A bot's finished matches: result, rating, and each game's moves, evals and final board."),
     ("gui__ai_control", "control_info", &[], "This control socket's state and the registration for MCP clients."),

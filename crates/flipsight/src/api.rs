@@ -190,6 +190,8 @@ pub struct Match {
     pub room_created_at: Option<String>,
     pub rating_before: Value,
     pub rating_after: Value,
+    /// The finished game from our side, with the event that ends the match.
+    pub record: Option<Value>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -226,6 +228,7 @@ pub struct Leg {
 #[derive(Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct Played {
+    pub color: u8,
     #[serde(rename = "move")]
     pub mv: i64,
     /// What the mover sent with the move, in discs from its own side.

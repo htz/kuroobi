@@ -178,14 +178,14 @@ class Component extends DCLogic {
       {
         face: '1 局目', score: '24 – 19', ply: '39 手目',
         cells: P24, last: 23, legal: [5, 14, 20, 22, 31, 39, 41, 49, 59, 61, 62], evals: { 20: { score: 2.4, src: { depth: 22 }, best: true } },
-        top: { color: 'w', name: pb, rate: rb, meta: '', clock: '0:31', active: false },
+        top: { color: 'w', name: pb, rate: rb, meta: '評価値 −1.8', clock: '0:31', active: false },
         bottom: { color: 'b', name: pa, rate: ra, meta: '評価値 +2.4 · 1.7 秒', clock: '0:24', active: true },
         state: pa + ' の手番 · 思考中 · 深さ 22', stateColor: 'var(--accent)',
       },
       {
         face: '2 局目', score: '41 – 21', ply: '39 手目',
         cells: P44, last: 6, legal: [], evals: {},
-        top: { color: 'b', name: pb, rate: rb, meta: '', clock: '0:28', active: true },
+        top: { color: 'b', name: pb, rate: rb, meta: '評価値 −5.5', clock: '0:28', active: true },
         bottom: { color: 'w', name: pa, rate: ra, meta: '評価値 +6.0 · 2.1 秒', clock: '0:26', active: false },
         state: pb + ' の手番', stateColor: 'var(--sub)',
       },
@@ -201,7 +201,7 @@ class Component extends DCLogic {
     const trend = [];
     for (let x = 1; x <= (done ? 60 : 39); x++) {
       const base = 1 + 3 * Math.sin(x / 8) + (x > 24 ? (x - 24) * 0.3 : 0);
-      trend.push({ x, mine: Math.round(base * 2) / 2, opp: null, mySecs: 1 + (x % 7) * 0.4, oppSecs: null });
+      trend.push({ x, mine: Math.round(base * 2) / 2, opp: Math.round((base - 1) * 2) / 2, mySecs: 1 + (x % 7) * 0.4, oppSecs: null });
     }
     // Matches of every bot on this Mac, in one list; the bot's name is the first player
     const live = [

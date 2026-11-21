@@ -56,14 +56,15 @@ export const legDiff = (l: FsResult['legs'][number]): number | null => {
   return l.black ? d[0] - d[1] : d[1] - d[0];
 };
 
-type Leg = { evals?: [number, number, number?][]; opp_secs?: [number, number][]; moves?: string | null };
+type Leg = { evals?: [number, number, (number | null)?][]; opp_secs?: [number, number][]; opp_evals?: [number, number][]; moves?: string | null };
 
-/** One game's line as GGS draws its own games: our values and both sides' thinking times by move number. */
+/** One game's line as GGS draws its own games: both sides' values, seen from our side, and thinking times by move number. */
 function legTrend(l: Leg): TrendPoint[] {
   const at = new Map<number, TrendPoint>();
   const point = (x: number) => at.get(x) ?? at.set(x, { x, mine: null, opp: null, mySecs: null, oppSecs: null }).get(x)!;
   for (const [x, v, secs] of l.evals ?? []) Object.assign(point(x), { mine: v, mySecs: secs ?? null });
   for (const [x, secs] of l.opp_secs ?? []) point(x).oppSecs = secs;
+  for (const [x, v] of l.opp_evals ?? []) point(x).opp = -v;
   return [...at.values()].sort((a, b) => a.x - b.x);
 }
 

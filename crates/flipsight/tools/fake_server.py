@@ -8,7 +8,8 @@ It offers the bot one standard match (accepted) and one anti match (declined); t
 answers every move with a random legal one after 0.2 s and sends an eval with it. The state
 goes out on the stream only (bot API v2): agent_poll answers 410.
 
-    FAKE_DROP=<seconds>  closes every stream after that long, to try reconnecting.
+    FAKE_DROP=<seconds>   closes every stream after that long, to try reconnecting.
+    FAKE_DELAY=<seconds>  the opponent's thinking time (0.2).
 """
 import json, os, random, sys, threading, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -18,6 +19,9 @@ lock = threading.Lock()
 rnd = random.Random(1)
 now = lambda: int(time.time() * 1000)
 DROP = float(os.environ.get("FAKE_DROP", 0))
+DELAY = float(os.environ.get("FAKE_DELAY", 0.2))
+# Fresh ids every run: the bot does not write a match it has already written.
+FIRST = int(time.time()) % 1000000 * 10
 events, polls = [], [0]
 
 
@@ -92,7 +96,7 @@ def new_match(mid, mode="std"):
             "status": "pending", "state": None, "_state": st, "expires_ms": now() + 120000}
 
 
-matches = {1: new_match(1), 2: new_match(2, "anti")}
+matches = {FIRST + 1: new_match(FIRST + 1), FIRST + 2: new_match(FIRST + 2, "anti")}
 
 
 def refresh(leg):
@@ -142,13 +146,15 @@ def finish(m):
         s["status"] = "finished"
         s["finish_reason"] = "discs"
         m["status"] = "finished"
+        m["record"] = {"format": 1, "kind": "bot", "id": m["id"],
+                       "opponent": {"kind": "bot", "bot_id": OPP, "name": "random", "rating_before": 1500.0}}
         print("FINISHED", m["id"], tot, flush=True)
     emit(m)
 
 
 def opponent_loop():
     while True:
-        time.sleep(0.2)
+        time.sleep(DELAY)
         with lock:
             for m in matches.values():
                 if m["status"] != "running":
