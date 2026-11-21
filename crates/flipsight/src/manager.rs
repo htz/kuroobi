@@ -324,6 +324,9 @@ struct Manager {
     /// Bots whose records a thread is reading or has just read, and when it was asked.
     syncs: HashMap<i64, Instant>,
     synced: Arc<Mutex<Vec<i64>>>,
+    /// The site's public list of bots, for the bots not running, and when it was last asked for.
+    roster: Arc<Mutex<Option<Value>>>,
+    roster_at: Option<Instant>,
 }
 
 fn who(token: &str) -> Result<Who, String> {
@@ -568,6 +571,18 @@ impl Manager {
                 }
             }
             Cmd::Sync(id) => {
+                if self.roster_at.is_none_or(|t| t.elapsed() >= SYNC_EVERY) {
+                    self.roster_at = Some(Instant::now());
+                    let (roster, synced) = (self.roster.clone(), self.synced.clone());
+                    let ids: Vec<i64> = self.saved.iter().map(|b| b.id).collect();
+                    std::thread::spawn(move || match Api::new(&base(), String::new()).roster() {
+                        Ok(list) => {
+                            *roster.lock().unwrap() = Some(list);
+                            synced.lock().unwrap().extend(ids);
+                        }
+                        Err(e) => eprintln!("flipsight: list of bots not read: {e}"),
+                    });
+                }
                 let live = self.running.get(&id);
                 if live.is_some_and(|r| !r.done.load(Ordering::Relaxed))
                     || self
@@ -830,7 +845,12 @@ impl Manager {
                         photo: b.photo.clone(),
                         ..Default::default()
                     };
-                    crate::offline_view(&records_dir(b.id), &base(), &me)
+                    crate::offline_view(
+                        &records_dir(b.id),
+                        &base(),
+                        &me,
+                        self.roster.lock().unwrap().as_ref(),
+                    )
                 });
                 view = Some(v.clone());
             }
@@ -883,6 +903,8 @@ pub fn spawn(host: Arc<dyn Host>) -> Handle {
         offline: HashMap::new(),
         syncs: HashMap::new(),
         synced: Arc::new(Mutex::new(Vec::new())),
+        roster: Arc::new(Mutex::new(None)),
+        roster_at: None,
     };
     std::thread::spawn(move || loop {
         match rx.recv_timeout(Duration::from_millis(500)) {

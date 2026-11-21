@@ -90,6 +90,22 @@ impl Api {
             .collect())
     }
 
+    /// Every bot on the site with its rating, whether it is online and its games now: the public
+    /// list the site's own bot page reads, asked without the token.
+    pub fn roster(&self) -> Result<Value, String> {
+        let url = format!("{}/flipsight/bot_match_api.php?action=state", self.base);
+        let r = self.agent.get(&url).call().map_err(|e| match e {
+            ureq::Error::Status(code, _) => format!("HTTP {code}"),
+            e => e.kind().to_string(),
+        })?;
+        let v: Value = serde_json::from_str(&r.into_string().map_err(|e| e.kind().to_string())?)
+            .map_err(|e| e.to_string())?;
+        match v.get("bots") {
+            Some(b) if b.is_array() => Ok(b.clone()),
+            _ => Err("no list of bots".into()),
+        }
+    }
+
     /// The `state` event a fresh stream begins with, then hangs up: who a token belongs to.
     /// It closes any stream the token already has, so it is for bots that are not running.
     pub fn first_state(&self) -> Reply {

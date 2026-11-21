@@ -189,6 +189,13 @@ class H(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def do_GET(self):
+        if "action=state" in self.path:
+            print("ROSTER", flush=True)
+            bots = [{"id": ME, "name": "local", "online": True, "games_now": 0, "rating": {"rating": 1500.0},
+                     "supported_games": ["std"], "max_games": 2},
+                    {"id": OPP, "name": "random", "online": True, "is_builtin": True, "rating": {"rating": 1200.0},
+                     "games_now": sum(m["status"] == "running" for m in matches.values()), "supported_games": ["std"]}]
+            return self.reply(200, {"ok": True, "bots": bots})
         self.send_response(200)
         self.end_headers()
         print("STREAM", flush=True)

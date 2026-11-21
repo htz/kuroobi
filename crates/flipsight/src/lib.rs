@@ -225,19 +225,57 @@ fn json_lines(path: &std::path::Path) -> Vec<Value> {
         .collect()
 }
 
-/// What a bot that is not running shows of itself, from the records it keeps: its last rating
-/// and the bots it has played.
-pub fn offline_view(dir: &std::path::Path, base: &str, me: &OtherBot) -> BotView {
+/// The standard bots of the site's list of bots, by id.
+fn bots_of(list: &Value, base: &str) -> HashMap<i64, OtherBot> {
+    let mut names = HashMap::new();
+    for b in list.as_array().into_iter().flatten() {
+        let Some(id) = b["id"].as_i64() else { continue };
+        let std = b["supported_games"]
+            .as_array()
+            .is_none_or(|g| g.iter().any(|x| x == "std"));
+        if !std || b["deleted"] == Value::Bool(true) || b["disabled"] == Value::Bool(true) {
+            continue;
+        }
+        names.insert(
+            id,
+            OtherBot {
+                id,
+                name: b["name"].as_str().unwrap_or("").to_string(),
+                rating: b["rating"]["rating"].as_f64(),
+                online: Some(b["online"] == Value::Bool(true)),
+                playing: b["games_now"].as_u64().is_some_and(|n| n > 0),
+                builtin: b["is_builtin"] == Value::Bool(true),
+                photo: photo_url(base, &b["photo"]),
+            },
+        );
+    }
+    names
+}
+
+/// What a bot that is not running shows of itself: from the site's list of bots when it has
+/// been read, else from the records it keeps (its last rating and the bots it has played).
+pub fn offline_view(
+    dir: &std::path::Path,
+    base: &str,
+    me: &OtherBot,
+    roster: Option<&Value>,
+) -> BotView {
     let mut names = HashMap::new();
     let mut rating = None;
     for r in json_lines(&dir.join("games.jsonl")) {
         learn_opponent(&mut names, &r, base);
         rating = r["me"]["rating_after"].as_f64().or(rating);
     }
+    if let Some(list) = roster {
+        names = bots_of(list, base);
+        rating = names.get(&me.id).and_then(|b| b.rating).or(rating);
+    }
+    let listed = names.remove(&me.id);
     names.insert(
         me.id,
         OtherBot {
             rating,
+            photo: me.photo.clone().or(listed.and_then(|b| b.photo)),
             ..me.clone()
         },
     );
@@ -309,6 +347,10 @@ pub fn sync_records(dir: &std::path::Path, api: &Api) -> Result<usize, String> {
     }
     Ok(written)
 }
+
+/// How often the public list of bots is read: their ratings, who is online and who is playing.
+/// The site's own bot page reads it at most every 5 minutes besides its socket's changes.
+const ROSTER_EVERY: Duration = Duration::from_secs(60);
 
 /// The site answers 429 to a second call for records within a few seconds.
 const RECORDS_APART: Duration = Duration::from_secs(10);
@@ -840,8 +882,26 @@ impl Bot {
         }
         let mut last: Option<Instant> = None;
         let mut busy = false;
+        let (roster_tx, roster_rx) = mpsc::channel::<Result<Value, String>>();
+        let mut roster_at: Option<Instant> = None;
         while !stop.load(Ordering::Relaxed) {
             let mut changed = false;
+            if roster_at.is_none_or(|t| t.elapsed() >= ROSTER_EVERY) {
+                roster_at = Some(Instant::now());
+                let (api, tx) = (Api::new(&self.o.base, String::new()), roster_tx.clone());
+                std::thread::spawn(move || {
+                    let _ = tx.send(api.roster());
+                });
+            }
+            while let Ok(r) = roster_rx.try_recv() {
+                match r {
+                    Ok(bots) => {
+                        self.world.bots = bots;
+                        changed |= self.world.synced;
+                    }
+                    Err(e) => log(&format!("list of bots not read: {e}")),
+                }
+            }
             let mut next = wire.recv_timeout(Duration::from_millis(30)).ok();
             while let Some(w) = next {
                 match w {
@@ -1187,33 +1247,14 @@ impl Bot {
         let Some(bots) = v["bots"].as_array() else {
             return;
         };
-        self.names.clear();
-        for b in bots {
-            let Some(id) = b["id"].as_i64() else { continue };
-            if id == self.me {
-                if let Some(n) = b["max_games"].as_u64() {
-                    self.max_games = Some(n as usize);
-                }
-            }
-            let std = b["supported_games"]
-                .as_array()
-                .is_none_or(|g| g.iter().any(|x| x == "std"));
-            if !std || b["deleted"] == Value::Bool(true) || b["disabled"] == Value::Bool(true) {
-                continue;
-            }
-            self.names.insert(
-                id,
-                OtherBot {
-                    id,
-                    name: b["name"].as_str().unwrap_or("").to_string(),
-                    rating: b["rating"]["rating"].as_f64(),
-                    online: Some(b["online"] == Value::Bool(true)),
-                    playing: b["games_now"].as_u64().is_some_and(|n| n > 0),
-                    builtin: b["is_builtin"] == Value::Bool(true),
-                    photo: photo_url(&self.o.base, &b["photo"]),
-                },
-            );
+        if let Some(n) = bots
+            .iter()
+            .find(|b| b["id"].as_i64() == Some(self.me))
+            .and_then(|b| b["max_games"].as_u64())
+        {
+            self.max_games = Some(n as usize);
         }
+        self.names = bots_of(&v["bots"], &self.o.base);
     }
 
     /// Follows each leg state by state, keeping its moves.

@@ -544,9 +544,9 @@ settings on the site, which stay under Manage on the bot page.
 
 **Matches** shows every bot's matches, the two games of a match side by
 side, each with both sides' evaluations (the opponent's as it sends them
-with its moves) and a graph of them; **Bots** lists the bots this one has
-played (the site names no others to a bot; an icon tells FlipSight's own
-from registered ones) with a button to challenge one; **Results** keeps
+with its moves) and a graph of them; **Bots** lists the site's bots, from its public
+list of bots read every minute (an icon tells FlipSight's own from
+registered ones) with a button to challenge one; **Results** keeps
 each bot's finished matches, rating history and records. The three stay
 in the menu while no bot is connected, reading what the bot has kept;
 opening one reads the site's records of its games again, so matches
