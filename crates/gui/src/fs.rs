@@ -168,6 +168,7 @@ pub fn fs_set(
     level: Option<[u32; 2]>,
     hash_mid: Option<u32>,
     hash_end: Option<u32>,
+    ponder: Option<bool>,
 ) -> Result<(), String> {
     let own = |h: Option<u32>| h.map(|b| (b > 0).then_some(b));
     send(
@@ -180,6 +181,7 @@ pub fn fs_set(
             accept,
             level: level.map(|l| (l[0] > 0).then_some(l)),
             hash: [own(hash_mid), own(hash_end)],
+            ponder,
         },
     )
 }

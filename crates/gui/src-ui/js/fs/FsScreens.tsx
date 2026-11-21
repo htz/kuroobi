@@ -266,6 +266,9 @@ function FsMine({ fs, ggs, confirm, say }: { fs: FsSnapshot; ggs: GgsSnapshot | 
             </span></div>
           <div style={rowTop}><span style={rowTopLabel}>{t('fs.mine.strength')}</span>
             <StrengthPick value={sel.level} onChange={(v) => run(fsApi.set(sel.id, { level: v ?? [0, 0] }))} /></div>
+          <div style={row}><span style={rowLabel}>{t('fs.mine.ponder')}</span>
+            <Toggle checked={sel.ponder && !sel.level} disabled={!!sel.level}
+                    onChange={(v) => run(fsApi.set(sel.id, { ponder: v }))} /></div>
           <div style={row}><span style={rowLabel}>{t('fs.mine.book')}</span>
             <Toggle checked={sel.book} onChange={(v) => run(fsApi.set(sel.id, { book: v }))} /></div>
         </div>

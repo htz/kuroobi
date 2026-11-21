@@ -521,6 +521,7 @@ fs:
     ggs_on: "GGS に {name} でログイン中です"
     ggs_playing: "GGS の対局が終わるまで切り替えられません"
     logout_connect: "GGS からログアウトして接続"
+    ponder: "先読み"
     reading: "読み取っています…"
     refused: "接続トークンが拒否されました"
     remove: "削除する"

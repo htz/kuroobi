@@ -39,6 +39,13 @@ pub enum Job {
         clock: Duration,
         hint: Option<Position>,
     },
+    /// Searches the opponent's position while it thinks, for up to `span` or until `stop`; no
+    /// `Done` comes back. The stop is cleared once it ends, so a stop meant for it never reaches
+    /// the next job.
+    Ponder {
+        board: Board,
+        span: Duration,
+    },
     NewGame,
     SetUseBook(bool),
     SetThreads(usize),
@@ -94,7 +101,15 @@ impl EngineWorker {
             let mut engine = engine;
             let mut fixed = fixed_level;
             let mut within_clock = false;
-            while let Ok(job) = jrx.recv() {
+            let mut queued: Option<Job> = None;
+            loop {
+                let job = match queued.take() {
+                    Some(j) => j,
+                    None => match jrx.recv() {
+                        Ok(j) => j,
+                        Err(_) => break,
+                    },
+                };
                 match job {
                     Job::Think { board, clock, hint } => {
                         if let Some(h) = hint {
@@ -126,6 +141,15 @@ impl EngineWorker {
                         if dtx.send(Done(Box::new(mv), r)).is_err() {
                             return;
                         }
+                    }
+                    Job::Ponder { board, span } => {
+                        // A job behind it (our move, or a newer ponder) means this one is stale:
+                        // the stop that was meant for it may already be spent on the one before.
+                        match jrx.try_recv() {
+                            Ok(next) => queued = Some(next),
+                            Err(_) => engine.ponder(&board, span),
+                        }
+                        engine.stop_handle().reset();
                     }
                     Job::NewGame => engine.clear_tables(),
                     Job::SetUseBook(b) => engine.set_use_book(b),

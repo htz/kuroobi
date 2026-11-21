@@ -437,6 +437,8 @@ export interface FsBotRow {
   level: [number, number] | null;
   /** Midgame and endgame table bits; null follows the app's setting. */
   hash: [number | null, number | null];
+  /** Searches the opponent's position while it thinks; on the clock only. */
+  ponder: boolean;
   conn: FsConn;
   view: FsBotView | null;
 }

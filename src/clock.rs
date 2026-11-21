@@ -1062,6 +1062,19 @@ impl ClockSearch {
         (r, nodes)
     }
 
+    /// Searches the opponent's position `b` while it thinks, for up to `span` or until the stop,
+    /// so the table holds what our reply will search. The margin carried between our own moves and
+    /// the first move's allowance are left as they were.
+    pub fn ponder(&mut self, b: &Board, span: Duration) {
+        let discs = 64.0 - f64::from(b.empty_count());
+        let moves_left = (PACE_DISCS - discs).max(MOVES_LEFT_FLOOR);
+        let clock =
+            Duration::from_secs_f64(span.as_secs_f64() * moves_left / BUDGET_SHARE) + CLOCK_MARGIN;
+        let (step, first_move) = (self.step, self.first_move);
+        let _ = self.choose(b, clock, |_| {});
+        (self.step, self.first_move) = (step, first_move);
+    }
+
     /// `clock` is the time left for the whole game; `on_pass` sees every completed pass.
     pub fn choose(&mut self, b: &Board, clock: Duration, mut on_pass: impl FnMut(Pass)) -> Choice {
         let t0 = Instant::now();

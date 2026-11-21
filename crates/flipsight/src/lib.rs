@@ -33,6 +33,8 @@ pub struct Options {
     /// First guess of the seconds the site's clock loses on a move outside the search; then measured.
     pub lag: f64,
     pub practice: bool,
+    /// Search the opponent's position while it thinks, on the clock.
+    pub ponder: bool,
     /// Process names (`pgrep -x` pattern) of background jobs stopped while a match runs; empty leaves them.
     pub pause: String,
     pub pause_log: PathBuf,
@@ -96,6 +98,8 @@ pub struct Control {
     /// Midgame and endgame transposition table bits; an engine keeps the tables it was built
     /// with until no match is running.
     pub hash: (u32, u32),
+    /// Search the opponent's position while it thinks; on the clock only.
+    pub ponder: bool,
 }
 
 /// What the bot shows of itself.
@@ -632,6 +636,8 @@ struct Slot {
     sent: Option<Sent>,
     /// The midgame and endgame table bits its engine was built with.
     hash: (u32, u32),
+    /// The revision of the leg it is pondering, the opponent to move.
+    pondering: Option<i64>,
 }
 
 pub struct Bot {
@@ -741,6 +747,7 @@ impl Bot {
                 worker: EngineWorker::spawn_with(assets.clone(), engine_cfg.clone(), false)?,
                 sent: None,
                 hash: (engine_cfg.midgame_hash_bits, engine_cfg.solver_hash_bits),
+                pondering: None,
             });
         }
         log(&format!(
@@ -756,6 +763,7 @@ impl Bot {
             level: None,
             challenge_now: None,
             hash: (engine_cfg.midgame_hash_bits, engine_cfg.solver_hash_bits),
+            ponder: o.ponder,
         };
         let cpu = std::process::Command::new("sysctl")
             .args(["-n", "machdep.cpu.brand_string"])
@@ -829,6 +837,7 @@ impl Bot {
             "engine_threads": ctl.threads,
             // One leg's: a match's two legs each have their own engine and tables.
             "hash_mb": self.tables_of(ctl.hash).table_mb(ctl.level.is_none()).round(),
+            "ponder": ctl.ponder && ctl.level.is_none(),
             "practice": self.o.practice,
         })
     }
@@ -855,6 +864,7 @@ impl Bot {
                     slot.worker = w;
                     slot.sent = None;
                     slot.hash = hash;
+                    slot.pondering = None;
                 }
                 Err(e) => log(&format!("engine not rebuilt: {e}")),
             }
@@ -1671,6 +1681,13 @@ impl Bot {
         let threads = ctl.threads.max(1);
         for (i, leg) in s.legs.iter().enumerate() {
             let color = if leg.black_participant == part { 1 } else { 2 };
+            if leg.status == "active" && leg.turn != color {
+                if ctl.ponder && ctl.level.is_none() && m.id > 0 {
+                    self.ponder(m.id, i, leg, threads, server_now, recv);
+                } else {
+                    self.stop_pondering((m.id, i));
+                }
+            }
             if leg.status != "active" || leg.turn != color {
                 continue;
             }
@@ -1720,7 +1737,12 @@ impl Bot {
                 slot.worker.send(Job::SetThreads(threads));
                 slot.worker.threads = threads;
             }
-            slot.worker.stop.reset();
+            // A ponder clears the stop once it has ended; cleared here, it would run on.
+            if slot.pondering.take().is_some() {
+                slot.worker.stop.stop();
+            } else {
+                slot.worker.stop.reset();
+            }
             slot.worker.send(Job::Think {
                 board,
                 clock: Duration::from_secs_f64(budget),
@@ -1741,6 +1763,66 @@ impl Bot {
         }
     }
 
+    /// Searches a leg's position while the opponent thinks on it, until it moves (its clock is
+    /// the longest it can take).
+    fn ponder(
+        &mut self,
+        match_id: i64,
+        i: usize,
+        leg: &Leg,
+        threads: usize,
+        server_now: i64,
+        recv: Instant,
+    ) {
+        let key = (match_id, i);
+        if self
+            .owner
+            .get(&key)
+            .is_some_and(|&k| self.slots[k].pondering == Some(leg.revision))
+        {
+            return;
+        }
+        let Some(board) = board_of(leg).filter(|b| b.movable() != 0) else {
+            return;
+        };
+        let waited =
+            (server_now - leg.turn_started_ms) as f64 / 1000.0 + recv.elapsed().as_secs_f64();
+        let left = leg
+            .clocks_ms
+            .get(usize::from(leg.turn.max(1) - 1))
+            .copied()
+            .unwrap_or(0.0)
+            / 1000.0
+            - waited;
+        if left < 0.5 {
+            return;
+        }
+        let Some(k) = self.slot_for(key) else {
+            return;
+        };
+        let slot = &mut self.slots[k];
+        if slot.pondering.is_some() {
+            slot.worker.stop.stop();
+        }
+        if slot.worker.threads != threads {
+            slot.worker.send(Job::SetThreads(threads));
+            slot.worker.threads = threads;
+        }
+        slot.worker.send(Job::Ponder {
+            board,
+            span: Duration::from_secs_f64(left),
+        });
+        slot.pondering = Some(leg.revision);
+    }
+
+    fn stop_pondering(&mut self, key: (i64, usize)) {
+        if let Some(&k) = self.owner.get(&key) {
+            if self.slots[k].pondering.take().is_some() {
+                self.slots[k].worker.stop.stop();
+            }
+        }
+    }
+
     fn slot_for(&mut self, key: (i64, usize)) -> Option<usize> {
         if let Some(&k) = self.owner.get(&key) {
             return (!self.slots[k].worker.busy).then_some(k);
@@ -1756,6 +1838,7 @@ impl Bot {
                     worker: w,
                     sent: None,
                     hash,
+                    pondering: None,
                 });
                 self.slots.len() - 1
             }
@@ -1929,7 +2012,7 @@ impl Bot {
             let keep = live.contains(&key.0);
             if !keep {
                 let slot = &mut self.slots[*k];
-                if slot.worker.busy {
+                if slot.worker.busy || slot.pondering.take().is_some() {
                     slot.worker.stop.stop();
                 }
                 slot.sent = None;

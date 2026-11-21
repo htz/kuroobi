@@ -529,6 +529,7 @@ fs:
     ggs_on: "Logged in to GGS as {name}"
     ggs_playing: "Cannot switch until the GGS game is over"
     logout_connect: "Log out of GGS and connect"
+    ponder: "Ponder"
     reading: "Reading…"
     refused: "The connection token was refused"
     remove: "Remove"

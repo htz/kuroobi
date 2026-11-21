@@ -533,7 +533,8 @@ the bar at the top right shows threads × 2 games × games at once over the
 bots against what the machine runs at once, without refusing more (a bot
 on a level uses far less than its threads). Games at once can be
 set lower than the site's (the extra challenges are declined here),
-threads changed per bot, the midgame and endgame hash tables sized per bot
+threads changed per bot, pondering turned on per bot (on the clock: each game searches the
+opponent's position while it thinks), the midgame and endgame hash tables sized per bot
 (or left to the app's setting; the bar beside the threads shows every
 bot's tables against the machine's memory, and the size goes to the site
 as the engine's hash), direct challenges turned away (the matches

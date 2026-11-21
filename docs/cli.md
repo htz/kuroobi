@@ -471,6 +471,7 @@ FS_BOT_TOKEN=fsbm_... kuroobi-flipsight [--threads N] [--pause NAMES] [--out DIR
 | `--margin <s>` | 2.0 | Seconds kept back from the clock on every move, on top of the 2 s the engine keeps of any clock |
 | `--lag <s>` | 0.4 | First guess of the seconds a move loses to the stream and the network; measured from then on, and 1.1 times it (0.5 s at least) is kept back for each move still to play |
 | `--practice` | off | Report the bot as practising: kept out of automatic matching, games unrated |
+| `--ponder` | off | On the clock, search each game's position while the opponent thinks on it, so the reply finds its table warm; stopped when the opponent moves. The exact solve is not pondered |
 | `--pause <names>` | none | Process names (`pgrep -x` pattern, e.g. `gendata\|nnue_train`) stopped while a match runs and resumed after it, unless a GGS game of `kuroobi` is live then |
 | `--pause-log <file>` | `<out>/paused.txt` | Where each pause and resume is noted |
 | `--out <dir>` | `flipsight_games` | `moves.jsonl` (each move: empties, move, value, depth, exact, nodes, threads, seconds, time left and given) `results.jsonl` (each match from our side: totals of both legs, per-leg discs, ratings, both sides' evaluations) and `games.jsonl` (the site's own record of every game of the bot, read at the start and after each match) |
