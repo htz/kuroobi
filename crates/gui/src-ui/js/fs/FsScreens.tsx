@@ -372,10 +372,12 @@ function FsPlay({ fs, onNav, prefs, onKifu }: { fs: FsSnapshot; onNav: (id: NavI
   const [pick, setPick] = useState('');
   const photos = photosOf(fs);
   const overPhoto = (r: FsResult) => r.opponent_photo ?? photos.get(r.opponent);
-  const pickedLive = live.find((x) => `live:${x.m.id}` === pick) ?? (pick === '' ? live[0] : undefined);
+  // Two of our own bots playing each other show the match once for each, with the same number.
+  const liveKey = (x: Live) => `live:${x.bot.id}:${x.m.id}`;
+  const pickedLive = live.find((x) => liveKey(x) === pick) ?? (pick === '' ? live[0] : undefined);
   // A match that just ended stays picked as finished; with nothing picked, the latest finished one shows.
   const pickedOver = pickedLive ? undefined
-    : over.find((x) => `over:${x.bot.id}:${x.r.match}` === pick || `live:${x.r.match}` === pick) ?? (pick === '' || pick.startsWith('live:') ? over[0] : undefined);
+    : over.find((x) => `over:${x.bot.id}:${x.r.match}` === pick || `live:${x.bot.id}:${x.r.match}` === pick) ?? (pick === '' || pick.startsWith('live:') ? over[0] : undefined);
 
   if (!live.length && !over.length) {
     const lines = fs.bots.map((b) => {
@@ -428,8 +430,8 @@ function FsPlay({ fs, onNav, prefs, onKifu }: { fs: FsSnapshot; onNav: (id: NavI
           {filter !== 'over' && live.length > 0 && <>
             <ListHead aside={t('fs.count', { n: live.length })}>{t('play.group_live')}</ListHead>
             {live.map((x) => (
-              <BotMatchRow key={x.m.id} name={opp(x.m)} photo={photos.get(x.m.opponent)}
-                           {...ownSide(x.bot)} active={pickedLive === x} onSelect={() => setPick(`live:${x.m.id}`)} />
+              <BotMatchRow key={liveKey(x)} name={opp(x.m)} photo={photos.get(x.m.opponent)}
+                           {...ownSide(x.bot)} active={pickedLive === x} onSelect={() => setPick(liveKey(x))} />
             ))}
           </>}
           {filter !== 'live' && over.length > 0 && <>
