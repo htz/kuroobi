@@ -133,13 +133,16 @@ export type UnfitView = {
 
 export const fsApi = {
   snapshot: () => call<FsSnapshot>('fs_snapshot'),
-  add: (token: string, cap: number | null, threads: number | null, level: [number, number] | null) =>
-    call('fs_add', { token, cap, threads, level }),
+  add: (token: string, cap: number | null, threads: number | null, level: [number, number] | null,
+        hashMid: number | null, hashEnd: number | null) =>
+    call('fs_add', { token, cap, threads, level, hashMid, hashEnd }),
   connect: (id: number) => call('fs_connect', { id }),
   disconnect: (id: number) => call('fs_disconnect', { id }),
   remove: (id: number) => call('fs_remove', { id }),
   /** `cap` 0 is the bot's own setting on the site; `level` [0, 0] plays by the clock. */
-  set: (id: number, s: { cap?: number; threads?: number; book?: boolean; accept?: boolean; level?: [number, number] }) =>
+  /** `hashMid`, `hashEnd`: table bits, 0 for the app's setting. */
+  set: (id: number, s: { cap?: number; threads?: number; book?: boolean; accept?: boolean; level?: [number, number];
+                         hashMid?: number; hashEnd?: number }) =>
     call('fs_set', { id, ...s }),
   challenge: (id: number, target: number) => call('fs_challenge', { id, target }),
   changeToken: (id: number, token: string) => call('fs_change_token', { id, token }),

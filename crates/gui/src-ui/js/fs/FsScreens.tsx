@@ -12,7 +12,7 @@ import { Combobox, Divider, Drawer, EmptyBoard, Field, KeyValue, Modal, Overlay,
 import { BotPhoto, EvalTrend, PlayerRow, RateChart, ResultHead, ResultRow } from '../components/data';
 import { Band, Blank, ListHead, ListPane, Page, Rows, Sections, Table, TitleBit, useKept, useNow, useWidth, useWindowHeight } from '../ggsui';
 import { whenFull, whenShort } from '../when';
-import { boardCells, boardIndex, clockText, legDiff, liveConn, matchesOf, myRating, pliesOf, splitOf, threadsOf, trendOf } from '../fs';
+import { boardCells, boardIndex, clockText, endBytes, legDiff, liveConn, matchesOf, midBytes, myRating, pliesOf, sizeText, splitOf, tablesOf, threadsOf, trendOf } from '../fs';
 import { flipped } from '../prefs';
 import { Strength, presetOf } from '../components/strength';
 import { LEVELS } from '../state';
@@ -23,7 +23,8 @@ export function FsScreen({ nav, fs, ggs, onNav, prefs, onKifu, confirm, say }: {
   nav: NavId; fs: FsSnapshot | null; ggs: GgsSnapshot | null; onNav: (id: NavId) => void; prefs: Prefs;
   onKifu: (title: string, kifu: string, parts?: string[]) => void; confirm: Ask; say: (s: string) => void;
 }) {
-  const snap = fs ?? { cores: 1, bots: [], adding: null, token_change: null, connected: false, playing: false };
+  const snap = fs ?? { cores: 1, bots: [], adding: null, token_change: null, connected: false, playing: false,
+                      tables: { app: [22, 24], min: 16, max: 26, entry: [16, 32, 32], memory: 0 } };
   // A bot that is not connected has its games on the site read again when its screens open.
   const idle = snap.bots.filter((b) => !liveConn(b.conn)).map((b) => b.id).join(',');
   useEffect(() => {
@@ -104,6 +105,40 @@ function ThreadBar({ fs }: { fs: FsSnapshot }) {
   );
 }
 
+/** Every bot's tables (one game's × 2 games × matches at once) against this machine's memory; shown, never refused. */
+function TableBar({ fs }: { fs: FsSnapshot }) {
+  const colors = ['var(--accent)', 'var(--ok)', 'var(--gold)', 'var(--sub)'];
+  const tb = fs.tables;
+  const total = tb.memory || 1;
+  const bytesOf = (b: FsBotRow) => tablesOf(tb, b) * 2 * matchesOf(b);
+  const used = fs.bots.reduce((n, b) => n + bytesOf(b), 0);
+  const parts = fs.bots.map((b, i) => {
+    const bytes = bytesOf(b);
+    const c = colors[i % colors.length];
+    return { w: Math.min(160, (160 * bytes) / total), c: liveConn(b.conn) ? c : `color-mix(in srgb, ${c} 35%, var(--track))` };
+  });
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', fontSize: 'var(--fs-6)', color: 'var(--sub)', whiteSpace: 'nowrap' }}>
+      <span>{t('fs.tables')}</span>
+      <span aria-hidden style={{ display: 'flex', gap: 2, width: 160, height: 6, overflow: 'hidden' }}>
+        {parts.map((p, i) => <span key={i} style={{ flex: 'none', width: p.w, borderRadius: 1, background: p.c }} />)}
+        <span style={{ flex: 1, borderRadius: 1, background: 'var(--track)' }} />
+      </span>
+      <b style={{ fontWeight: 600, color: 'var(--text)' }}>
+        {t('fs.tables_use', { used: +(used / 2 ** 30).toFixed(1), total: Math.round(tb.memory / 2 ** 30) })}
+      </b>
+    </span>
+  );
+}
+
+/** The choices of one table's size: the app's setting, then each size from the largest. */
+function hashOpts(fs: FsSnapshot, bytes: (bits: number) => number, app: number | null): [string, string][] {
+  const tb = fs.tables;
+  const out: [string, string][] = [['0', app == null ? t('fs.mine.hash_app_plain') : t('fs.mine.hash_app', { size: sizeText(bytes(app)) })]];
+  for (let b = tb.max; b >= tb.min; b--) out.push([String(b), sizeText(bytes(b))]);
+  return out;
+}
+
 const row: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', minHeight: 'var(--h-row2)', padding: 'var(--sp-2) 0',
   borderBottom: '1px solid var(--border-weak)', fontSize: 'var(--fs-5)',
@@ -152,6 +187,7 @@ function FsMine({ fs, ggs, confirm, say }: { fs: FsSnapshot; ggs: GgsSnapshot | 
   const [newCap, setNewCap] = useState('0');
   const [newThreads, setNewThreads] = useState('0');
   const [newLevel, setNewLevel] = useState<Level>(null);
+  const [newHash, setNewHash] = useState<[string, string]>(['0', '0']);
   const [tokenFor, setTokenFor] = useState<number | null>(null);
   const [newToken, setNewToken] = useState('');
   const sel = pick === 'new' ? undefined : fs.bots.find((b) => b.id === pick);
@@ -219,6 +255,15 @@ function FsMine({ fs, ggs, confirm, say }: { fs: FsSnapshot; ggs: GgsSnapshot | 
             <span style={{ color: 'var(--sub)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
               {t('fs.mine.threads_sum', { m, n: threadsOf(sel) })}
             </span></div>
+          <div style={row}><span style={rowLabel}>{t('fs.mine.hash_mid')}</span>
+            <Select value={String(sel.hash[0] ?? 0)} options={hashOpts(fs, (b) => midBytes(fs.tables, b, !!sel.level), fs.tables.app[0])}
+                    onChange={(v) => run(fsApi.set(sel.id, { hashMid: Number(v) }))} /></div>
+          <div style={row}><span style={rowLabel}>{t('fs.mine.hash_end')}</span>
+            <Select value={String(sel.hash[1] ?? 0)} options={hashOpts(fs, (b) => endBytes(fs.tables, b), fs.tables.app[1])}
+                    onChange={(v) => run(fsApi.set(sel.id, { hashEnd: Number(v) }))} />
+            <span style={{ color: 'var(--sub)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+              {t('fs.mine.hash_sum', { one: sizeText(tablesOf(fs.tables, sel)), m, all: sizeText(tablesOf(fs.tables, sel) * 2 * m) })}
+            </span></div>
           <div style={rowTop}><span style={rowTopLabel}>{t('fs.mine.strength')}</span>
             <StrengthPick value={sel.level} onChange={(v) => run(fsApi.set(sel.id, { level: v ?? [0, 0] }))} /></div>
           <div style={row}><span style={rowLabel}>{t('fs.mine.book')}</span>
@@ -250,7 +295,8 @@ function FsMine({ fs, ggs, confirm, say }: { fs: FsSnapshot; ggs: GgsSnapshot | 
     const capOpts: [string, string][] = [['0', t('fs.mine.cap_site_plain')], ...[1, 2, 3, 4].map((n): [string, string] => [String(n), String(n)])];
     const threadOpts: [string, string][] = [['0', t('fs.mine.threads_auto')]];
     for (let i = 1; i <= MAX_THREADS; i++) threadOpts.push([String(i), t('fs.mine.threads_n', { n: i })]);
-    const submit = () => run(fsApi.add(token, Number(newCap) || null, Number(newThreads) || null, newLevel));
+    const submit = () => run(fsApi.add(token, Number(newCap) || null, Number(newThreads) || null, newLevel,
+                                       Number(newHash[0]) || null, Number(newHash[1]) || null));
     detail = (
       <>
         {blocked}
@@ -268,6 +314,12 @@ function FsMine({ fs, ggs, confirm, say }: { fs: FsSnapshot; ggs: GgsSnapshot | 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--sp-3)' }}>
             <Field label={t('fs.mine.cap')}><Select value={newCap} options={capOpts} onChange={setNewCap} /></Field>
             <Field label={t('fs.mine.threads')}><Select value={newThreads} options={threadOpts} onChange={setNewThreads} /></Field>
+            <Field label={t('fs.mine.hash_mid')}>
+              <Select value={newHash[0]} options={hashOpts(fs, (b) => midBytes(fs.tables, b, !!newLevel), null)}
+                      onChange={(v) => setNewHash([v, newHash[1]])} /></Field>
+            <Field label={t('fs.mine.hash_end')}>
+              <Select value={newHash[1]} options={hashOpts(fs, (b) => endBytes(fs.tables, b), null)}
+                      onChange={(v) => setNewHash([newHash[0], v])} /></Field>
           </div>
         )}
         {details && <Field label={t('fs.mine.strength')}><StrengthPick value={newLevel} onChange={setNewLevel} /></Field>}
@@ -284,7 +336,7 @@ function FsMine({ fs, ggs, confirm, say }: { fs: FsSnapshot; ggs: GgsSnapshot | 
   const tokenBot = fs.bots.find((b) => b.id === tokenFor);
   return (
     <>
-      <Toolbar end={<ThreadBar fs={fs} />}>
+      <Toolbar end={<span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-4)' }}><ThreadBar fs={fs} /><TableBar fs={fs} /></span>}>
         <TitleBit title={t('fs.mine.title')} />
       </Toolbar>
       <Page row>

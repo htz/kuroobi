@@ -435,6 +435,8 @@ export interface FsBotRow {
   accept: boolean;
   /** Depth and solve every move is played at; null plays by the clock. */
   level: [number, number] | null;
+  /** Midgame and endgame table bits; null follows the app's setting. */
+  hash: [number | null, number | null];
   conn: FsConn;
   view: FsBotView | null;
 }
@@ -448,6 +450,18 @@ export interface FsSnapshot {
   token_change: FsPending | null;
   connected: boolean;
   playing: boolean;
+  tables: FsTables;
+}
+
+export interface FsTables {
+  /** The app's midgame and endgame bits. */
+  app: [number, number];
+  min: number;
+  max: number;
+  /** Bytes an entry of the clock search's, the midgame search's and the solver's table takes. */
+  entry: [number, number, number];
+  /** This machine's memory, in bytes. */
+  memory: number;
 }
 
 /** One finished match as `results.jsonl` keeps it. */

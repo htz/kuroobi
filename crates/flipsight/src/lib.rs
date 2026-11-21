@@ -93,6 +93,9 @@ pub struct Control {
     pub level: Option<(u32, u8)>,
     /// One bot to challenge now, taken once sent.
     pub challenge_now: Option<i64>,
+    /// Midgame and endgame transposition table bits; an engine keeps the tables it was built
+    /// with until no match is running.
+    pub hash: (u32, u32),
 }
 
 /// What the bot shows of itself.
@@ -585,6 +588,8 @@ struct Sent {
 struct Slot {
     worker: EngineWorker,
     sent: Option<Sent>,
+    /// The midgame and endgame table bits its engine was built with.
+    hash: (u32, u32),
 }
 
 pub struct Bot {
@@ -693,6 +698,7 @@ impl Bot {
             slots.push(Slot {
                 worker: EngineWorker::spawn_with(assets.clone(), engine_cfg.clone(), false)?,
                 sent: None,
+                hash: (engine_cfg.midgame_hash_bits, engine_cfg.solver_hash_bits),
             });
         }
         log(&format!(
@@ -707,6 +713,7 @@ impl Bot {
             use_book: o.use_book,
             level: None,
             challenge_now: None,
+            hash: (engine_cfg.midgame_hash_bits, engine_cfg.solver_hash_bits),
         };
         let cpu = std::process::Command::new("sysctl")
             .args(["-n", "machdep.cpu.brand_string"])
@@ -779,9 +786,37 @@ impl Bot {
             "os": std::env::consts::OS,
             "engine_threads": ctl.threads,
             // One leg's: a match's two legs each have their own engine and tables.
-            "hash_mb": self.engine_cfg.table_mb(ctl.level.is_none()).round(),
+            "hash_mb": self.tables_of(ctl.hash).table_mb(ctl.level.is_none()).round(),
             "practice": self.o.practice,
         })
+    }
+
+    /// The engine settings with the table sizes `hash`.
+    fn tables_of(&self, hash: (u32, u32)) -> EngineConfig {
+        EngineConfig {
+            midgame_hash_bits: hash.0,
+            solver_hash_bits: hash.1,
+            ..self.engine_cfg.clone()
+        }
+    }
+
+    /// Rebuilds the engines whose tables are not the size now set, while no match runs: building
+    /// one allocates its tables, which inside a match would take a move's time.
+    fn refit_engines(&mut self, hash: (u32, u32)) {
+        let cfg = self.tables_of(hash);
+        for slot in &mut self.slots {
+            if slot.hash == hash || slot.worker.busy {
+                continue;
+            }
+            match EngineWorker::spawn_with(self.assets.clone(), cfg.clone(), false) {
+                Ok(w) => {
+                    slot.worker = w;
+                    slot.sent = None;
+                    slot.hash = hash;
+                }
+                Err(e) => log(&format!("engine not rebuilt: {e}")),
+            }
+        }
     }
 
     /// The flag that, once set, makes the bot finish its matches and stop.
@@ -1097,6 +1132,9 @@ impl Bot {
             .map(|m| m.id)
             .collect();
         self.release(&live);
+        if running == 0 && self.owner.is_empty() {
+            self.refit_engines(ctl.hash);
+        }
         self.pauser.hold(running > 0);
         let waiting = mine.iter().any(|m| m.status == "pending");
         if self.drain.load(Ordering::Relaxed) {
@@ -1670,12 +1708,13 @@ impl Bot {
         let k = match (0..self.slots.len()).find(|k| !taken.contains(k)) {
             Some(k) => k,
             None => {
-                let w =
-                    EngineWorker::spawn_with(self.assets.clone(), self.engine_cfg.clone(), false)
-                        .ok()?;
+                let hash = self.ctl.lock().unwrap().hash;
+                let w = EngineWorker::spawn_with(self.assets.clone(), self.tables_of(hash), false)
+                    .ok()?;
                 self.slots.push(Slot {
                     worker: w,
                     sent: None,
+                    hash,
                 });
                 self.slots.len() - 1
             }

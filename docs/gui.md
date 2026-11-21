@@ -533,7 +533,10 @@ the bar at the top right shows threads × 2 games × games at once over the
 bots against what the machine runs at once, without refusing more (a bot
 on a level uses far less than its threads). Games at once can be
 set lower than the site's (the extra challenges are declined here),
-threads changed per bot, direct challenges turned away (the matches
+threads changed per bot, the midgame and endgame hash tables sized per bot
+(or left to the app's setting; the bar beside the threads shows every
+bot's tables against the machine's memory, and the size goes to the site
+as the engine's hash), direct challenges turned away (the matches
 the site's auto matching sets up still start; that is set on the site), and the strength set to
 the clock or to a level as in Play (depth and solve; each game keeps the
 setting it started with); the token itself cannot change the bot's

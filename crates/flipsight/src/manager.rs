@@ -54,6 +54,9 @@ pub struct Saved {
     /// The bot's picture on the site, kept so a bot that is not connected still shows it.
     #[serde(default)]
     pub photo: Option<String>,
+    /// Midgame and endgame transposition table bits; `None` follows the app's setting.
+    #[serde(default)]
+    pub hash: [Option<u32>; 2],
 }
 
 pub enum Cmd {
@@ -63,6 +66,7 @@ pub enum Cmd {
         cap: Option<usize>,
         threads: Option<usize>,
         level: Option<[u32; 2]>,
+        hash: [Option<u32>; 2],
     },
     Remove(i64),
     Connect(i64),
@@ -78,6 +82,8 @@ pub enum Cmd {
         book: Option<bool>,
         accept: Option<bool>,
         level: Option<Option<[u32; 2]>>,
+        /// Each `Some(None)` goes back to the app's setting.
+        hash: [Option<Option<u32>>; 2],
     },
     Challenge {
         id: i64,
@@ -117,6 +123,8 @@ pub struct BotRow {
     pub book: bool,
     pub accept: bool,
     pub level: Option<[u32; 2]>,
+    /// Midgame and endgame table bits set for this bot; `None` follows the app's setting.
+    pub hash: [Option<u32>; 2],
     /// off | connecting | online | draining | retrying | refused
     pub conn: String,
     pub view: Option<BotView>,
@@ -133,6 +141,53 @@ pub struct Snapshot {
     pub connected: bool,
     /// Some bot has a match in progress.
     pub playing: bool,
+    pub tables: Tables,
+}
+
+/// What the screen needs to size the transposition tables.
+#[derive(Clone, Default, Serialize)]
+pub struct Tables {
+    /// The app's midgame and endgame bits.
+    pub app: [u32; 2],
+    pub min: u32,
+    pub max: u32,
+    /// Bytes an entry of the clock search's, the midgame search's and the solver's table takes.
+    pub entry: [usize; 3],
+    /// This machine's memory, in bytes.
+    pub memory: u64,
+}
+
+fn tables() -> Tables {
+    use kuroobi::resources::{HASH_BITS_MAX, HASH_BITS_MIN};
+    let res = ggs::env::resources();
+    let memory = std::process::Command::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+        .unwrap_or(0);
+    Tables {
+        app: [res.hash_mid_bits(), res.hash_end_bits()],
+        min: HASH_BITS_MIN,
+        max: HASH_BITS_MAX,
+        entry: [
+            kuroobi::clock::table_bytes(10) >> 10,
+            kuroobi::midgame::SharedTt::bytes(12) >> 12,
+            kuroobi::solver::table_bytes(10) >> 10,
+        ],
+        memory,
+    }
+}
+
+/// A bot's midgame and endgame table bits: its own, else the app's.
+fn hash_of(b: &Saved) -> (u32, u32) {
+    use kuroobi::resources::{HASH_BITS_MAX, HASH_BITS_MIN};
+    let res = ggs::env::resources();
+    let pick = |own: Option<u32>, app: u32| own.unwrap_or(app).clamp(HASH_BITS_MIN, HASH_BITS_MAX);
+    (
+        pick(b.hash[0], res.hash_mid_bits()),
+        pick(b.hash[1], res.hash_end_bits()),
+    )
 }
 
 pub struct Handle {
@@ -237,6 +292,7 @@ enum Check {
         cap: Option<usize>,
         threads: Option<usize>,
         level: Option<[u32; 2]>,
+        hash: [Option<u32>; 2],
     },
     Token {
         id: i64,
@@ -381,6 +437,7 @@ impl Manager {
         };
         cfg.threads = b.threads;
         cfg.use_book = b.book;
+        (cfg.midgame_hash_bits, cfg.solver_hash_bits) = hash_of(&b);
         let out = records_dir(id);
         let o = Options {
             base: base(),
@@ -411,6 +468,7 @@ impl Manager {
             c.accept = b.accept;
             c.cap = b.cap;
             c.level = level_of(b.level);
+            c.hash = hash_of(&b);
         }
         let view = bot.view();
         {
@@ -480,6 +538,7 @@ impl Manager {
                 cap,
                 threads,
                 level,
+                hash,
             } => {
                 self.snap.lock().unwrap().adding = busy();
                 let check = Check::Add {
@@ -487,6 +546,7 @@ impl Manager {
                     cap,
                     threads,
                     level,
+                    hash,
                 };
                 self.check(check, token);
             }
@@ -568,7 +628,8 @@ impl Manager {
                 book,
                 accept,
                 level,
-            } => self.set(id, cap, threads, book, accept, level),
+                hash,
+            } => self.set(id, cap, threads, book, accept, level, hash),
             Cmd::Challenge { id, target } => {
                 if let Some(r) = self.running.get(&id) {
                     r.ctl.lock().unwrap().challenge_now = Some(target);
@@ -577,6 +638,7 @@ impl Manager {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // one per setting of the bot, as the screen sends them
     fn set(
         &mut self,
         id: i64,
@@ -585,6 +647,7 @@ impl Manager {
         book: Option<bool>,
         accept: Option<bool>,
         level: Option<Option<[u32; 2]>>,
+        hash: [Option<Option<u32>>; 2],
     ) {
         let Some(b) = self.find(id) else { return };
         let mut next = b.clone();
@@ -603,6 +666,11 @@ impl Manager {
         if let Some(x) = level {
             next.level = x;
         }
+        for (k, h) in hash.into_iter().enumerate() {
+            if let Some(x) = h {
+                next.hash[k] = x;
+            }
+        }
         *b = next.clone();
         if let Some(r) = self.running.get(&id) {
             let mut c = r.ctl.lock().unwrap();
@@ -611,6 +679,7 @@ impl Manager {
             c.use_book = next.book;
             c.accept = next.accept;
             c.level = level_of(next.level);
+            c.hash = hash_of(&next);
         }
         save(&self.saved);
     }
@@ -622,6 +691,7 @@ impl Manager {
                 cap,
                 threads,
                 level,
+                hash,
             } => {
                 let who = match r {
                     Ok(w) => w,
@@ -649,6 +719,7 @@ impl Manager {
                     max_games: who.max_games,
                     per_leg: true,
                     photo: None,
+                    hash,
                 };
                 let m = matches_of(&b);
                 b.threads = threads.unwrap_or(free / (2 * m)).clamp(1, MAX_THREADS);
@@ -773,6 +844,7 @@ impl Manager {
                 book: b.book,
                 accept: b.accept,
                 level: b.level,
+                hash: b.hash,
                 conn,
                 view,
             });
@@ -786,6 +858,7 @@ impl Manager {
             s.bots = rows;
             s.connected = connected;
             s.playing = playing;
+            s.tables = tables();
             s.clone()
         };
         self.host.publish(&snap);

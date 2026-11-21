@@ -120,6 +120,8 @@ pub fn fs_add(
     cap: Option<usize>,
     threads: Option<usize>,
     level: Option<[u32; 2]>,
+    hash_mid: Option<u32>,
+    hash_end: Option<u32>,
 ) -> Result<(), String> {
     let token = token.trim().to_string();
     if token.is_empty() {
@@ -132,6 +134,7 @@ pub fn fs_add(
             cap,
             threads,
             level,
+            hash: [hash_mid, hash_end],
         },
     )
 }
@@ -151,7 +154,9 @@ pub fn fs_remove(app: State<App>, id: i64) -> Result<(), String> {
     send(&app, Cmd::Remove(id))
 }
 
-/// `cap`: 0 is the site's own setting; `level`: `[0, 0]` plays by the clock; left out, each stays.
+/// `cap`: 0 is the site's own setting; `level`: `[0, 0]` plays by the clock; `hash_mid`,
+/// `hash_end`: table bits, 0 the app's setting; left out, each stays.
+#[allow(clippy::too_many_arguments)] // one per setting of the bot, as the screen sends them
 #[tauri::command]
 pub fn fs_set(
     app: State<App>,
@@ -161,7 +166,10 @@ pub fn fs_set(
     book: Option<bool>,
     accept: Option<bool>,
     level: Option<[u32; 2]>,
+    hash_mid: Option<u32>,
+    hash_end: Option<u32>,
 ) -> Result<(), String> {
+    let own = |h: Option<u32>| h.map(|b| (b > 0).then_some(b));
     send(
         &app,
         Cmd::Set {
@@ -171,6 +179,7 @@ pub fn fs_set(
             book,
             accept,
             level: level.map(|l| (l[0] > 0).then_some(l)),
+            hash: [own(hash_mid), own(hash_end)],
         },
     )
 }

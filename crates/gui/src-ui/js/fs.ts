@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { fsApi, jsLog, onFsSnapshot } from './api';
 import type { Cell } from './components/board';
-import type { FsBotRow, FsResult, FsSnapshot } from './types';
+import type { FsBotRow, FsResult, FsSnapshot, FsTables } from './types';
 import { sumBoards, type TrendPoint } from './ggsui';
 
 export function useFs() {
@@ -38,6 +38,23 @@ export const matchesOf = (b: FsBotRow): number => Math.max(1, b.cap ?? b.max_gam
 /** Threads a bot can take at once: its threads are per game (as FlipSight counts them), and a
  * match plays its two games at once. */
 export const threadsOf = (b: FsBotRow): number => b.threads * 2 * matchesOf(b);
+
+/** One game's table bytes at `bits`: midgame (the clock search's on a clock, the midgame
+ * search's at a level) and endgame (the solver's). */
+export const midBytes = (tb: FsTables, bits: number, level: boolean): number => 2 ** bits * tb.entry[level ? 1 : 0];
+export const endBytes = (tb: FsTables, bits: number): number => 2 ** bits * tb.entry[2];
+
+/** A bot's midgame and endgame bits: its own, else the app's. */
+export const hashOf = (tb: FsTables, b: FsBotRow): [number, number] => [b.hash[0] ?? tb.app[0], b.hash[1] ?? tb.app[1]];
+
+/** One game's tables of a bot, in bytes; a match plays its two games at once, each with its own. */
+export const tablesOf = (tb: FsTables, b: FsBotRow): number => {
+  const [mid, end] = hashOf(tb, b);
+  return midBytes(tb, mid, !!b.level) + endBytes(tb, end);
+};
+
+export const sizeText = (bytes: number): string =>
+  bytes >= 2 ** 30 ? `${+(bytes / 2 ** 30).toFixed(1)} GB` : `${Math.round(bytes / 2 ** 20)} MB`;
 
 export const liveConn = (c: FsBotRow['conn']) => c === 'online' || c === 'connecting' || c === 'draining' || c === 'retrying';
 
