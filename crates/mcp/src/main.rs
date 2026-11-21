@@ -222,14 +222,19 @@ fn launch(instance: &str) -> Result<Value, String> {
             cwd.display()
         ));
     }
-    let child = Command::new(&bin)
+    let mut child = Command::new(&bin)
         .current_dir(&cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| e.to_string())?;
-    Ok(json!({"launched_pid": child.id(), "cwd": cwd}))
+    let pid = child.id();
+    // Unwaited, a GUI that quits stays a zombie of the long-lived MCP server and keeps its GGS session lock.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(json!({"launched_pid": pid, "cwd": cwd}))
 }
 
 /// A command of the GUI, run through its screens exactly as their own controls run it.

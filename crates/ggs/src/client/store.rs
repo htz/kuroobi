@@ -534,7 +534,33 @@ fn other_session_pid(path: &std::path::Path) -> Option<i32> {
         .trim()
         .parse::<i32>()
         .ok()?;
-    (pid != std::process::id() as i32 && unsafe { libc::kill(pid, 0) } == 0).then_some(pid)
+    (pid != std::process::id() as i32 && unsafe { libc::kill(pid, 0) } == 0 && !is_zombie(pid))
+        .then_some(pid)
+}
+
+/// An exited GUI its launcher never waited for still answers `kill(pid, 0)`.
+#[cfg(target_os = "macos")]
+fn is_zombie(pid: i32) -> bool {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let got = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    got != size || unsafe { info.assume_init() }.pbi_status == libc::SZOMB
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_zombie(pid: i32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|s| s.rsplit(") ").next().map(|t| t.starts_with('Z')))
+        .unwrap_or(false)
 }
 
 /// Where the control socket for AI tools listens: beside this launch's GGS data, so a test GUI
@@ -563,5 +589,39 @@ pub(super) fn unlock_session() {
         if s.trim() == std::process::id().to_string() {
             let _ = std::fs::remove_file(&path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unwaited_exited_process_does_not_hold_the_session() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let path = std::env::temp_dir().join(format!("kuroobi_ggs_test_{}.pid", child.id()));
+        std::fs::write(&path, child.id().to_string()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let zombie = other_session_pid(&path);
+        std::fs::write(&path, std::process::id().to_string()).unwrap();
+        let own = other_session_pid(&path);
+        let _ = std::fs::remove_file(&path);
+        let _ = child.wait();
+        assert_eq!((zombie, own), (None, None));
+    }
+
+    #[test]
+    fn running_process_holds_the_session() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let path = std::env::temp_dir().join(format!("kuroobi_ggs_test_{}.pid", child.id()));
+        std::fs::write(&path, child.id().to_string()).unwrap();
+        let other = other_session_pid(&path);
+        let _ = std::fs::remove_file(&path);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(other, Some(child.id() as i32));
     }
 }
