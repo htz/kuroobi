@@ -58,7 +58,8 @@
         "dan07.svg",
         "dan08.svg",
         "dan09.svg",
-        "dan10.svg"
+        "dan10.svg",
+        "shihandai.svg"
       ],
       "files": {
         "dan01.svg": {
@@ -120,6 +121,12 @@
           "blob": "8052d4d919f2691951c7965b08ff2a37",
           "size": 10583,
           "type": "image/svg+xml"
+        },
+        "shihandai.svg": {
+          "name": "shihandai.svg",
+          "blob": "1e0455bd6d8b332ac32b4e1d0c0a4f5f",
+          "size": 14268,
+          "type": "image/svg+xml"
         }
       }
     }
@@ -130,8 +137,8 @@
   },
   "lastChange": {
     "by": "htz",
-    "at": "2026-11-17T16:40:00Z",
+    "at": "2026-11-21T15:20:00Z",
     "via": "Claude Code",
-    "note": "The app icon is square: the platform it is shown on rounds or crops the corners itself."
+    "note": "A bot icon for 師範代, the rank above the ten dans."
   }
 }
