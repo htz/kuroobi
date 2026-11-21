@@ -24,6 +24,12 @@ export function FsScreen({ nav, fs, ggs, onNav, prefs, onKifu, confirm, say }: {
   onKifu: (title: string, kifu: string, parts?: string[]) => void; confirm: Ask; say: (s: string) => void;
 }) {
   const snap = fs ?? { cores: 1, bots: [], adding: null, token_change: null, connected: false, playing: false };
+  // A bot that is not connected has its games on the site read again when its screens open.
+  const idle = snap.bots.filter((b) => !liveConn(b.conn)).map((b) => b.id).join(',');
+  useEffect(() => {
+    if (nav === 'fs-mine') return;
+    for (const id of idle.split(',').filter(Boolean)) void fsApi.sync(Number(id));
+  }, [nav, idle]);
   if (nav === 'fs-play') return <FsPlay fs={snap} onNav={onNav} prefs={prefs} onKifu={onKifu} />;
   if (nav === 'fs-bots') return <FsBots fs={snap} say={say} />;
   if (nav === 'fs-results') return <FsResults fs={snap} onKifu={onKifu} />;
@@ -372,7 +378,8 @@ function FsPlay({ fs, onNav, prefs, onKifu }: { fs: FsSnapshot; onNav: (id: NavI
     : over.find((x) => `over:${x.bot.id}:${x.r.match}` === pick || `live:${x.r.match}` === pick) ?? (pick === '' || pick.startsWith('live:') ? over[0] : undefined);
 
   if (!live.length && !over.length) {
-    const lines = fs.bots.filter((b) => liveConn(b.conn)).map((b) => {
+    const lines = fs.bots.map((b) => {
+      if (!liveConn(b.conn)) return `${nm(b)} · ${t('fs.state.off')}`;
       const o = b.view?.outstanding;
       return o ? t('fs.play.asking', { bot: nm(b), name: o.name || t('fs.bot_n', { n: o.target }) }) : `${nm(b)} · ${t('fs.play.waiting_short')}`;
     });
@@ -384,7 +391,7 @@ function FsPlay({ fs, onNav, prefs, onKifu }: { fs: FsSnapshot; onNav: (id: NavI
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-5)' }}>
               <div style={{ flex: 'none', width: 160, opacity: 0.6 }}><EmptyBoard /></div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', maxWidth: 320 }}>
-                <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>{t('fs.play.waiting')}</span>
+                {fs.connected && <span style={{ fontSize: 'var(--fs-3)', fontWeight: 600 }}>{t('fs.play.waiting')}</span>}
                 {lines.map((l) => <span key={l} style={{ fontSize: 'var(--fs-5)', lineHeight: 1.8 }}>{l}</span>)}
                 <div style={{ display: 'flex', gap: 'var(--sp-2)', marginTop: 'var(--sp-2)' }}>
                   <Button variant="primary" onClick={() => onNav('fs-bots')}>{t('fs.play.see_bots')}</Button>

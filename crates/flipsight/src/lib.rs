@@ -214,6 +214,103 @@ fn learn_opponent(names: &mut HashMap<i64, OtherBot>, r: &Value, base: &str) {
     });
 }
 
+fn json_lines(path: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}
+
+/// What a bot that is not running shows of itself, from the records it keeps: its last rating
+/// and the bots it has played.
+pub fn offline_view(dir: &std::path::Path, base: &str, me: &OtherBot) -> BotView {
+    let mut names = HashMap::new();
+    let mut rating = None;
+    for r in json_lines(&dir.join("games.jsonl")) {
+        learn_opponent(&mut names, &r, base);
+        rating = r["me"]["rating_after"].as_f64().or(rating);
+    }
+    names.insert(
+        me.id,
+        OtherBot {
+            rating,
+            ..me.clone()
+        },
+    );
+    let mut bots: Vec<OtherBot> = names.into_values().collect();
+    bots.sort_by(|a, b| b.rating.unwrap_or(0.0).total_cmp(&a.rating.unwrap_or(0.0)));
+    BotView {
+        id: me.id,
+        name: me.name.clone(),
+        photo: me.photo.clone(),
+        rating,
+        conn: "off".into(),
+        bots,
+        finished: json_lines(&dir.join("results.jsonl")).len() as u64,
+        ..Default::default()
+    }
+}
+
+/// For a bot that is not running: reads the site's records since the last one kept, and writes
+/// a result for each match that ended after the last result here (played while this program
+/// was not connected). Returns the results written.
+pub fn sync_records(dir: &std::path::Path, api: &Api) -> Result<usize, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let mut kept: HashSet<(String, i64)> = HashSet::new();
+    let mut until = 0;
+    for r in json_lines(&dir.join("games.jsonl")) {
+        kept.insert(record_key(&r));
+        until = until.max(r["updated_ms"].as_i64().unwrap_or(0));
+    }
+    let results = json_lines(&dir.join("results.jsonl"));
+    let mut finished: HashSet<i64> = results.iter().filter_map(|r| r["match"].as_i64()).collect();
+    let last = results
+        .iter()
+        .filter_map(|r| r["t"].as_i64())
+        .max()
+        .unwrap_or(0);
+    let open = |name: &str| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join(name))
+            .map_err(|e| e.to_string())
+    };
+    let (mut games, mut out) = (open("games.jsonl")?, open("results.jsonl")?);
+    let mut written = 0;
+    for page in 0..SYNC_PAGES {
+        if page > 0 {
+            std::thread::sleep(RECORDS_APART);
+        }
+        let mut new = 0;
+        for r in api.games(until)? {
+            until = until.max(r["updated_ms"].as_i64().unwrap_or(0));
+            if !kept.insert(record_key(&r)) {
+                continue;
+            }
+            new += 1;
+            let _ = writeln!(games, "{r}");
+            let id = r["id"].as_i64().unwrap_or(0);
+            if r["kind"] == "bot"
+                && r["finished_ms"].as_i64().unwrap_or(0) > last
+                && finished.insert(id)
+            {
+                let _ = writeln!(out, "{}", result_of_record(&r));
+                written += 1;
+            }
+        }
+        if new == 0 {
+            break;
+        }
+    }
+    Ok(written)
+}
+
+/// The site answers 429 to a second call for records within a few seconds.
+const RECORDS_APART: Duration = Duration::from_secs(10);
+const SYNC_PAGES: usize = 6;
+
 /// A line of results.jsonl from the site's record, for a match whose end we did not see.
 fn result_of_record(r: &Value) -> Value {
     let opening: Vec<&str> = chunks2(r["opening"].as_str().unwrap_or(""));
@@ -844,7 +941,7 @@ impl Bot {
                     log(&format!("{} records read, {new} new", records.len()));
                 }
                 // The newest record's time comes back again, so a page with nothing new is the end.
-                self.catch_up_at = (new > 0).then(|| Instant::now() + Duration::from_secs(10));
+                self.catch_up_at = (new > 0).then(|| Instant::now() + RECORDS_APART);
             }
             Err(e) => {
                 log(&format!("records not read: {e}"));

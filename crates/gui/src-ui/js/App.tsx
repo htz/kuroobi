@@ -65,17 +65,17 @@ const sides = () => [
 ];
 
 function reachable(raw: NavId, conn: ReturnType<typeof connOf>, fs: FsSnapshot | null): NavId {
-  if (raw.startsWith('fs-')) return fs?.connected || raw === 'fs-mine' ? raw : 'fs-mine';
+  if (raw.startsWith('fs-')) return fs?.bots.length || raw === 'fs-mine' ? raw : 'fs-mine';
   if (conn === 'online') return raw === 'ggs-login' ? 'ggs-play' : raw;
   return raw.startsWith('ggs-') && raw !== 'ggs-login' ? 'ggs-login' : raw;
 }
 
-/** FlipSight's rows: My bots alone until a bot is connected. */
+/** FlipSight's rows: My bots alone until a bot is saved; the rest read its records, connected or not. */
 function fsNav(fs: FsSnapshot | null): NavSection {
   const live = fs?.bots.reduce((n, b) => n + (b.view?.matches.length ?? 0), 0) ?? 0;
   const refused = fs?.bots.some((b) => b.conn === 'refused');
   const mine: NavItem = { id: 'fs-mine', label: t('fs.nav.mine'), icon: 'login', ...(refused ? { dot: 'bad' as const } : {}) };
-  const items: NavItem[] = fs?.connected
+  const items: NavItem[] = fs?.bots.length
     ? [{ id: 'fs-play', label: t('fs.nav.play'), icon: 'ggs-play', ...(live ? { count: live } : {}) },
        { id: 'fs-bots', label: t('fs.nav.bots'), icon: 'ggs-users' },
        { id: 'fs-results', label: t('fs.nav.results'), icon: 'results' }, mine]

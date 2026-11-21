@@ -2251,6 +2251,7 @@ fn main() {
             fs::fs_change_token,
             fs::fs_clear_pending,
             fs::fs_refresh,
+            fs::fs_sync,
             fs::fs_results,
             set_backend_strings,
             clocks,

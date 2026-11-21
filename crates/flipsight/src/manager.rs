@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use kuroobi::engine::{EngineAssets, EngineConfig};
 use serde::{Deserialize, Serialize};
@@ -92,6 +92,9 @@ pub enum Cmd {
     /// Reads a disconnected bot's settings on the site again (a connected one has them from
     /// its stream).
     Refresh(i64),
+    /// Reads the site's records of a disconnected bot's games since the last one kept (a
+    /// connected one reads them itself).
+    Sync(i64),
 }
 
 /// The add form or the token dialog: waiting for the site, or why it failed (an `err.*` key).
@@ -260,6 +263,11 @@ struct Manager {
     /// What the site said about a token, from a thread so the screen keeps moving.
     checks: Sender<Checked>,
     checked: Receiver<Checked>,
+    /// What each bot that has not run shows, from its records; dropped when they change.
+    offline: HashMap<i64, BotView>,
+    /// Bots whose records a thread is reading or has just read, and when it was asked.
+    syncs: HashMap<i64, Instant>,
+    synced: Arc<Mutex<Vec<i64>>>,
 }
 
 fn who(token: &str) -> Result<Who, String> {
@@ -290,6 +298,9 @@ fn who(token: &str) -> Result<Who, String> {
         _ => Err("err.fs_unreachable".into()),
     }
 }
+
+/// A disconnected bot's records are read from the site at most this often.
+const SYNC_EVERY: Duration = Duration::from_secs(60);
 
 /// FlipSight's limit on one engine's threads.
 pub const MAX_THREADS: usize = 4;
@@ -496,6 +507,29 @@ impl Manager {
                     self.check(Check::Refresh(id), token);
                 }
             }
+            Cmd::Sync(id) => {
+                let live = self.running.get(&id);
+                if live.is_some_and(|r| !r.done.load(Ordering::Relaxed))
+                    || self
+                        .syncs
+                        .get(&id)
+                        .is_some_and(|t| t.elapsed() < SYNC_EVERY)
+                {
+                    return;
+                }
+                let Some(token) = self.find(id).map(|b| b.token.clone()) else {
+                    return;
+                };
+                self.syncs.insert(id, Instant::now());
+                let synced = self.synced.clone();
+                std::thread::spawn(move || {
+                    let api = Api::new(&base(), token);
+                    if let Err(e) = crate::sync_records(&records_dir(id), &api) {
+                        eprintln!("flipsight: records of bot {id} not read: {e}");
+                    }
+                    synced.lock().unwrap().push(id);
+                });
+            }
             Cmd::ClearPending => {
                 let mut s = self.snap.lock().unwrap();
                 s.adding = None;
@@ -668,13 +702,17 @@ impl Manager {
     }
 
     fn publish(&mut self) {
+        for id in self.synced.lock().unwrap().drain(..) {
+            self.offline.remove(&id);
+        }
         let mut rows = Vec::new();
         let mut connected = false;
         let mut playing = false;
         let mut learned = false;
         for b in self.saved.iter_mut() {
             let r = self.running.get_mut(&b.id);
-            let view = r.as_ref().map(|r| r.view.lock().unwrap().clone());
+            let ran = r.is_some();
+            let mut view = r.as_ref().map(|r| r.view.lock().unwrap().clone());
             let over = r.as_ref().is_some_and(|r| r.done.load(Ordering::Relaxed));
             let conn = match (&view, over) {
                 (Some(v), true) if v.conn == "refused" => "refused".to_string(),
@@ -710,6 +748,21 @@ impl Manager {
                 conn.as_str(),
                 "connecting" | "online" | "draining" | "retrying"
             );
+            // A bot that has not run shows what its records hold; one that ran, what it last saw.
+            if ran {
+                self.offline.remove(&b.id);
+            } else {
+                let v = self.offline.entry(b.id).or_insert_with(|| {
+                    let me = crate::OtherBot {
+                        id: b.id,
+                        name: b.name.clone(),
+                        photo: b.photo.clone(),
+                        ..Default::default()
+                    };
+                    crate::offline_view(&records_dir(b.id), &base(), &me)
+                });
+                view = Some(v.clone());
+            }
             rows.push(BotRow {
                 id: b.id,
                 name: b.name.clone(),
@@ -754,6 +807,9 @@ pub fn spawn(host: Arc<dyn Host>) -> Handle {
         snap: snap.clone(),
         checks,
         checked,
+        offline: HashMap::new(),
+        syncs: HashMap::new(),
+        synced: Arc::new(Mutex::new(Vec::new())),
     };
     std::thread::spawn(move || loop {
         match rx.recv_timeout(Duration::from_millis(500)) {

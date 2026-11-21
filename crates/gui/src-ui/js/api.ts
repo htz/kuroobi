@@ -146,6 +146,8 @@ export const fsApi = {
   clearPending: () => call('fs_clear_pending'),
   /** Reads a disconnected bot's settings on the site again. */
   refresh: (id: number) => call('fs_refresh', { id }),
+  /** Reads the site's records of a disconnected bot's games since the last one kept. */
+  sync: (id: number) => call('fs_sync', { id }),
   results: (id: number) => call<FsResult[]>('fs_results', { id }),
 };
 

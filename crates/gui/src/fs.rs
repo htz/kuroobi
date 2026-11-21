@@ -195,6 +195,11 @@ pub fn fs_refresh(app: State<App>, id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn fs_sync(app: State<App>, id: i64) -> Result<(), String> {
+    send(&app, Cmd::Sync(id))
+}
+
+#[tauri::command]
 pub fn fs_clear_pending(app: State<App>) -> Result<(), String> {
     send(&app, Cmd::ClearPending)
 }
