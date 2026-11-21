@@ -460,9 +460,10 @@ enum Asked {
     Failed,
 }
 
-/// The least the site's clock loses on a move outside the search: instant replies cost most, and with
-/// a 4 s margin this covered the last ten moves of all 1,545 logged legs.
-const MOVE_COST: f64 = 1.0;
+/// The least the site's clock is taken to lose on a move outside the search. With the state from
+/// the stream every one of a match's 51 moves lost 0.18 to 0.44 s (polling lost 0.85 at the
+/// median and 1.44 at the 99th percentile, and this was 1.0).
+const MOVE_COST: f64 = 0.5;
 
 /// The seconds a search may take with `left` on the site's clock and `empties` squares to fill.
 fn budget(left: f64, margin: f64, lag: f64, empties: u8) -> f64 {
@@ -1764,7 +1765,7 @@ mod tests {
 
     #[test]
     fn budget_keeps_the_margin_and_a_cost_for_every_later_move() {
-        assert_eq!(budget(30.0, 4.0, 0.8, 20), 30.0 - 4.0 - 9.0);
+        assert_eq!(budget(30.0, 4.0, 0.2, 20), 30.0 - 4.0 - 4.5);
         assert!((budget(30.0, 4.0, 1.5, 20) - (30.0 - 4.0 - 1.65 * 9.0)).abs() < 1e-9);
         assert_eq!(budget(10.0, 4.0, 0.8, 1), 6.0);
         assert_eq!(budget(5.0, 4.0, 0.8, 12), 0.05);
