@@ -532,7 +532,7 @@ fs:
     ggs_on: "Logged in to GGS as {name}"
     ggs_playing: "Cannot switch until the GGS game is over"
     logout_connect: "Log out of GGS and connect"
-    learn: "Learn finished games into the book"
+    learn: "Learn into the book"
     ponder: "Ponder"
     reading: "Reading…"
     refused: "The connection token was refused"
@@ -862,7 +862,7 @@ ggs:
   settings:
     apply_failed: "Could not apply ({error})"
     auto_play: "Play automatically on my turn"
-    learn: "Learn finished games into the book"
+    learn: "Learn into the book"
     back_to_tree: "Back to the tree"
     book_missing: "No file. Point to one under “Settings” at the bottom of the left menu."
     default_decline: "Use the defaults"

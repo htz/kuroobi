@@ -499,7 +499,7 @@ written to `ggs_wire.log` in the account's data folder.
 
 - **Servers and accounts** — see [Log in and accounts](#log-in-and-accounts).
 - **Playing and watching** — **Book** (use book moves in GGS games),
-  **Learn finished games into the book** (on by default; see
+  **Learn into the book** (on by default; see
   [Learning the book from real games](#learning-the-book-from-real-games-not-repeating-the-same-loss)),
   **Play automatically on my turn**, **Ponder** (on by default: one board
   is searched at a time on every thread, so while the opponent is to move

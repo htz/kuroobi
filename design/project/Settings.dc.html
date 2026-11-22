@@ -113,14 +113,14 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </div>
 </div>
 </x-import>
-<!-- Learning: moved here from the "Learning" tab in the match's right pane. Progress is shown in the status bar as "Learning a / b" -->
+<!-- Learning: moved here from the "Learning" tab in the match's right pane. Progress is shown in the status bar as "Learning a / b". This switch is the board's games only; GGS (Playing and watching) and each FlipSight bot have their own. One learner takes all of them in turn -->
 <x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="学習">
 <div style="display: flex; flex-direction: column">
 <div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
-<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">終局した対局を取り込む</span>
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">この盤の対局を取り込む</span>
 <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
 <x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}"></x-import>
-<span style="font-size: var(--fs-6); color: var(--sub)">ローカル対局と GGS の対局を、勝敗にかかわらず定石に取り込み、終局の石差を根まで書き戻す</span>
+<span style="font-size: var(--fs-6); color: var(--sub)">この盤で打った対局を、勝敗にかかわらず定石に取り込み、終局の石差を根まで書き戻す</span>
 </div>
 </div>
 <div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
@@ -330,6 +330,13 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <x-import component-from-global-scope="KuroobiUI.Button">定石ファイルを指定</x-import>
 <span style="font-size: var(--fs-6); color: var(--sub)">ファイルがありません</span>
 </sc-if>
+</div>
+</div>
+<!-- Learning GGS games: kept with the app's settings, not GGS's. On by default -->
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">対局を定石に取り込む</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<span style="display: flex; align-items: center; height: var(--h-ctrl)"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}"></x-import></span>
 </div>
 </div>
 <div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
