@@ -3019,6 +3019,22 @@ fn ponder_idle(ctx: &mut Ctx, matches: &HashMap<String, MatchState>) {
         .values()
         .any(|m| !m.over && m.my_color.is_some() && Some(m.turn) == m.my_color);
     let keep = on && !due && !mine_waiting;
+    let mut ran = Vec::new();
+    for w in &ctx.workers {
+        while let Ok(p) = w.pondered.try_recv() {
+            ran.push(format!(
+                "pondered: {} empties {} threads {} {:.2}s {} nodes",
+                w.mid.as_deref().unwrap_or("-"),
+                p.empties,
+                p.threads,
+                p.secs,
+                p.nodes
+            ));
+        }
+    }
+    for line in ran {
+        ctx.log("info", &line);
+    }
     for w in &mut ctx.workers {
         let Some(h) = w.pondering else { continue };
         let current = theirs

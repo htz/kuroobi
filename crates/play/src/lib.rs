@@ -23,6 +23,15 @@ pub struct EngineWorker {
     pub sent_empties: u8,
     /// The position (a caller's hash of it) a ponder was sent for and not yet stopped.
     pub pondering: Option<u64>,
+    /// One for every ponder that ran, as it ends.
+    pub pondered: std::sync::mpsc::Receiver<Pondered>,
+}
+
+pub struct Pondered {
+    pub secs: f64,
+    pub threads: usize,
+    pub empties: u8,
+    pub nodes: u64,
 }
 
 pub const WORKER_GIVE_UP: Duration = Duration::from_secs(10);
@@ -94,11 +103,13 @@ impl EngineWorker {
         cfg: EngineConfig,
         fixed_level: bool,
     ) -> Result<EngineWorker, String> {
+        let mut threads = cfg.threads;
         let engine = Engine::with_assets(assets, cfg)?;
         let stop = engine.stop_handle();
         let progress = engine.progress();
         let (jtx, jrx) = std::sync::mpsc::channel::<Job>();
         let (dtx, drx) = std::sync::mpsc::channel::<Done>();
+        let (ptx, prx) = std::sync::mpsc::channel::<Pondered>();
         std::thread::spawn(move || {
             let mut engine = engine;
             let mut fixed = fixed_level;
@@ -149,13 +160,25 @@ impl EngineWorker {
                         // the stop that was meant for it may already be spent on the one before.
                         match jrx.try_recv() {
                             Ok(next) => queued = Some(next),
-                            Err(_) => engine.ponder(&board, span),
+                            Err(_) => {
+                                let (t0, n0) = (Instant::now(), engine.nodes());
+                                engine.ponder(&board, span);
+                                let _ = ptx.send(Pondered {
+                                    secs: t0.elapsed().as_secs_f64(),
+                                    threads,
+                                    empties: board.empty_count(),
+                                    nodes: engine.nodes() - n0,
+                                });
+                            }
                         }
                         engine.stop_handle().reset();
                     }
                     Job::NewGame => engine.clear_tables(),
                     Job::SetUseBook(b) => engine.set_use_book(b),
-                    Job::SetThreads(n) => engine.set_threads(n),
+                    Job::SetThreads(n) => {
+                        threads = n.max(1);
+                        engine.set_threads(n);
+                    }
                     Job::SetLevel(Some((depth, solve))) => {
                         engine.set_levels(depth, solve);
                         (fixed, within_clock) = (true, true);
@@ -179,6 +202,7 @@ impl EngineWorker {
             sent_ms: 0,
             sent_empties: 0,
             pondering: None,
+            pondered: prx,
         })
     }
 

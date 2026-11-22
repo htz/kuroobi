@@ -499,7 +499,7 @@ impl Engine {
         if board.is_game_over() || self.stop.is_stopped() {
             return;
         }
-        self.clock_search().ponder(board, span);
+        self.other_nodes += self.clock_search().ponder(board, span);
     }
 
     pub fn choose_within(

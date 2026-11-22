@@ -1854,6 +1854,12 @@ impl Bot {
     fn collect(&mut self) {
         for k in 0..self.slots.len() {
             let slot = &mut self.slots[k];
+            while let Ok(p) = slot.worker.pondered.try_recv() {
+                log(&format!(
+                    "pondered: empties {} threads {} {:.2}s {} nodes",
+                    p.empties, p.threads, p.secs, p.nodes
+                ));
+            }
             if let Some(sent) = &slot.sent {
                 if slot.worker.busy && sent.at.elapsed().as_secs_f64() > sent.budget * 2.0 + 3.0 {
                     slot.worker.stop.stop();
