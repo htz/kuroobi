@@ -392,6 +392,8 @@ export interface FsLeg {
 
 export interface FsMatch {
   id: number;
+  /** bot: two legs from an opening; human: one game from the start position. */
+  kind: 'bot' | 'human';
   opponent: number;
   opponent_name: string;
   opponent_rating: number | null;
@@ -474,6 +476,8 @@ export interface FsTables {
 export interface FsResult {
   t: number;
   match: number;
+  /** Absent in results kept before games against people were told apart. */
+  kind?: 'bot' | 'human' | null;
   opponent: number;
   opponent_name?: string | null;
   opponent_rating?: number | null;

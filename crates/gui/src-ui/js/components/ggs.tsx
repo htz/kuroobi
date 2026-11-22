@@ -234,10 +234,12 @@ export function MatchRow({ m, active, onSelect, onClose }: {
 }
 
 /** A bot's match in the list: the opponent with this machine's bot under it; at the right the format over the disc difference. */
-export function BotMatchRow({ name, photo, own, ownPhoto, kind, diff, active, onSelect, onClose }: {
+export function BotMatchRow({ name, photo, own, ownPhoto, kind, diff, outcome, active, onSelect, onClose }: {
   name: string; photo?: string | null; own: string; ownPhoto?: string | null; kind: string;
   /** undefined: still playing; null: ended without a result. */
   diff?: number | null;
+  /** Colours the difference when it does not tell (a resignation at equal discs). */
+  outcome?: 'win' | 'loss' | 'draw';
   active: boolean; onSelect: () => void;
   /** Given on a finished match: it can be closed. */
   onClose?: () => void;
@@ -263,7 +265,8 @@ export function BotMatchRow({ name, photo, own, ownPhoto, kind, diff, active, on
           <Tag tone="sub">{kind}</Tag>
           {over && (
             <span style={{ fontSize: 'var(--fs-5)', fontWeight: 600, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
-                           color: !diff ? 'var(--sub)' : diff > 0 ? 'var(--ok)' : 'var(--bad)' }}>
+                           color: diff == null || (outcome ?? (diff > 0 ? 'win' : diff < 0 ? 'loss' : 'draw')) === 'draw' ? 'var(--sub)'
+                             : (outcome ?? (diff > 0 ? 'win' : 'loss')) === 'win' ? 'var(--ok)' : 'var(--bad)' }}>
               {diff == null ? '\u2014' : diff > 0 ? '+' + diff : diff < 0 ? '\u2212' + -diff : '0'}
             </span>
           )}

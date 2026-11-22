@@ -39,7 +39,7 @@ export function FsScreen({ nav, fs, ggs, onNav, prefs, onKifu, confirm, say }: {
 
 /** A bot's name, or its number when the site gave none. */
 const nm = (b: FsBotRow): string => b.name || t('fs.bot_n', { n: b.id });
-const opp = (m: FsMatch): string => m.opponent_name || t('fs.bot_n', { n: m.opponent });
+const opp = (m: FsMatch): string => m.opponent_name || (m.kind === 'human' ? t('fs.opponent') : t('fs.bot_n', { n: m.opponent }));
 
 /** Every bot's picture by its number: this machine's bots, then all the bots a connected one sees. */
 const photosOf = (fs: FsSnapshot): Map<number, string> => {
@@ -411,10 +411,26 @@ function FsMine({ fs, ggs, confirm, say }: { fs: FsSnapshot; ggs: GgsSnapshot | 
 type Live = { bot: FsBotRow; m: FsMatch };
 type Over = { bot: FsBotRow; r: FsResult };
 
-const resultWord = (r: FsResult, bot: string, opp: string): string =>
-  r.diff === 0 ? t('fs.result.draw') : t('fs.result.win', { name: r.diff > 0 ? bot : opp, d: Math.abs(r.diff) });
+/** Win, loss or draw as the site decided it: a resignation can leave the discs equal. */
+const outcomeOf = (r: FsResult): 'win' | 'loss' | 'draw' =>
+  r.result === 'win' || r.result === 'loss' || r.result === 'draw' ? r.result : r.diff > 0 ? 'win' : r.diff < 0 ? 'loss' : 'draw';
 
-const oppName = (r: FsResult): string => r.opponent_name || t('fs.bot_n', { n: r.opponent });
+const humanResult = (r: FsResult): boolean => r.kind === 'human' || r.match < 0;
+
+const kindWord = (human: boolean): string => t(human ? 'fs.kind_human' : 'fs.kind');
+
+const resultWord = (r: FsResult, bot: string, opp: string): string => {
+  const o = outcomeOf(r);
+  if (o === 'draw') return t('fs.result.draw');
+  const name = o === 'win' ? bot : opp;
+  return r.finish_reason === 'resign' ? t('fs.result.resign_win', { name }) : t('fs.result.win', { name, d: Math.abs(r.diff) });
+};
+
+/** Each leg's difference, or nothing for a single game: its difference is the match's. */
+const legsText = (r: FsResult): string =>
+  r.legs.length > 1 ? r.legs.map((l, i) => `${t('fs.leg_n', { n: i + 1 })} ${signed(legDiff(l))}`).join(' · ') : '';
+
+const oppName = (r: FsResult): string => r.opponent_name || (humanResult(r) ? t('fs.opponent') : t('fs.bot_n', { n: r.opponent }));
 
 function FsPlay({ fs, onNav, prefs, onKifu }: { fs: FsSnapshot; onNav: (id: NavId) => void; prefs: Prefs; onKifu: (title: string, kifu: string, parts?: string[]) => void }) {
   const live: Live[] = fs.bots.flatMap((bot) => (bot.view?.matches ?? []).map((m) => ({ bot, m })));
@@ -465,7 +481,7 @@ function FsPlay({ fs, onNav, prefs, onKifu }: { fs: FsSnapshot; onNav: (id: NavI
     );
   }
 
-  const ownSide = (b: FsBotRow) => ({ own: nm(b), ownPhoto: b.photo, kind: t('fs.kind') });
+  const ownSide = (b: FsBotRow, human: boolean) => ({ own: nm(b), ownPhoto: b.photo, kind: kindWord(human) });
   const title = pickedLive ? t('fs.vs', { a: nm(pickedLive.bot), b: opp(pickedLive.m) })
     : pickedOver ? t('fs.vs', { a: nm(pickedOver.bot), b: oppName(pickedOver.r) }) : '';
   const kifuParts = pickedOver ? pickedOver.r.legs.map((l) => l.moves ?? '').filter(Boolean) : [];
@@ -474,7 +490,7 @@ function FsPlay({ fs, onNav, prefs, onKifu }: { fs: FsSnapshot; onNav: (id: NavI
       <Toolbar end={pickedOver && kifuParts.length > 0 && (
         <Button onClick={() => onKifu(`${title} · ${whenFull(pickedOver.r.t / 1000)}`, kifuParts[0], kifuParts)}>{t('fs.play.kifu')}</Button>
       )}>
-        <TitleBit title={title} sub={t('fs.kind')} />
+        <TitleBit title={title} sub={pickedLive ? kindWord(pickedLive.m.kind === 'human') : pickedOver ? kindWord(humanResult(pickedOver.r)) : ''} />
       </Toolbar>
       <Page row>
         <ListPane head={<div style={{ flex: 'none', display: 'flex', alignItems: 'center', height: 'var(--h-field)', padding: '0 var(--sp-2)',
@@ -490,7 +506,7 @@ function FsPlay({ fs, onNav, prefs, onKifu }: { fs: FsSnapshot; onNav: (id: NavI
             <ListHead aside={t('fs.count', { n: live.length })}>{t('play.group_live')}</ListHead>
             {live.map((x) => (
               <BotMatchRow key={liveKey(x)} name={opp(x.m)} photo={photos.get(x.m.opponent)}
-                           {...ownSide(x.bot)} active={pickedLive === x} onSelect={() => setPick(liveKey(x))} />
+                           {...ownSide(x.bot, x.m.kind === 'human')} active={pickedLive === x} onSelect={() => setPick(liveKey(x))} />
             ))}
           </>}
           {filter !== 'live' && over.length > 0 && <>
@@ -498,7 +514,7 @@ function FsPlay({ fs, onNav, prefs, onKifu }: { fs: FsSnapshot; onNav: (id: NavI
             {over.map((x) => {
               const k = `over:${x.bot.id}:${x.r.match}`;
               return <BotMatchRow key={k} name={oppName(x.r)} photo={overPhoto(x.r)}
-                                  {...ownSide(x.bot)} diff={x.r.result === 'aborted' ? null : x.r.diff}
+                                  {...ownSide(x.bot, humanResult(x.r))} diff={x.r.result === 'aborted' ? null : x.r.diff} outcome={outcomeOf(x.r)}
                                   active={pickedOver === x} onSelect={() => setPick(k)}
                                   onClose={() => setClosed(new Set([...closed, `${x.bot.id}:${x.r.match}`]))} />;
             })}
@@ -535,8 +551,8 @@ function OverStrip({ x, themPhoto, prefs }: { x: Over; themPhoto?: string; prefs
         <Tag tone="sub">{t('ggs.state.finished')}</Tag>
         <b style={{ fontWeight: 600 }}>{resultWord(r, nm(x.bot), oppName(r))}</b>
         <span style={{ color: 'var(--sub)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {r.legs.map((l, i) => `${t('fs.leg_n', { n: i + 1 })} ${signed(legDiff(l))}`).join(' · ')}
-          {myRating(r) != null && ` · ${t('fs.rating')} ${r.my_rating_before?.toFixed(1) ?? '?'} → ${myRating(r)!.toFixed(1)}`}
+          {legsText(r)}
+          {myRating(r) != null && `${legsText(r) ? ' · ' : ''}${t('fs.rating')} ${r.my_rating_before?.toFixed(1) ?? '?'} → ${myRating(r)!.toFixed(1)}`}
         </span>
       </div>
       {legs && <Boards legs={legs} bot={x.bot} them={oppName(r)} themPhoto={themPhoto} themRate={r.opponent_rating} meRate={myRating(r)} prefs={prefs} />}
@@ -646,9 +662,10 @@ function FsBots({ fs, say }: { fs: FsSnapshot; say: (s: string) => void }) {
   const rank = bots.findIndex((b) => b.id === sel.id);
   // Ranks are among all bots, whatever the list is narrowed to.
   const shown = bots.map((b, i) => ({ b, i })).filter(({ b }) => (!hideBuiltin || !b.builtin) && (!onlineOnly || b.online !== false || b.playing));
-  const w = results.filter((r) => r.diff > 0).length;
-  const l = results.filter((r) => r.diff < 0).length;
-  const d = results.filter((r) => r.diff === 0 && r.result !== 'aborted').length;
+  const done = results.filter((r) => r.result !== 'aborted');
+  const w = done.filter((r) => outcomeOf(r) === 'win').length;
+  const l = done.filter((r) => outcomeOf(r) === 'loss').length;
+  const d = done.filter((r) => outcomeOf(r) === 'draw').length;
   const rated = results.map(myRating).filter((x): x is number => x != null);
   const recent = rated.length > 12 ? rated[rated.length - 1] - rated[rated.length - 13] : null;
   const out = v?.outstanding;
@@ -763,16 +780,21 @@ function FsResults({ fs, onKifu }: { fs: FsSnapshot; onKifu: (title: string, kif
   const shown = newest.slice(cur * perPage, (cur + 1) * perPage);
   const rated = rows.filter((r) => myRating(r) != null);
   const rates = rated.map((r) => myRating(r)!);
-  const w = rows.filter((r) => r.diff > 0).length;
-  const l = rows.filter((r) => r.diff < 0).length;
-  const d = rows.filter((r) => r.diff === 0).length;
+  const w = rows.filter((r) => outcomeOf(r) === 'win').length;
+  const l = rows.filter((r) => outcomeOf(r) === 'loss').length;
+  const d = rows.filter((r) => outcomeOf(r) === 'draw').length;
   const avg = rows.length ? rows.reduce((a, r) => a + r.diff, 0) / rows.length : null;
   const delta = rates.length >= 2 ? rates[rates.length - 1] - rates[0] : null;
   const opps = [...new Set(inPeriod.map(oppName))].map((n): [string, string] => [n, `${n} · ${t('fs.count', { n: inPeriod.filter((r) => oppName(r) === n).length })}`]);
   const picked = shown.find((r) => r.match === pickRow) ?? rows.find((r) => r.match === pickRow);
   const parts = picked ? picked.legs.map((x) => x.moves ?? '').filter(Boolean) : [];
-  const ending = (r: FsResult) => (r.finish_reason && r.finish_reason.includes('timeout')
-    ? { text: r.diff > 0 ? t('fs.result.time_win') : t('fs.result.time_loss'), tone: (r.diff > 0 ? 'gold' : 'bad') as 'gold' | 'bad' } : null);
+  const ending = (r: FsResult) => {
+    const win = outcomeOf(r) === 'win';
+    const tone = (win ? 'gold' : 'bad') as 'gold' | 'bad';
+    if (r.finish_reason?.includes('timeout')) return { text: win ? t('fs.result.time_win') : t('fs.result.time_loss'), tone };
+    if (r.finish_reason === 'resign') return { text: win ? t('fs.result.resign_won') : t('fs.result.resign_lost'), tone };
+    return null;
+  };
   const stats: [string, string][] = [
     [t('fs.rating'), rates.length ? rates[rates.length - 1].toFixed(1) : '—'],
     [t('results.change'), delta != null ? (delta > 0 ? '+' : '') + delta.toFixed(1) : '—'],
@@ -828,7 +850,7 @@ function FsResults({ fs, onKifu }: { fs: FsSnapshot; onKifu: (title: string, kif
                     <ResultRow key={r.match} noOutcome opponent={oppName(r)} picked={r.match === pickRow}
                                photo={r.opponent_photo ?? photos.get(r.opponent) ?? null}
                                onHover={(on) => { const i = rated.indexOf(r); setHover(on && i >= 0 ? i : null); }}
-                               win={r.diff > 0} draw={r.diff === 0} discs={r.diff} when={whenShort(r.t / 1000)}
+                               win={outcomeOf(r) === 'win'} draw={outcomeOf(r) === 'draw'} discs={r.diff} when={whenShort(r.t / 1000)}
                                ending={ending(r)} boards={r.legs.map((x) => ({ diff: legDiff(x) }))}
                                rating={myRating(r)} delta={myRating(r) != null && r.my_rating_before != null ? myRating(r)! - r.my_rating_before : null}
                                onClick={() => setPickRow(r.match)} dim={!r.legs.some((x) => x.moves)} />
@@ -848,8 +870,9 @@ function FsResults({ fs, onKifu }: { fs: FsSnapshot; onKifu: (title: string, kif
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)' }}>
                   <KeyValue label={t('results.when')} value={whenFull(picked.t / 1000)} />
                   {picked.opponent_rating != null && <KeyValue label={t('fs.results.opp_rating')} value={picked.opponent_rating.toFixed(1)} />}
-                  <KeyValue label={t('data.result.head_discs')} value={`${signed(picked.diff)} (${picked.legs.map((x, i) => `${t('fs.leg_n', { n: i + 1 })} ${signed(legDiff(x))}`).join(' · ')})`} />
-                  <KeyValue label={t('results.my_color')} value={picked.legs.map((x, i) => `${t('fs.leg_n', { n: i + 1 })} ${t(x.black ? 'data.color.black' : 'data.color.white')}`).join(' · ')} />
+                  <KeyValue label={t('data.result.head_discs')} value={signed(picked.diff) + (legsText(picked) ? ` (${legsText(picked)})` : '')} />
+                  <KeyValue label={t('results.my_color')} value={picked.legs.map((x, i) => (picked.legs.length > 1 ? `${t('fs.leg_n', { n: i + 1 })} ` : '')
+                    + t(x.black ? 'data.color.black' : 'data.color.white')).join(' · ')} />
                   {myRating(picked) != null && (
                     <KeyValue label={t('fs.rating')} value={myRating(picked)!.toFixed(1)
                       + (picked.my_rating_before != null ? ` (${signed(Math.round((myRating(picked)! - picked.my_rating_before) * 10) / 10)})` : '')} />

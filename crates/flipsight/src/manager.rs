@@ -253,6 +253,7 @@ pub fn results(id: i64) -> Vec<Value> {
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .map(with_boards)
+        .map(crate::settled_by_record)
         .collect()
 }
 

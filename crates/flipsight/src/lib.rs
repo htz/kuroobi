@@ -147,6 +147,8 @@ pub struct OtherBot {
 #[derive(Clone, Default, Serialize)]
 pub struct LiveMatch {
     pub id: i64,
+    /// bot: two legs from an opening; human: one game from the start position.
+    pub kind: String,
     pub opponent: i64,
     pub opponent_name: String,
     pub opponent_rating: Option<f64>,
@@ -423,13 +425,51 @@ fn result_of_record(r: &Value) -> Value {
         _ => "aborted",
     };
     json!({
-        "t": r["finished_ms"], "match": r["id"], "opponent": r["opponent"]["bot_id"],
-        "status": r["status"], "result": result,
+        "t": r["finished_ms"], "match": r["id"], "kind": r["kind"],
+        "opponent": r["opponent"]["bot_id"], "status": r["status"], "result": result,
         "opponent_name": r["opponent"]["name"], "opponent_rating": r["opponent"]["rating_before"],
         "my_rating": r["me"]["rating_after"], "my_rating_before": r["me"]["rating_before"],
         "mine": mine, "theirs": theirs, "diff": mine - theirs,
         "finish_reason": r["finish_reason"], "legs": legs, "record": r,
     })
+}
+
+/// A game against a person has no winner or totals in its state, so a result built from the
+/// state alone reads as a 0-0 draw; its record says how it ended, a resignation included
+/// ([4, 4] can be a win). Results written before this are mended as they are read.
+pub fn settled_by_record(mut x: Value) -> Value {
+    let r = x["record"].clone();
+    if r["kind"] != "human" {
+        return x;
+    }
+    let result = r["result"]
+        .as_str()
+        .filter(|v| ["win", "loss", "draw"].contains(v))
+        .unwrap_or("aborted");
+    let (mine, theirs) = (r["discs"][0].as_i64(), r["discs"][1].as_i64());
+    let reason = r["finish_reason"].clone();
+    let name = r["opponent"]["name"].clone();
+    x["kind"] = json!("human");
+    x["result"] = json!(result);
+    if let (Some(a), Some(b)) = (mine, theirs) {
+        x["mine"] = json!(a);
+        x["theirs"] = json!(b);
+        x["diff"] = json!(a - b);
+    }
+    x["finish_reason"] = reason;
+    if x["opponent_name"].is_null() {
+        x["opponent_name"] = name;
+    }
+    x
+}
+
+/// Games against people come as matches with a negative id (`-room_id`).
+fn kind_of(m: &Match) -> &str {
+    match m.kind.as_deref() {
+        Some(k) => k,
+        None if m.id < 0 => "human",
+        None => "bot",
+    }
 }
 
 /// The site's notation: two characters a move, `pa` for a pass.
@@ -1400,6 +1440,7 @@ impl Bot {
                 let o = self.names.get(&opp);
                 Some(LiveMatch {
                     id: m.id,
+                    kind: kind_of(m).into(),
                     opponent: opp,
                     opponent_name: o.map(|b| b.name.clone()).unwrap_or_default(),
                     opponent_rating: o.and_then(|b| b.rating),
@@ -1957,7 +1998,17 @@ impl Bot {
 
     fn report(&mut self, m: &Match) {
         self.finished.insert(m.id);
-        let Some(s) = &m.state else { return };
+        let human = kind_of(m) == "human";
+        let Some(s) = &m.state else {
+            if let Some(r) = m.record.as_ref().filter(|_| human) {
+                let mut rec = settled_by_record(result_of_record(r));
+                rec["match"] = json!(m.id);
+                let _ = writeln!(self.results, "{rec}");
+                self.view.lock().unwrap().finished += 1;
+                self.keep(std::slice::from_ref(r));
+            }
+            return;
+        };
         let part = if m.bot_a == self.me { 0 } else { 1 };
         let (mine, theirs) = (
             s.totals.get(part).copied().unwrap_or(0),
@@ -1997,7 +2048,8 @@ impl Bot {
         // The site's record names the opponent when no list of bots has.
         let theirs_in = |k: &str| m.record.as_ref().map(|r| r["opponent"][k].clone());
         let rec = json!({
-            "t": now_ms(), "match": m.id, "opponent": opp, "status": m.status, "result": result,
+            "t": now_ms(), "match": m.id, "kind": kind_of(m), "opponent": opp, "status": m.status,
+            "result": result,
             "opponent_name": o.map(|b| json!(b.name)).or_else(|| theirs_in("name")),
             "opponent_rating": o.and_then(|b| b.rating).map(|r| json!(r))
                 .or_else(|| theirs_in("rating_before")),
@@ -2008,12 +2060,16 @@ impl Bot {
             "mine": mine, "theirs": theirs, "diff": mine - theirs, "finish_reason": s.finish_reason,
             "legs": legs, "rating_before": m.rating_before, "rating_after": m.rating_after,
         });
+        let rec = settled_by_record(rec);
         let _ = writeln!(self.results, "{rec}");
         self.view.lock().unwrap().finished += 1;
         log(&format!(
-            "match {} over vs bot {opp}: {result} {mine}-{theirs} ({})",
+            "match {} over vs {opp}: {} {}-{} ({})",
             m.id,
-            s.finish_reason.as_deref().unwrap_or("-")
+            rec["result"].as_str().unwrap_or("-"),
+            rec["mine"],
+            rec["theirs"],
+            rec["finish_reason"].as_str().unwrap_or("-")
         ));
     }
 
@@ -2094,6 +2150,44 @@ mod tests {
             (x["opponent_name"].clone(), x["my_rating"].clone()),
             (json!("nova"), json!(1510.0))
         );
+    }
+
+    #[test]
+    fn a_resignation_against_a_person_is_a_win_at_equal_discs() {
+        let r = json!({
+            "id": 188072, "kind": "human", "status": "finished", "result": "win",
+            "finished_ms": 5, "finish_reason": "resign", "discs": [4, 4], "opening": "",
+            "me": {"rating_before": null, "rating_after": null},
+            "opponent": {"kind": "human", "name": "Within_"},
+            "legs": [{"my_color": "W", "status": "finished", "discs": [4, 4],
+                      "moves": "f5d6c3d3", "colors": "BWBW"}],
+        });
+        let x = result_of_record(&r);
+        assert_eq!(
+            (x["kind"].clone(), x["result"].clone(), x["diff"].clone()),
+            (json!("human"), json!("win"), json!(0))
+        );
+        assert_eq!(x["legs"].as_array().map(Vec::len), Some(1));
+        assert_eq!(x["opponent_name"], "Within_");
+    }
+
+    #[test]
+    fn a_result_against_a_person_takes_the_outcome_from_its_record() {
+        // as written from the state alone, which has no winner or totals for such a game
+        let old = json!({
+            "match": -1572, "opponent": 0, "status": "finished", "result": "draw",
+            "mine": 0, "theirs": 0, "diff": 0, "finish_reason": null, "opponent_name": null,
+            "record": {"kind": "human", "result": "win", "discs": [50, 14],
+                       "finish_reason": null, "opponent": {"name": "autumn"}},
+        });
+        let x = settled_by_record(old);
+        assert_eq!(
+            (x["kind"].clone(), x["result"].clone(), x["diff"].clone()),
+            (json!("human"), json!("win"), json!(36))
+        );
+        assert_eq!(x["opponent_name"], "autumn");
+        let bot = json!({"result": "loss", "diff": -4, "record": {"kind": "bot", "result": "win"}});
+        assert_eq!(settled_by_record(bot.clone()), bot);
     }
 
     fn after(moves: &[&str]) -> Vec<u8> {
