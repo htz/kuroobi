@@ -35,6 +35,8 @@ pub struct Options {
     pub practice: bool,
     /// Search the opponent's position while it thinks, on the clock.
     pub ponder: bool,
+    /// Learn each finished game into the book (`book_learn.txt`).
+    pub learn: bool,
     /// Process names (`pgrep -x` pattern) of background jobs stopped while a match runs; empty leaves them.
     pub pause: String,
     pub pause_log: PathBuf,
@@ -100,6 +102,8 @@ pub struct Control {
     pub hash: (u32, u32),
     /// Search the opponent's position while it thinks; on the clock only.
     pub ponder: bool,
+    /// Learn each finished game into the book.
+    pub learn: bool,
 }
 
 /// What the bot shows of itself.
@@ -683,6 +687,12 @@ struct Slot {
     pondering: Option<i64>,
 }
 
+impl Drop for Bot {
+    fn drop(&mut self) {
+        play::learner().hold(&self.learn_hold(), false);
+    }
+}
+
 pub struct Bot {
     o: Options,
     api: Api,
@@ -807,6 +817,7 @@ impl Bot {
             challenge_now: None,
             hash: (engine_cfg.midgame_hash_bits, engine_cfg.solver_hash_bits),
             ponder: o.ponder,
+            learn: o.learn,
         };
         let cpu = std::process::Command::new("sysctl")
             .args(["-n", "machdep.cpu.brand_string"])
@@ -1251,6 +1262,7 @@ impl Bot {
             self.refit_engines(ctl.hash);
         }
         self.pauser.hold(running > 0);
+        play::learner().hold(&self.learn_hold(), running > 0);
         let waiting = mine.iter().any(|m| m.status == "pending");
         if self.drain.load(Ordering::Relaxed) {
             if !self.draining_logged {
@@ -1996,8 +2008,69 @@ impl Bot {
         }
     }
 
+    fn learn_hold(&self) -> String {
+        format!("flipsight:{}", self.me)
+    }
+
+    /// Hands each game of a finished match to the learner, from the site's record: its moves
+    /// from the standard start, the opening included, for people's games and bots' alike.
+    fn learn(&self, m: &Match) {
+        let Some(r) = m.record.as_ref() else { return };
+        if !self.ctl.lock().unwrap().learn
+            || !matches!(r["result"].as_str(), Some("win" | "loss" | "draw"))
+        {
+            return;
+        }
+        let x = result_of_record(r);
+        for leg in x["legs"].as_array().into_iter().flatten() {
+            let Some(kifu) = leg["moves"].as_str().filter(|k| !k.is_empty()) else {
+                continue;
+            };
+            let kifu = kifu.to_string();
+            let (black, white) = match kuroobi::learn::replay(None, &kifu) {
+                Ok((_, fin)) => (fin.black.count_ones() as u8, fin.white.count_ones() as u8),
+                Err(e) => {
+                    log(&format!("match {} not learned: {e}", m.id));
+                    continue;
+                }
+            };
+            let mut entry = ggs::env::LearnEntry {
+                at: ggs::env::now_secs(),
+                kifu: kifu.clone(),
+                black,
+                white,
+                positions: kuroobi::learn::BackupJob::new(None, &kifu, play::LEARN_DEPTH as u8)
+                    .map_or(0, |j| j.remaining() as u32),
+                start: String::new(),
+                changes: Vec::new(),
+                opponent: r["opponent"]["name"].as_str().unwrap_or("").to_string(),
+                my_color: if leg["black"] == true { "b" } else { "w" }.into(),
+            };
+            let id = m.id;
+            let task = play::LearnTask {
+                start: None,
+                kifu,
+                done: Box::new(move |out| match out {
+                    Ok(out) => {
+                        entry.changes = out.changes.iter().map(ggs::env::LearnChange::of).collect();
+                        ggs::env::learn_log_append(&entry);
+                        log(&format!(
+                            "match {id} learned: {} values updated, {} positions added",
+                            out.updated, out.added
+                        ));
+                    }
+                    Err(e) => log(&format!("match {id} not learned: {e}")),
+                }),
+            };
+            if let Err(e) = play::learner().submit(self.engine_cfg.clone(), task) {
+                log(&format!("match {} not learned: {e}", m.id));
+            }
+        }
+    }
+
     fn report(&mut self, m: &Match) {
         self.finished.insert(m.id);
+        self.learn(m);
         let human = kind_of(m) == "human";
         let Some(s) = &m.state else {
             if let Some(r) = m.record.as_ref().filter(|_| human) {

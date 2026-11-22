@@ -88,7 +88,7 @@ export function App() {
   useLang();
   const { prefs, set: setPref } = usePrefs();
   const applied = useApplied();
-  const g = useGame(prefs.clockSecs, prefs.learnOn);
+  const g = useGame(prefs.clockSecs, prefs.learnLocal);
   const ggs = useGgs();
   const fs = useFs();
   const [navRaw, setNavRaw] = useState<NavId>('play');
@@ -110,7 +110,7 @@ export function App() {
     return () => { void off.then((f) => f()); };
   }, [setHasBook]);
 
-  useEngineSettings(g);
+  useEngineSettings(g, prefs.learnGgs);
   useEngineTurn(g);
   const cpu = useActivity();
   const [ask, setAsk] = useState<(AskArgs & { done: (ok: boolean) => void }) | null>(null);
@@ -645,7 +645,7 @@ export function App() {
         {isSettings ? <SettingsScreen cat={settingsCat} onCat={setSettingsCat} prefs={prefs}
                                        setPref={(k, v) => { setPref(k, v); markApplied(); }} snap={ggs.snap}
                                        onLogin={() => setNav('ggs-login')}
-                                       learn={{ on: g.learnOn, set: (on) => { setPref('learnOn', on); markApplied(); },
+                                       learn={{ on: g.learnOn, set: (on) => { setPref('learnLocal', on); markApplied(); },
                                                 stored: book.node?.size, learned: book.node?.learned_size,
                                                 onLog: () => { setBookTab('log'); setNav('book'); } }} />
          : isFs ? <FsScreen nav={nav} fs={fs} ggs={ggs.snap} onNav={setNav} prefs={prefs} confirm={confirm} say={g.say}

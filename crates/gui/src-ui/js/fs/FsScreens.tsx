@@ -274,6 +274,8 @@ function FsMine({ fs, ggs, confirm, say }: { fs: FsSnapshot; ggs: GgsSnapshot | 
                     onChange={(v) => run(fsApi.set(sel.id, { ponder: v }))} /></div>
           <div style={row}><span style={rowLabel}>{t('fs.mine.book')}</span>
             <Toggle checked={sel.book} onChange={(v) => run(fsApi.set(sel.id, { book: v }))} /></div>
+          <div style={row}><span style={rowLabel}>{t('fs.mine.learn')}</span>
+            <Toggle checked={sel.learn} onChange={(v) => run(fsApi.set(sel.id, { learn: v }))} /></div>
         </div>
         <div style={{ display: 'flex', gap: 'var(--sp-2)', marginTop: 'var(--sp-3)' }}>
           {!refused && (sel.conn === 'draining'

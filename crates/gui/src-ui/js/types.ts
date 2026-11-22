@@ -445,6 +445,8 @@ export interface FsBotRow {
   hash: [number | null, number | null];
   /** Searches the opponent's position while it thinks; on the clock only. */
   ponder: boolean;
+  /** Finished games go into the book. */
+  learn: boolean;
   conn: FsConn;
   view: FsBotView | null;
 }

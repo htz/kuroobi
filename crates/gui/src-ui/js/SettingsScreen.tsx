@@ -73,7 +73,7 @@ export function SettingsScreen({ cat, onCat, prefs, setPref, snap, onLogin, lear
           {cat === 'ggs-me' && (snap && snap.conn === 'online' ? <GgsMeSettings snap={snap} /> : <Offline />)}
           {cat === 'ggs-account' && <GgsAccountSettings snap={snap} onLogin={onLogin} />}
           {cat === 'ggs-play' && (snap && snap.conn === 'online'
-            ? <GgsPlaySettings snap={snap} /> : <Offline />)}
+            ? <GgsPlaySettings snap={snap} learn={prefs.learnGgs} setLearn={(on) => setPref('learnGgs', on)} /> : <Offline />)}
           {cat === 'ggs-form' && (snap && snap.conn === 'online'
             ? <GgsFormSettings snap={snap} /> : <Offline />)}
         </div>
@@ -490,7 +490,7 @@ export function ServerDialog({ server, onClose }: { server: SavedServer | null; 
 
 const validLogChannel = (c: string) => c === '' || /^\.[A-Za-z0-9_-]{1,7}$/.test(c);
 
-function GgsPlaySettings({ snap }: { snap: GgsSnapshot }) {
+function GgsPlaySettings({ snap, learn, setLearn }: { snap: GgsSnapshot; learn: boolean; setLearn: (on: boolean) => void }) {
   const e = snap.engine;
   const [auto, setAuto] = useState(snap.auto_play);
   const [watch, setWatch] = useState(snap.watch_analysis);
@@ -529,6 +529,9 @@ function GgsPlaySettings({ snap }: { snap: GgsSnapshot }) {
             if (p) { await api.setResource('book', p); emitApp('resources-changed'); }
           }}>{t('settings.play.pick_book')}</Button>
         )}
+      </SettingRow>
+      <SettingRow label={t('ggs.settings.learn')}>
+        <SettingToggle checked={learn} onChange={setLearn} />
       </SettingRow>
       <SettingRow label={t('ggs.settings.auto_play')}>
         <SettingToggle checked={auto} onChange={setAuto} />

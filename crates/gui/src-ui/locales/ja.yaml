@@ -524,6 +524,7 @@ fs:
     ggs_on: "GGS に {name} でログイン中です"
     ggs_playing: "GGS の対局が終わるまで切り替えられません"
     logout_connect: "GGS からログアウトして接続"
+    learn: "終局した対局を定石に取り込む"
     ponder: "先読み"
     reading: "読み取っています…"
     refused: "接続トークンが拒否されました"
@@ -850,6 +851,7 @@ ggs:
   settings:
     apply_failed: "反映できませんでした ({error})"
     auto_play: "自分の手番で自動的に指す"
+    learn: "終局した対局を定石に取り込む"
     back_to_tree: "木に戻す"
     book_missing: "ファイルがありません"
     default_decline: "既定の条件にする"
@@ -1216,12 +1218,12 @@ settings:
     label: "言語"
   learn:
     book: "学習した定石"
-    help: "ローカル対局と GGS の対局を、勝敗にかかわらず定石に取り込み、終局の石差を根まで書き戻す"
+    help: "この盤で打った対局を、勝敗にかかわらず定石に取り込み、終局の石差を根まで書き戻す"
     learned: "うち学習"
     open_log: "学習ログを見る"
     stored: "登録局面"
     title: "学習"
-    toggle: "終局した対局を取り込む"
+    toggle: "この盤の対局を取り込む"
   numbers:
     decimals: "評価値の小数"
   play:

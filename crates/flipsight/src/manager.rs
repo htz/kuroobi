@@ -60,6 +60,13 @@ pub struct Saved {
     /// Search the opponent's position while it thinks; on the clock only.
     #[serde(default)]
     pub ponder: bool,
+    /// Learn each finished game into the book.
+    #[serde(default = "yes")]
+    pub learn: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 pub enum Cmd {
@@ -88,6 +95,7 @@ pub enum Cmd {
         /// Each `Some(None)` goes back to the app's setting.
         hash: [Option<Option<u32>>; 2],
         ponder: Option<bool>,
+        learn: Option<bool>,
     },
     Challenge {
         id: i64,
@@ -132,6 +140,7 @@ pub struct BotRow {
     /// Midgame and endgame table bits set for this bot; `None` follows the app's setting.
     pub hash: [Option<u32>; 2],
     pub ponder: bool,
+    pub learn: bool,
     /// off | connecting | online | draining | retrying | refused
     pub conn: String,
     pub view: Option<BotView>,
@@ -460,6 +469,7 @@ impl Manager {
             lag: 0.4,
             practice: false,
             ponder: b.ponder,
+            learn: b.learn,
             pause: String::new(),
             pause_log: out.join("paused.txt"),
             ggs_wire: PathBuf::new(),
@@ -482,6 +492,7 @@ impl Manager {
             c.level = level_of(b.level);
             c.hash = hash_of(&b);
             c.ponder = b.ponder;
+            c.learn = b.learn;
         }
         let view = bot.view();
         {
@@ -662,7 +673,8 @@ impl Manager {
                 level,
                 hash,
                 ponder,
-            } => self.set(id, cap, threads, book, accept, level, hash, ponder),
+                learn,
+            } => self.set(id, cap, threads, book, accept, level, hash, ponder, learn),
             Cmd::Challenge { id, target } => {
                 if let Some(r) = self.running.get(&id) {
                     r.ctl.lock().unwrap().challenge_now = Some(target);
@@ -682,6 +694,7 @@ impl Manager {
         level: Option<Option<[u32; 2]>>,
         hash: [Option<Option<u32>>; 2],
         ponder: Option<bool>,
+        learn: Option<bool>,
     ) {
         let Some(b) = self.find(id) else { return };
         let mut next = b.clone();
@@ -708,6 +721,9 @@ impl Manager {
         if let Some(x) = ponder {
             next.ponder = x;
         }
+        if let Some(x) = learn {
+            next.learn = x;
+        }
         *b = next.clone();
         if let Some(r) = self.running.get(&id) {
             let mut c = r.ctl.lock().unwrap();
@@ -718,6 +734,7 @@ impl Manager {
             c.level = level_of(next.level);
             c.hash = hash_of(&next);
             c.ponder = next.ponder;
+            c.learn = next.learn;
         }
         save(&self.saved);
     }
@@ -759,6 +776,7 @@ impl Manager {
                     photo: None,
                     hash,
                     ponder: false,
+                    learn: true,
                 };
                 let m = matches_of(&b);
                 b.threads = threads.unwrap_or(free / (2 * m)).clamp(1, MAX_THREADS);
@@ -890,6 +908,7 @@ impl Manager {
                 level: b.level,
                 hash: b.hash,
                 ponder: b.ponder,
+                learn: b.learn,
                 conn,
                 view,
             });

@@ -18,8 +18,10 @@ export interface Prefs {
   flipMs: 0 | 120 | 240;
   facing: Facing;
   clockSecs: number;
-  /** Finished games go into the book (local and GGS). */
-  learnOn: boolean;
+  /** Finished games on this board go into the book. */
+  learnLocal: boolean;
+  /** Finished GGS games go into the book. */
+  learnGgs: boolean;
   lang: LangPref;
   /** The last format picked in the export dialog. */
   exportFormat: ExportFormat;
@@ -28,7 +30,7 @@ export interface Prefs {
 const DEFAULTS: Prefs = {
   theme: 'os', tatami: 0, decimals: 1,
   coords: true, grain: true, flipMs: 120, facing: 'black',
-  clockSecs: 0, learnOn: true, lang: 'auto', exportFormat: 'moves',
+  clockSecs: 0, learnLocal: true, learnGgs: true, lang: 'auto', exportFormat: 'moves',
 };
 
 export const TATAMI: { labelKey: string; board: string; dark: string; line: string; grain: string }[] = [
@@ -44,8 +46,11 @@ function load(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return DEFAULTS;
-    const got = JSON.parse(raw) as Partial<Prefs>;
-    return { ...DEFAULTS, ...got };
+    const got = JSON.parse(raw) as Partial<Prefs> & { learnOn?: boolean };
+    // One switch used to cover both.
+    const was = got.learnOn;
+    delete got.learnOn;
+    return { ...DEFAULTS, ...(was === undefined ? {} : { learnLocal: was, learnGgs: was }), ...got };
   } catch {
     return DEFAULTS;
   }

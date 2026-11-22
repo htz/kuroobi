@@ -721,7 +721,7 @@ fn mirror_hint(matches: &HashMap<String, MatchState>, mid: &str) -> Option<Posit
     Position::from_kifu(&you.moves.get(&n)?.to_ascii_lowercase()).ok()
 }
 
-pub const LEARN_DEPTH: u32 = 18;
+pub use play::LEARN_DEPTH;
 
 fn boards_of(matches: &HashMap<String, MatchState>, id: &str) -> Vec<String> {
     matches
@@ -778,6 +778,12 @@ fn finish_match(
     out
 }
 
+impl Drop for Ctx {
+    fn drop(&mut self) {
+        play::learner().hold("ggs", false);
+    }
+}
+
 struct Ctx {
     /// The new password and its request id while `passw` waits for the server.
     passw_wait: Option<(String, u64)>,
@@ -800,7 +806,6 @@ struct Ctx {
     watchers: HashMap<String, std::collections::BTreeSet<String>>,
     /// Match ids whose observers have been asked for since we joined them.
     watch_asked: std::collections::HashSet<String>,
-    learn_jobs: VecDeque<(String, kuroobi::learn::BackupJob, crate::env::LearnEntry)>,
     local_stop: Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
     pending_watch: HashMap<String, Instant>,
     workers: Vec<EngineWorker>,
@@ -925,22 +930,7 @@ impl Ctx {
         self.host.notify(title, body);
     }
     fn log(&mut self, dir: &'static str, text: &str) {
-        let p = std::env::var("KUROOBI_GGS_WIRE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| wire_path());
-        roll_if_large(&p);
-        append_line(&p, &format!("{dir} {text}"));
-        let mut s = self.snap.lock().unwrap();
-        let seq = s.log.back().map_or(0, |l| l.seq + 1);
-        s.log.push_back(LogLine {
-            seq,
-            dir,
-            text: text.into(),
-        });
-        while s.log.len() > 600 {
-            s.log.pop_front();
-        }
-        drop(s);
+        log_to(&self.snap, dir, text);
         self.dirty = true;
     }
     fn emit(&mut self, force: bool) {
@@ -1071,7 +1061,6 @@ fn new_ctx(
         rated_by_base: HashMap::new(),
         watchers: HashMap::new(),
         watch_asked: std::collections::HashSet::new(),
-        learn_jobs: VecDeque::new(),
         local_stop,
         pending_watch: HashMap::new(),
         reconnect: None,
@@ -1151,10 +1140,7 @@ fn wait_for_connect(ctx: &mut Ctx, rx: &Receiver<Cmd>) -> Option<(String, String
                     continue;
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                learn_tick(ctx);
-                continue;
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => return None,
         }
         ctx.emit(true);
@@ -1784,10 +1770,7 @@ fn service(ctx: &mut Ctx, w: &mut Wire, mut send: impl FnMut(String)) {
         ctx.log("info", "GGS game started — stopped the local search");
     }
     w.had_own_match = own_match;
-
-    if !own_match {
-        learn_tick(ctx);
-    }
+    play::learner().hold("ggs", own_match);
 }
 
 fn expire_watches(ctx: &mut Ctx) {
@@ -3558,79 +3541,79 @@ fn handle_match_end(
         if kifu.is_empty() {
             continue;
         }
-        if ctx.ensure_engine().is_err() {
-            break;
-        }
         let start = lm.start_string();
-        let start_opt = (!start.is_empty()).then_some(start.as_str());
-        match ctx
-            .engine
-            .as_ref()
-            .unwrap()
-            .learn_start(start_opt, &kifu, LEARN_DEPTH)
-        {
-            Ok(job) => {
-                ctx.log(
-                    "info",
-                    &format!("learn: queued {id} ({} positions)", job.remaining()),
-                );
-                let (black, white) = match kuroobi::learn::replay(start_opt, &kifu) {
-                    Ok((_, fin)) => (fin.black.count_ones() as u8, fin.white.count_ones() as u8),
-                    Err(_) => (0, 0),
-                };
-                let entry = crate::env::LearnEntry {
-                    at: now_secs(),
-                    kifu: kifu.clone(),
-                    black,
-                    white,
-                    positions: job.remaining() as u32,
-                    start: start.clone(),
-                    changes: Vec::new(),
-                    opponent: lm.opp_name.clone(),
-                    my_color: match lm.my_color {
-                        Some('*') => "b".into(),
-                        Some('O') => "w".into(),
-                        _ => String::new(),
-                    },
-                };
-                ctx.learn_jobs.push_back((id.clone(), job, entry));
-            }
+        let start_opt = (!start.is_empty()).then(|| start.clone());
+        let (black, white) = match kuroobi::learn::replay(start_opt.as_deref(), &kifu) {
+            Ok((_, fin)) => (fin.black.count_ones() as u8, fin.white.count_ones() as u8),
+            Err(_) => (0, 0),
+        };
+        let positions =
+            kuroobi::learn::BackupJob::new(start_opt.as_deref(), &kifu, LEARN_DEPTH as u8)
+                .map_or(0, |j| j.remaining() as u32);
+        let mut entry = crate::env::LearnEntry {
+            at: now_secs(),
+            kifu: kifu.clone(),
+            black,
+            white,
+            positions,
+            start,
+            changes: Vec::new(),
+            opponent: lm.opp_name.clone(),
+            my_color: match lm.my_color {
+                Some('*') => "b".into(),
+                Some('O') => "w".into(),
+                _ => String::new(),
+            },
+        };
+        let (snap, game) = (ctx.snap.clone(), id.clone());
+        let cfg = with_resources(ctx.engine_cfg.clone(), &resources());
+        let task = play::LearnTask {
+            start: start_opt,
+            kifu,
+            done: Box::new(move |r| match r {
+                Ok(out) => {
+                    entry.changes = out
+                        .changes
+                        .iter()
+                        .map(crate::env::LearnChange::of)
+                        .collect();
+                    crate::env::learn_log_append(&entry);
+                    log_to(
+                        &snap,
+                        "info",
+                        &format!(
+                            "learn: imported {game} ({} values updated, {} positions added)",
+                            out.updated, out.added
+                        ),
+                    );
+                }
+                Err(e) => log_to(&snap, "info", &format!("learn failed ({game}): {e}")),
+            }),
+        };
+        match play::learner().submit(cfg, task) {
+            Ok(n) => ctx.log("info", &format!("learn: queued {id} ({n} positions)")),
             Err(e) => ctx.log("info", &format!("learn setup failed ({id}): {e}")),
         }
     }
     ctx.emit(true);
 }
 
-fn learn_tick(ctx: &mut Ctx) {
-    if ctx.learn_jobs.is_empty() || ctx.ensure_engine().is_err() {
-        return;
-    }
-    let (_, job, _) = ctx.learn_jobs.front_mut().expect("checked non-empty");
-    let step = ctx.engine.as_mut().unwrap().learn_step(job, LEARN_DEPTH);
-    if matches!(step, Ok(None)) {
-        return;
-    }
-    let (id, _, mut entry) = ctx.learn_jobs.pop_front().expect("checked non-empty");
-    match step {
-        Ok(Some(out)) => {
-            entry.changes = out
-                .changes
-                .iter()
-                .map(crate::env::LearnChange::of)
-                .collect();
-            crate::env::learn_log_append(&entry);
-            ctx.log(
-                "info",
-                &format!(
-                    "learn: imported {id} ({} values updated, {} positions added, {} left)",
-                    out.updated,
-                    out.added,
-                    ctx.learn_jobs.len()
-                ),
-            );
-        }
-        Ok(None) => {}
-        Err(e) => ctx.log("info", &format!("learn failed ({id}): {e}")),
+/// A line of the client's log, from wherever it happens (the learner's thread too).
+fn log_to(snap: &Arc<Mutex<Snapshot>>, dir: &'static str, text: &str) {
+    let p = std::env::var("KUROOBI_GGS_WIRE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| wire_path());
+    roll_if_large(&p);
+    append_line(&p, &format!("{dir} {text}"));
+    let mut s = snap.lock().unwrap();
+    let seq = s.log.back().map_or(0, |l| l.seq + 1);
+    s.log.push_back(LogLine {
+        seq,
+        dir,
+        text: text.into(),
+    });
+    while s.log.len() > 600 {
+        s.log.pop_front();
     }
 }
 

@@ -3,6 +3,9 @@
 
 use std::time::{Duration, Instant};
 
+mod learner;
+pub use learner::{learner, LearnDone, LearnStatus, LearnTask, LEARN_DEPTH};
+
 use kuroobi::engine::{Engine, EngineAssets, EngineConfig};
 use kuroobi::{Board, Position};
 

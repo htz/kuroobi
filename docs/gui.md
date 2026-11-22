@@ -221,9 +221,9 @@ Settings is a screen of its own; changes apply at once.
   defaults** to forget the chosen locations. Without a choice,
   `weights/` is found by walking up. **Threads** (used by local games,
   study, learning and GGS games) and the midgame / endgame **hash table**
-  sizes (from the next launch). **Learning**: the **Import finished
-  games** switch, the counts of stored and learned positions, and **View
-  learning log**.
+  sizes (from the next launch). **Learning**: the **Import this board's
+  games** switch (games finished in Play), the counts of stored and
+  learned positions, and **View learning log**.
 - **Display** — theme, language, decimals of evaluations, and the board:
   coordinates, the grain of the tatami, the disc flip (None / Fast /
   Slow), orientation (Black at bottom / White at bottom / You at bottom,
@@ -270,16 +270,27 @@ the search value at the end) is written back to the root with negamax.
   is a property of the negamax values, not a mechanism that forbids
   moves
 
-Both GGS games and games finished in Play are imported; a record that
-was merely loaded, a game that does not start from the initial
-position, and games on a server not marked Public are not. The one switch,
-**Import finished games** under Settings → Engine, covers all of them
-(on by default). The import advances one search at a time in the
-background and yields to games in progress (the status bar shows
-Learning). What is learned is saved in a file separate from the book
-itself (`book_learn.txt` beside it) and overlaid at startup, so it does not clash
-while `bookgen` is updating the main file, and even where there is no
-book file a "book of experience" grows from the positions real games
+GGS games, FlipSight games and games finished in Play are imported; a
+record that was merely loaded, a game that does not start from the
+initial position, and games on a server not marked Public are not. A
+FlipSight game is taken from the site's record of it, the opening
+included, so both games of a match against a bot and the single game
+against a person go in. Each has its own switch, all on by default:
+**Import this board's games** under Settings → Engine, **Learn finished
+games into the book** under Settings → GGS → Playing and watching, and
+the same per bot in FlipSight's My bots.
+
+Whichever client played it, a game goes to the one learner of the
+process (`crates/play/src/learner.rs`): it imports one game at a time,
+one search at a time, and waits while any game is in progress — a GGS
+game, a FlipSight match or a search on the board (the status bar shows
+Learning). It alone writes what is learned, to a file separate from the
+book itself (`book_learn.txt` beside it), so the clients' imports never
+overwrite each other and it does not clash while `bookgen` is updating
+the main file; every engine reads the file again before its next book
+move once an import is written, so a bot or a GGS session already
+running plays the learned line from its next game. Even where there is
+no book file a "book of experience" grows from the positions real games
 went through.
 
 The Learning log follows each import all the way to **game → losing move
@@ -488,6 +499,8 @@ written to `ggs_wire.log` in the account's data folder.
 
 - **Servers and accounts** — see [Log in and accounts](#log-in-and-accounts).
 - **Playing and watching** — **Book** (use book moves in GGS games),
+  **Learn finished games into the book** (on by default; see
+  [Learning the book from real games](#learning-the-book-from-real-games-not-repeating-the-same-loss)),
   **Play automatically on my turn**, **Ponder** (on by default: one board
   is searched at a time on every thread, so while the opponent is to move
   on every board of ours the threads search its positions until a move of
@@ -537,7 +550,8 @@ bots against what the machine runs at once, without refusing more (a bot
 on a level uses far less than its threads). Games at once can be
 set lower than the site's (the extra challenges are declined here),
 threads changed per bot, pondering turned on per bot (on the clock: each game searches the
-opponent's position while it thinks), the midgame and endgame hash tables sized per bot
+opponent's position while it thinks), learning turned off per bot (on by default: every
+finished game, against a bot or a person, goes into the book), the midgame and endgame hash tables sized per bot
 (or left to the app's setting; the bar beside the threads shows every
 bot's tables against the machine's memory, and the size goes to the site
 as the engine's hash), direct challenges turned away (the matches

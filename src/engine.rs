@@ -151,6 +151,8 @@ pub struct Engine {
     book: Option<std::sync::Arc<Book>>,
     book_rand: u64,
     learned: Book,
+    /// The `learn::learned_gen` the learned book was read at.
+    learned_gen: u64,
     book_base: Option<Book>,
     learn_path: std::path::PathBuf,
     /// Nodes outside the midgame search: the solver's and the clock search's.
@@ -213,6 +215,7 @@ impl Engine {
         solver.set_stop(Some(stop.clone()));
         let learn_path = config.book.with_file_name("book_learn.txt");
         let book_base = Book::load(&config.book).ok().filter(|b| !b.is_empty());
+        let learned_gen = crate::learn::learned_gen();
         let learned = Book::load(&learn_path).unwrap_or_default();
         let book = merged_book(book_base.clone(), &learned).map(std::sync::Arc::new);
         let book_rand = std::time::SystemTime::now()
@@ -232,6 +235,7 @@ impl Engine {
             book_base,
             book_rand,
             learned,
+            learned_gen,
             learn_path,
             other_nodes: 0,
             progress,
@@ -312,6 +316,20 @@ impl Engine {
 
     pub fn learned_size(&self) -> usize {
         self.learned.len()
+    }
+
+    /// Reads the learned book again when this process has rewritten it since; another
+    /// process's writes are seen only through [`Engine::reload_learned`].
+    pub fn refresh_learned(&mut self) {
+        if crate::learn::learned_gen() != self.learned_gen {
+            self.reload_learned();
+        }
+    }
+
+    pub fn reload_learned(&mut self) {
+        self.learned_gen = crate::learn::learned_gen();
+        self.learned = Book::load(&self.learn_path).unwrap_or_default();
+        self.book = merged_book(self.book_base.clone(), &self.learned).map(std::sync::Arc::new);
     }
 
     pub fn hint_move(&mut self, board: &Board, pos: Position) {
@@ -401,10 +419,11 @@ impl Engine {
 
     /// A book move, or `None` after seeding the search with the book's best line.
     fn book_move(&mut self, board: &Board) -> Option<MoveEval> {
-        if board.empty_count() <= BOOK_MIN_EMPTIES {
+        if board.empty_count() <= BOOK_MIN_EMPTIES || !self.config.use_book {
             return None;
         }
-        let book = self.book.as_ref().filter(|_| self.config.use_book)?;
+        self.refresh_learned();
+        let book = self.book.as_ref()?;
         let hit = if self.config.book_tolerance > 0.0 {
             self.book_rand = self
                 .book_rand
@@ -647,6 +666,9 @@ impl Engine {
         } else {
             Ok(())
         };
+        if done.is_some() && save.is_ok() {
+            self.learned_gen = crate::learn::learned_written();
+        }
         self.book = (!base.is_empty()).then(|| std::sync::Arc::new(base));
         self.learned = learned;
         save.map_err(|e| format!("saving learned book {}: {e}", self.learn_path.display()))?;
@@ -663,8 +685,8 @@ impl Engine {
         self.learned
             .save(&self.learn_path)
             .map_err(|e| format!("saving learned book {}: {e}", self.learn_path.display()))?;
-        self.book =
-            merged_book(Book::load(&self.config.book).ok(), &self.learned).map(std::sync::Arc::new);
+        self.learned_gen = crate::learn::learned_written();
+        self.book = merged_book(self.book_base.clone(), &self.learned).map(std::sync::Arc::new);
         Ok(n)
     }
 

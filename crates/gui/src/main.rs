@@ -230,8 +230,6 @@ fn hold_off_app_nap() {}
 #[derive(Default)]
 pub(crate) struct Activity {
     pub(crate) local: Option<&'static str>,
-    learn: Option<(u32, u32)>,
-    learn_paused: bool,
 }
 
 struct ActivityGuard(Arc<Mutex<Activity>>);
@@ -394,23 +392,27 @@ fn remember_found_weights() {
     }
 }
 
+/// The local engine's files, threads and tables, from the resource settings.
+fn local_engine_cfg() -> EngineConfig {
+    let res = resources();
+    EngineConfig {
+        weights: res.weights_path(),
+        nnue: res.nnue_path(),
+        book: res.book_path(),
+        threads: res.threads.unwrap_or_else(auto_threads),
+        midgame_hash_bits: res.hash_mid_bits(),
+        solver_hash_bits: res.hash_end_bits(),
+        ..Default::default()
+    }
+}
+
 fn ensure_engine_in(
     engine_slot: &Arc<Mutex<Option<Engine>>>,
     stop_slot: &Arc<Mutex<Option<kuroobi::midgame::StopHandle>>>,
 ) -> Result<(), String> {
     let mut guard = engine_slot.lock().unwrap();
     if guard.is_none() {
-        let res = resources();
-        let cfg = EngineConfig {
-            weights: res.weights_path(),
-            nnue: res.nnue_path(),
-            book: res.book_path(),
-            threads: res.threads.unwrap_or_else(auto_threads),
-            midgame_hash_bits: res.hash_mid_bits(),
-            solver_hash_bits: res.hash_end_bits(),
-            ..Default::default()
-        };
-        let engine = Engine::new(cfg).map_err(setup_error)?;
+        let engine = Engine::new(local_engine_cfg()).map_err(setup_error)?;
         *stop_slot.lock().unwrap() = Some(engine.stop_handle());
         *guard = Some(engine);
     }
@@ -667,71 +669,30 @@ fn learn_game(app: State<App>, my_color: String) -> Result<(), String> {
     if fin.black != board.black || fin.white != board.white {
         return Err("err.not_from_standard_start".into());
     }
-    let eng = app.engine.clone();
-    let stop = app.stop.clone();
-    let act = app.activity.clone();
-    let ggs_snap = ggs_snap_arc(&app);
-    tauri::async_runtime::spawn_blocking(move || {
-        if ensure_engine_in(&eng, &stop).is_err() {
-            return;
-        }
-        let mut job = {
-            let mut guard = eng.lock().unwrap();
-            let Some(engine) = guard.as_mut() else { return };
-            match engine.learn_start(None, &kifu, ggs::LEARN_DEPTH) {
-                Ok(j) => j,
-                Err(_) => return,
+    let mut entry = LearnEntry {
+        at: now_secs(),
+        kifu: kifu.clone(),
+        black: board.black.count_ones() as u8,
+        white: board.white.count_ones() as u8,
+        positions: 0,
+        start: String::new(),
+        changes: Vec::new(),
+        opponent: String::new(),
+        my_color,
+    };
+    entry.positions = kuroobi::learn::BackupJob::new(None, &kifu, ggs::LEARN_DEPTH as u8)
+        .map_or(0, |j| j.remaining() as u32);
+    let task = play::LearnTask {
+        start: None,
+        kifu,
+        done: Box::new(move |r| {
+            if let Ok(out) = r {
+                entry.changes = out.changes.iter().map(LearnChange::of).collect();
+                learn_log_append(&entry);
             }
-        };
-        let total = job.remaining() as u32;
-        let mut changes: Vec<kuroobi::learn::BackupChange> = Vec::new();
-        let mut last_yield: Option<std::time::Instant> = None;
-        const YIELD_HOLD: std::time::Duration = std::time::Duration::from_millis(1500);
-        loop {
-            let busy = act.lock().unwrap().local.is_some() || ggs_match_in(&ggs_snap);
-            if busy {
-                last_yield = Some(std::time::Instant::now());
-            }
-            let recently = last_yield.is_some_and(|t| t.elapsed() < YIELD_HOLD);
-            {
-                let mut a = act.lock().unwrap();
-                a.learn_paused = busy || recently;
-                a.learn = Some((total.saturating_sub(job.remaining() as u32), total));
-            }
-            if busy {
-                std::thread::sleep(std::time::Duration::from_millis(300));
-                continue;
-            }
-            let step = {
-                let mut guard = eng.lock().unwrap();
-                let Some(engine) = guard.as_mut() else { break };
-                engine.learn_step(&mut job, ggs::LEARN_DEPTH)
-            };
-            match step {
-                Ok(None) => {}
-                Ok(Some(out)) => {
-                    changes = out.changes;
-                    break;
-                }
-                Err(_) => break,
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        learn_log_append(&LearnEntry {
-            at: now_secs(),
-            kifu,
-            black: board.black.count_ones() as u8,
-            white: board.white.count_ones() as u8,
-            positions: total.saturating_sub(job.remaining() as u32),
-            start: String::new(),
-            changes: changes.iter().map(LearnChange::of).collect(),
-            opponent: String::new(),
-            my_color: my_color.clone(),
-        });
-        let mut a = act.lock().unwrap();
-        a.learn = None;
-        a.learn_paused = false;
-    });
+        }),
+    };
+    play::learner().submit(local_engine_cfg(), task)?;
     Ok(())
 }
 
@@ -858,11 +819,12 @@ fn activity_status(app: State<App>) -> ActivityView {
         })
         .unwrap_or((false, false, 0));
     let a = app.activity.lock().unwrap();
+    let learning = play::learner().status();
     ActivityView {
         local: a.local,
         local_threads: resources().threads.unwrap_or_else(auto_threads) as u32,
-        learn: a.learn,
-        learn_paused: a.learn_paused,
+        learn: learning.map(|l| (l.done, l.total)),
+        learn_paused: learning.is_some_and(|l| l.paused),
         ggs_match,
         ggs_thinking,
         ggs_threads,
@@ -2186,6 +2148,11 @@ fn main() {
         })
         .setup(move |app| {
             let st = app.state::<App>();
+            let act = st.activity.clone();
+            play::learner().hold_while(
+                "local",
+                Arc::new(move || act.lock().unwrap().local.is_some()),
+            );
             if std::env::var("KUROOBI_GGS_DEMO").is_ok() {
                 return Ok(());
             }

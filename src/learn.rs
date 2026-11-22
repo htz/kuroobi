@@ -3,6 +3,19 @@
 use crate::book::{Book, Candidate, Entry};
 use crate::solver::final_score;
 use crate::{Board, Position};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static LEARNED_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// Moves on each time this process rewrites the learned book; an engine that saw another value
+/// reads the file again before its next book move.
+pub fn learned_gen() -> u64 {
+    LEARNED_GEN.load(Ordering::Acquire)
+}
+
+pub(crate) fn learned_written() -> u64 {
+    LEARNED_GEN.fetch_add(1, Ordering::AcqRel) + 1
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct BackupChange {

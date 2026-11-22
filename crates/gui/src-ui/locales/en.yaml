@@ -532,6 +532,7 @@ fs:
     ggs_on: "Logged in to GGS as {name}"
     ggs_playing: "Cannot switch until the GGS game is over"
     logout_connect: "Log out of GGS and connect"
+    learn: "Learn finished games into the book"
     ponder: "Ponder"
     reading: "Reading…"
     refused: "The connection token was refused"
@@ -861,6 +862,7 @@ ggs:
   settings:
     apply_failed: "Could not apply ({error})"
     auto_play: "Play automatically on my turn"
+    learn: "Learn finished games into the book"
     back_to_tree: "Back to the tree"
     book_missing: "No file. Point to one under “Settings” at the bottom of the left menu."
     default_decline: "Use the defaults"
@@ -1241,12 +1243,12 @@ settings:
     label: "Language"
   learn:
     book: "Learned book"
-    help: "Local and GGS games are imported win or lose, and the final disc difference is written back to the root."
+    help: "Games played on this board are imported win or lose, and the final disc difference is written back to the root."
     learned: "Of which learned"
     open_log: "View learning log"
     stored: "Stored positions"
     title: "Learning"
-    toggle: "Import finished games"
+    toggle: "Import this board's games"
   numbers:
     decimals: "Decimals"
   play:

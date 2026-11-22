@@ -5,7 +5,7 @@ import type { GameView, LearnEntry } from './types';
 import type { GraphPoint } from './components/data';
 import { t, tErr } from './i18n';
 
-export function useEngineSettings(g: Game) {
+export function useEngineSettings(g: Game, learnGgs: boolean) {
   const { depth, solve } = g.levels;
   useEffect(() => {
     api.setLevels(depth, solve).catch(() => {});
@@ -13,10 +13,8 @@ export function useEngineSettings(g: Game) {
 
   useEffect(() => { api.setUseBook(g.useBook).catch(() => {}); }, [g.useBook]);
 
-  useEffect(() => {
-    api.setLearn(g.learnOn).catch(() => {});
-    ggsApi.setLearn(g.learnOn).catch(() => {});
-  }, [g.learnOn]);
+  useEffect(() => { api.setLearn(g.learnOn).catch(() => {}); }, [g.learnOn]);
+  useEffect(() => { ggsApi.setLearn(learnGgs).catch(() => {}); }, [learnGgs]);
 }
 
 /** `hold`: the graph analysis has the engine, so the live evals wait until it is done. */

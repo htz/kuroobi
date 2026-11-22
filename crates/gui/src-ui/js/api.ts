@@ -144,7 +144,7 @@ export const fsApi = {
   /** `cap` 0 is the bot's own setting on the site; `level` [0, 0] plays by the clock. */
   /** `hashMid`, `hashEnd`: table bits, 0 for the app's setting. */
   set: (id: number, s: { cap?: number; threads?: number; book?: boolean; accept?: boolean; level?: [number, number];
-                         hashMid?: number; hashEnd?: number; ponder?: boolean }) =>
+                         hashMid?: number; hashEnd?: number; ponder?: boolean; learn?: boolean }) =>
     call('fs_set', { id, ...s }),
   challenge: (id: number, target: number) => call('fs_challenge', { id, target }),
   changeToken: (id: number, token: string) => call('fs_change_token', { id, token }),

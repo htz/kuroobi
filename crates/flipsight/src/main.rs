@@ -10,7 +10,7 @@ use flipsight::{Bot, Challenge, Options};
 
 const USAGE: &str =
     "usage: FS_BOT_TOKEN=... kuroobi-flipsight [--base URL] [--weights DIR] [--threads N] [--book] \
-[--margin SECS] [--lag SECS] [--practice] [--ponder] [--pause NAMES] [--pause-log FILE] [--out DIR] \
+[--margin SECS] [--lag SECS] [--practice] [--ponder] [--learn] [--pause NAMES] [--pause-log FILE] [--out DIR] \
 [--challenge builtin|stronger|ID,ID...] [--until-stable N:POINTS]";
 
 fn main() -> ExitCode {
@@ -33,6 +33,7 @@ fn main() -> ExitCode {
         lag: 0.4,
         practice: false,
         ponder: false,
+        learn: false,
         pause: String::new(),
         pause_log: PathBuf::new(),
         ggs_wire: PathBuf::from("ggs_games/users/skatgame.net_5000/kuroobi/ggs_wire.log"),
@@ -52,6 +53,7 @@ fn main() -> ExitCode {
             "--lag" => o.lag = val().parse().unwrap_or(o.lag),
             "--practice" => o.practice = true,
             "--ponder" => o.ponder = true,
+            "--learn" => o.learn = true,
             "--pause" => o.pause = val(),
             "--pause-log" => o.pause_log = PathBuf::from(val()),
             "--until-stable" => {
