@@ -33,6 +33,8 @@ struct Args {
     weights: PathBuf,
     nnue: PathBuf,
     solver_hash: u32,
+    midgame_hash: u32,
+    ponder: bool,
 }
 
 fn number<T: std::str::FromStr>(name: &str, v: String) -> Result<T, String>
@@ -64,6 +66,8 @@ fn parse_args() -> Result<Args, String> {
         weights: PathBuf::from("weights/linear.bin"),
         nnue: PathBuf::from("weights/nnue.bin"),
         solver_hash: 22,
+        midgame_hash: EngineConfig::default().midgame_hash_bits,
+        ponder: true,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -91,6 +95,10 @@ fn parse_args() -> Result<Args, String> {
             "--weights" => args.weights = PathBuf::from(value("--weights")?),
             "--nnue" => args.nnue = PathBuf::from(value("--nnue")?),
             "--solver-hash" => args.solver_hash = number("--solver-hash", value("--solver-hash")?)?,
+            "--midgame-hash" => {
+                args.midgame_hash = number("--midgame-hash", value("--midgame-hash")?)?
+            }
+            "--no-ponder" => args.ponder = false,
             other => return Err(format!("unknown option: {other}")),
         }
     }
@@ -232,6 +240,7 @@ fn play(args: &Args, config: EngineConfig) -> ExitCode {
     let send = |cmd: Cmd| {
         let _ = handle.tx.send(cmd);
     };
+    send(Cmd::SetPonder(args.ponder));
     send(Cmd::Connect {
         login: login.clone(),
         pw,
@@ -342,6 +351,7 @@ fn main() -> ExitCode {
         threads: args.threads,
         mpc: args.mpc,
         solver_hash_bits: args.solver_hash,
+        midgame_hash_bits: args.midgame_hash,
         weights: args.weights.clone(),
         nnue: args.nnue.clone(),
         use_book: false,

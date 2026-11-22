@@ -440,6 +440,8 @@ kuroobi-ggs --serve [--depth N] [--solve-empties N]
 | `--depth <n>` / `--solve-empties <n>` | 10 / 20 | The level for `--serve` and `--fixed-level` |
 | `--threads <n>` | 8 | Search threads |
 | `--solver-hash <n>` | 22 | Transposition table size for exact solving (2^n entries) |
+| `--midgame-hash <n>` | 22 | Transposition table size for the search on the clock (2^n entries) |
+| `--no-ponder` | off | Leave the threads idle while the opponent thinks instead of searching its position |
 | `--no-mpc`, `--weights`, `--nnue` | | As above |
 
 Games are rated; set `KUROOBI_NO_RATED` in the environment to play
