@@ -205,6 +205,13 @@ pub fn fs_refresh(app: State<App>, id: i64) -> Result<(), String> {
     send(&app, Cmd::Refresh(id))
 }
 
+/// No FlipSight manager yet means no running bot to tell.
+pub fn app_tables_changed(app: &State<App>) {
+    if let Ok(tx) = fs_tx(app) {
+        let _ = tx.send(Cmd::AppTables);
+    }
+}
+
 #[tauri::command]
 pub fn fs_sync(app: State<App>, id: i64) -> Result<(), String> {
     send(&app, Cmd::Sync(id))

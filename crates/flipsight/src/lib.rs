@@ -978,6 +978,8 @@ impl Bot {
         match ev["type"].as_str() {
             Some("hello") => {
                 log(&format!("stream connected, bot id {}", ev["bot_id"]));
+                // What the site holds of a connection that went down is not known, so say it again.
+                self.env_sent = None;
                 false
             }
             Some("state") if ev["ok"] != Value::Bool(false) => {

@@ -102,6 +102,8 @@ export interface KifuFrame {
 
 export interface HashView {
   mid: number; end: number; min: number; max: number;
+  /** Bytes an entry of the clock search's and the solver's table takes. */
+  entry: [number, number];
 }
 
 export interface ThreadsView {

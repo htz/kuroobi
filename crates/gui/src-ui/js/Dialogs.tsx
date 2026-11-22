@@ -319,11 +319,11 @@ export function EngineSettings({ learn }: { learn: LearnSetting }) {
         )}
         {hash && <>
           <SettingRow label={t('settings.hash.mid_label')}>
-            <HashSelect hash={hash} bits={hash.mid} standard={22} bytes={(b) => 2 ** (b + 4)}
+            <HashSelect hash={hash} bits={hash.mid} standard={22} bytes={(b) => 2 ** b * hash.entry[0]}
                         onPick={(b) => void saveHash(b, hash.end)} />
           </SettingRow>
           <SettingRow label={t('settings.hash.end_label')} help={t('settings.hash.note')}>
-            <HashSelect hash={hash} bits={hash.end} standard={24} bytes={(b) => 2 ** b * 24}
+            <HashSelect hash={hash} bits={hash.end} standard={24} bytes={(b) => 2 ** b * hash.entry[1]}
                         onPick={(b) => void saveHash(hash.mid, b)} />
           </SettingRow>
         </>}

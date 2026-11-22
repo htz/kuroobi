@@ -755,6 +755,8 @@ struct HashView {
     end: u32,
     min: u32,
     max: u32,
+    /// Bytes an entry of the clock search's and the solver's table takes.
+    entry: [usize; 2],
 }
 
 fn hash_view() -> HashView {
@@ -765,6 +767,10 @@ fn hash_view() -> HashView {
         end,
         min: kuroobi::resources::HASH_BITS_MIN,
         max: kuroobi::resources::HASH_BITS_MAX,
+        entry: [
+            kuroobi::clock::table_bytes(10) >> 10,
+            kuroobi::solver::table_bytes(10) >> 10,
+        ],
     }
 }
 
@@ -774,7 +780,7 @@ fn hash_sizes() -> HashView {
 }
 
 #[tauri::command]
-fn set_hash_sizes(mid: u32, end: u32) -> Result<HashView, String> {
+fn set_hash_sizes(app: State<'_, App>, mid: u32, end: u32) -> Result<HashView, String> {
     let (lo, hi) = (
         kuroobi::resources::HASH_BITS_MIN,
         kuroobi::resources::HASH_BITS_MAX,
@@ -783,6 +789,7 @@ fn set_hash_sizes(mid: u32, end: u32) -> Result<HashView, String> {
     r.hash_mid = Some(mid.clamp(lo, hi));
     r.hash_end = Some(end.clamp(lo, hi));
     r.save(&resources_path())?;
+    fs::app_tables_changed(&app);
     Ok(hash_view())
 }
 

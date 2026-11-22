@@ -105,6 +105,8 @@ pub enum Cmd {
     /// Reads the site's records of a disconnected bot's games since the last one kept (a
     /// connected one reads them itself).
     Sync(i64),
+    /// The app's table sizes changed: running bots that follow them take the new ones.
+    AppTables,
 }
 
 /// The add form or the token dialog: waiting for the site, or why it failed (an `err.*` key).
@@ -567,6 +569,13 @@ impl Manager {
                     token: token.clone(),
                 };
                 self.check(check, token);
+            }
+            Cmd::AppTables => {
+                for b in &self.saved {
+                    if let Some(r) = self.running.get(&b.id) {
+                        r.ctl.lock().unwrap().hash = hash_of(b);
+                    }
+                }
             }
             Cmd::Refresh(id) => {
                 let live = self.running.get(&id);
