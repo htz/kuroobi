@@ -137,6 +137,8 @@ pub struct OtherBot {
     /// `None`: the site does not say (it names only the bots we have played, in their records).
     pub online: Option<bool>,
     pub playing: bool,
+    /// The owner paused its matches on the site: `match_paused`, in the site's list but not the bot API.
+    pub paused: bool,
     pub builtin: bool,
     /// The bot's picture on the site, as a full address.
     pub photo: Option<String>,
@@ -248,6 +250,7 @@ fn bots_of(list: &Value, base: &str) -> HashMap<i64, OtherBot> {
                 rating: b["rating"]["rating"].as_f64(),
                 online: Some(b["online"] == Value::Bool(true)),
                 playing: b["games_now"].as_u64().is_some_and(|n| n > 0),
+                paused: b["match_paused"] == Value::Bool(true),
                 builtin: b["is_builtin"] == Value::Bool(true),
                 photo: photo_url(base, &b["photo"]),
             },

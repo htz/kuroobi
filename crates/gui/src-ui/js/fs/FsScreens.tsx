@@ -53,11 +53,14 @@ const photosOf = (fs: FsSnapshot): Map<number, string> => {
 
 const act = (say: (s: string) => void) => (p: Promise<unknown>) => { p.catch((e) => say(tErr(e))); };
 
+const pausedOf = (b: FsBotRow): boolean => !!b.view?.bots.find((o) => o.id === b.id)?.paused;
+
 /** What a bot is doing, in the bot list's words and tone. */
 function stateOf(b: FsBotRow): { word: string; tone: 'ok' | 'accent' | 'gold' | 'sub'; color: string } {
   if (b.conn === 'online') {
     return b.view && b.view.matches.length
       ? { word: t('fs.state.playing'), tone: 'ok', color: 'var(--ok)' }
+      : pausedOf(b) ? { word: t('fs.state.paused'), tone: 'gold', color: 'var(--gold)' }
       : { word: t('fs.state.waiting'), tone: 'accent', color: 'var(--accent)' };
   }
   if (b.conn === 'draining') return { word: t('fs.state.draining'), tone: 'gold', color: 'var(--gold)' };
@@ -438,7 +441,8 @@ function FsPlay({ fs, onNav, prefs, onKifu }: { fs: FsSnapshot; onNav: (id: NavI
     const lines = fs.bots.map((b) => {
       if (!liveConn(b.conn)) return `${nm(b)} · ${t('fs.state.off')}`;
       const o = b.view?.outstanding;
-      return o ? t('fs.play.asking', { bot: nm(b), name: o.name || t('fs.bot_n', { n: o.target }) }) : `${nm(b)} · ${t('fs.play.waiting_short')}`;
+      if (o) return t('fs.play.asking', { bot: nm(b), name: o.name || t('fs.bot_n', { n: o.target }) });
+      return `${nm(b)} · ${t(pausedOf(b) ? 'fs.state.paused' : 'fs.play.waiting_short')}`;
     });
     return (
       <>
@@ -661,6 +665,7 @@ function FsBots({ fs, say }: { fs: FsSnapshot; say: (s: string) => void }) {
         <Toggle checked={onlineOnly} onChange={setOnlineOnly} label={t('fs.bots.online_only')} />
       </Toolbar>
       <Page>
+        {pausedOf(sel) && <Band>{t('fs.bots.paused')}</Band>}
         {!sel.accept && <Band>{t('fs.bots.not_accepting')}</Band>}
         <Sections>
           <Section title={t('fs.bots.rating_of', { name: nm(sel) })}>
@@ -694,6 +699,7 @@ function FsBots({ fs, say }: { fs: FsSnapshot; say: (s: string) => void }) {
                   const asked = out?.target === b.id;
                   const st = cooling.has(b.id) ? [t('fs.bots.declined'), 'var(--sub)']
                     : b.playing ? [t('fs.state.playing'), 'var(--ok)']
+                    : b.paused ? [t('fs.state.paused'), 'var(--gold)']
                     : b.online == null ? ['', 'var(--sub)'] : b.online ? [t('fs.bots.online'), 'var(--accent)'] : [t('fs.bots.offline'), 'var(--sub)'];
                   return (
                     <div key={b.id} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-field)',
