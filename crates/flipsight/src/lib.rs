@@ -1896,7 +1896,7 @@ impl Bot {
             }
             // In discs from our side; the site shows it only in bot matches.
             let eval = (sent.human.is_none() && mv.pos.is_some() && mv.value.is_finite())
-                .then(|| (f64::from(mv.value).clamp(-64.0, 64.0) * 100.0).round() / 100.0);
+                .then(|| mv.value.round().clamp(-64.0, 64.0) as i64);
             self.send_move(
                 sent.match_id,
                 sent.key.1,
@@ -1915,7 +1915,7 @@ impl Bot {
         revision: i64,
         mv: i64,
         human: Option<(Option<i64>, Option<String>)>,
-        eval: Option<f64>,
+        eval: Option<i64>,
     ) {
         let mut body = Map::new();
         body.insert("match_id".into(), json!(match_id));
