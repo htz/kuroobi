@@ -1303,4 +1303,111 @@ mod tests {
         let exact = w.exact(b.player_bb(), b.opponent_bb(), MIN, MAX, false);
         assert_eq!(v, exact);
     }
+
+    fn random_position(empties: u8, seed: u64) -> Board {
+        let mut b = Board::new();
+        let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        while b.empty_count() > empties && !b.is_game_over() {
+            let moves = b.movable();
+            if moves == 0 {
+                b.pass();
+                continue;
+            }
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let mut m = moves;
+            for _ in 0..(state >> 33) % u64::from(moves.count_ones()) {
+                m &= m - 1;
+            }
+            b.make_move_bits(Position::from_index(m.trailing_zeros()).unwrap());
+        }
+        b
+    }
+
+    fn stop_after(stop: &StopHandle, delay: Duration) -> std::thread::JoinHandle<()> {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(delay);
+            stop.stop();
+        })
+    }
+
+    /// Without ProbCut the full-depth passes are exact, so a stopped ponder that left anything
+    /// wrong in the table shows as a value off the solver's.
+    #[test]
+    fn replies_after_stopped_ponders_keep_exact_values() {
+        let mut solver = crate::Solver::new(18);
+        for threads in [1, 4] {
+            let stop = StopHandle::new();
+            let mut nn = Nnue::new(NNUE_PATTERNS);
+            nn.quantize();
+            let mut s = ClockSearch::new(Arc::new(nn), 16, threads, Some(stop.clone()));
+            for seed in 1..=4 {
+                let theirs = random_position(14, seed);
+                if theirs.movable() == 0 {
+                    continue;
+                }
+                let mut replies = vec![theirs];
+                let mut m = theirs.movable();
+                while m != 0 {
+                    let mut b = theirs;
+                    b.make_move_bits(Position::from_index(m.trailing_zeros()).unwrap());
+                    m &= m - 1;
+                    replies.push(b);
+                }
+                let replies: Vec<(Board, i32)> = replies
+                    .into_iter()
+                    .filter(|b| b.movable() != 0)
+                    .map(|b| (b, solver.solve(crate::EndSolverMode::Perfect, &b).value))
+                    .collect();
+                // A later ponder that runs to the end rewrites what an earlier stopped one left,
+                // so every stop is checked on a table of its own.
+                for k in 0..12 {
+                    s.new_game();
+                    let t = stop_after(&stop, Duration::from_micros(30 << k));
+                    s.ponder(&theirs, Duration::from_secs(60));
+                    t.join().unwrap();
+                    stop.reset();
+                    for &(b, exact) in &replies {
+                        let full = b.empty_count() as i32;
+                        let mut scores = Vec::new();
+                        s.choose(&b, Duration::from_secs(600), |p| {
+                            if p.depth == full {
+                                scores.push(p.score);
+                            }
+                        });
+                        assert!(!scores.is_empty(), "seed {seed}, {threads} threads");
+                        assert!(
+                            scores.iter().all(|&v| v == exact),
+                            "seed {seed}, {threads} threads, stop {k}: {scores:?} vs {exact}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_stopped_ponder_returns_at_once_and_the_reply_keeps_its_budget() {
+        let stop = StopHandle::new();
+        let mut nn = Nnue::new(NNUE_PATTERNS);
+        nn.quantize();
+        let mut s = ClockSearch::new(Arc::new(nn), 16, 4, Some(stop.clone()));
+        for seed in 1..=4 {
+            let theirs = random_position(40, seed);
+            let t = stop_after(&stop, Duration::from_millis(20));
+            let t0 = Instant::now();
+            s.ponder(&theirs, Duration::from_secs(60));
+            t.join().unwrap();
+            assert!(t0.elapsed() < Duration::from_millis(300), "seed {seed}");
+            stop.reset();
+            let mut b = theirs;
+            b.make_move_bits(Position::from_index(theirs.movable().trailing_zeros()).unwrap());
+            let t0 = Instant::now();
+            let c = s.choose(&b, Duration::from_secs(3), |_| {});
+            assert!(t0.elapsed() < Duration::from_secs(1), "seed {seed}");
+            assert_eq!(b.movable() >> c.mv.unwrap().index() & 1, 1);
+        }
+    }
 }
