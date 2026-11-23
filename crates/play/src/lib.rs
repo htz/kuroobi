@@ -62,6 +62,7 @@ pub enum Job {
     },
     NewGame,
     SetUseBook(bool),
+    SetBookTolerance(f32),
     SetThreads(usize),
     /// Plays every move at this depth and solve instead of by the clock, still within an even
     /// share of the clock; `None` goes back to how the worker was started.
@@ -178,6 +179,7 @@ impl EngineWorker {
                     }
                     Job::NewGame => engine.clear_tables(),
                     Job::SetUseBook(b) => engine.set_use_book(b),
+                    Job::SetBookTolerance(d) => engine.set_book_tolerance(d),
                     Job::SetThreads(n) => {
                         threads = n.max(1);
                         engine.set_threads(n);

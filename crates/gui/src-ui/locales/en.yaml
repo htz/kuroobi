@@ -244,6 +244,9 @@ book:
   tree:
     collapse: "Collapse"
     expand: "Expand"
+book_tol:
+  discs: "{n} discs"
+  none: "None"
 chat:
   empty_help: "Send the first message from the box below."
   empty_thread: "No messages with {name} yet"
@@ -366,6 +369,7 @@ dock:
   book:
     label: "Book"
     missing: "— No file (you can choose one in settings)"
+    tolerance: "Variety"
   record:
     edit: "Edit board"
     export: "Export…"
@@ -515,6 +519,7 @@ fs:
     add_row: "Add a bot"
     add_title: "Add a bot"
     book: "Use the book"
+    book_tolerance: "Book variety"
     cap: "Games at once"
     cap_site: "Bot settings ({n})"
     cap_site_plain: "Bot settings"
@@ -1253,6 +1258,7 @@ settings:
     decimals: "Decimals"
   play:
     book_help: "Use book moves in GGS games"
+    book_tolerance: "Book variety"
     pick_book: "Choose a book file"
   remove_ok: "Remove"
   reset:

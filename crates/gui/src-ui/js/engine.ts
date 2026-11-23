@@ -5,13 +5,14 @@ import type { GameView, LearnEntry } from './types';
 import type { GraphPoint } from './components/data';
 import { t, tErr } from './i18n';
 
-export function useEngineSettings(g: Game, learnGgs: boolean) {
+export function useEngineSettings(g: Game, learnGgs: boolean, bookTolLocal: number) {
   const { depth, solve } = g.levels;
   useEffect(() => {
     api.setLevels(depth, solve).catch(() => {});
   }, [depth, solve]);
 
   useEffect(() => { api.setUseBook(g.useBook).catch(() => {}); }, [g.useBook]);
+  useEffect(() => { api.setBookTolerance(bookTolLocal).catch(() => {}); }, [bookTolLocal]);
 
   useEffect(() => { api.setLearn(g.learnOn).catch(() => {}); }, [g.learnOn]);
   useEffect(() => { ggsApi.setLearn(learnGgs).catch(() => {}); }, [learnGgs]);

@@ -110,7 +110,7 @@ export function App() {
     return () => { void off.then((f) => f()); };
   }, [setHasBook]);
 
-  useEngineSettings(g, prefs.learnGgs);
+  useEngineSettings(g, prefs.learnGgs, prefs.bookTolLocal);
   useEngineTurn(g);
   const cpu = useActivity();
   const [ask, setAsk] = useState<(AskArgs & { done: (ok: boolean) => void }) | null>(null);
@@ -748,6 +748,7 @@ export function App() {
 
       {playDock && !editing && (
         <PlayDock g={g} prefs={prefs} setClockSecs={(secs) => { setPref('clockSecs', secs); void g.resetClock(secs); }}
+                  setBookTol={(d) => setPref('bookTolLocal', d)}
                   open={dockOpen}
                   onLoad={() => setPaste(true)} onExport={() => setExporting(true)} onEdit={openEdit} editOff={!canEdit}
                   study={study} moves={moves} />

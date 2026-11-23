@@ -402,6 +402,7 @@ struct SavedSettings {
     ponder: bool,
     log_channel: String,
     use_book: bool,
+    book_tolerance: f32,
     learn: bool,
 }
 
@@ -415,6 +416,7 @@ impl Default for SavedSettings {
             ponder: true,
             log_channel: String::new(),
             use_book: true,
+            book_tolerance: 1.0,
             learn: true,
         }
     }
@@ -434,6 +436,7 @@ pub(super) fn save_settings(ctx: &Ctx) {
         ponder: s.ponder,
         log_channel: s.log_channel.clone(),
         use_book: e.use_book,
+        book_tolerance: e.book_tolerance,
         learn: e.learn,
     };
     drop(s);
@@ -461,6 +464,7 @@ fn load_settings() -> Option<SavedSettings> {
 pub(super) fn restore_settings(ctx: &mut Ctx) {
     let Some(v) = load_settings() else { return };
     ctx.set_use_book(v.use_book);
+    ctx.set_book_tolerance(v.book_tolerance);
     let mut s = ctx.snap.lock().unwrap();
     s.engine.learn = v.learn;
     s.auto_play = v.auto_play;

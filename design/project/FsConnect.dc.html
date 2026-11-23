@@ -114,6 +114,8 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <!-- Pondering: on the clock, each game searches the opponent's position while it thinks, warming that game's tables; stopped when the opponent moves. Not at a level (the switch is off and disabled there). Reported to FlipSight as the engine's ponder. From the next move -->
 <div style="display: flex; align-items: center; gap: var(--sp-3); min-height: var(--h-row2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5)"><span style="width: 160px; flex: none; color: var(--sub)">先読み</span><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{sel.ponder}}" disabled="{{sel.byLevel}}"></x-import></div>
 <div style="display: flex; align-items: center; gap: var(--sp-3); min-height: var(--h-row2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5)"><span style="width: 160px; flex: none; color: var(--sub)">定石を使う</span><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{no}}"></x-import></div>
+<!-- Book variety, as in Settings > GGS: within this many discs of the best book move, narrowing to none at move 30; demoted moves never. From the next move -->
+<div style="display: flex; align-items: center; gap: var(--sp-3); min-height: var(--h-row2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5)"><span style="width: 160px; flex: none; color: var(--sub)">定石の揺らぎ</span><x-import component-from-global-scope="KuroobiUI.Select" value="1" options="{{tolOpts}}" width="var(--w-select-sm)"></x-import></div>
 <!-- Learning: every finished game of the bot, against a bot or a person, goes to the learner from the site's record. On by default; from the next game that ends -->
 <div style="display: flex; align-items: center; gap: var(--sp-3); min-height: var(--h-row2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5)"><span style="width: 160px; flex: none; color: var(--sub)">対局を定石に取り込む</span><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}"></x-import></div>
 </div>
@@ -325,6 +327,7 @@ class Component extends DCLogic {
       byOpts: [{ value: 'level', label: 'レベル' }, { value: 'clock', label: '持ち時間' }],
       newBy: state === 'add-detail' ? 'level' : 'clock', newByLevel: state === 'add-detail', newLevels: { depth: 8, solve: 12 },
       threadOpts: [1, 2, 3, 4].map((n) => [String(n), n + ' スレッド']),
+      tolOpts: [['0', 'なし'], ['0.5', '0.5 石'], ['1', '1 石'], ['2', '2 石'], ['4', '4 石']],
       busy: busy || ggsBusy,
       goLabel: busy ? '読み取っています…' : '追加',
       msg, msgColor,

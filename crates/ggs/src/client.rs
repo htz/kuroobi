@@ -90,6 +90,7 @@ pub enum Cmd {
     SetPonder(bool),
     SetLogChannel(String),
     SetUseBook(bool),
+    SetBookTolerance(f32),
     SetLearn(bool),
     #[allow(clippy::enum_variant_names)]
     MatchCmd {
@@ -413,6 +414,7 @@ pub struct FetchedGgf {
 pub struct EngineCfgView {
     pub threads: usize,
     pub use_book: bool,
+    pub book_tolerance: f32,
     pub book_loaded: bool,
     pub learn: bool,
 }
@@ -422,6 +424,7 @@ impl Default for EngineCfgView {
         EngineCfgView {
             threads: 4,
             use_book: true,
+            book_tolerance: 1.0,
             book_loaded: false,
             learn: true,
         }
@@ -906,6 +909,17 @@ impl Ctx {
         self.snap.lock().unwrap().engine.use_book = b;
     }
 
+    fn set_book_tolerance(&mut self, d: f32) {
+        self.engine_cfg.book_tolerance = d;
+        if let Some(e) = self.engine.as_mut() {
+            e.set_book_tolerance(d);
+        }
+        for w in &mut self.workers {
+            w.send(Job::SetBookTolerance(d));
+        }
+        self.snap.lock().unwrap().engine.book_tolerance = d;
+    }
+
     fn release_worker(&mut self, mid: &str) {
         for w in &mut self.workers {
             if w.mid.as_deref() == Some(mid) {
@@ -1074,6 +1088,7 @@ fn new_ctx(
     ctx.snap.lock().unwrap().engine = EngineCfgView {
         threads: ctx.engine_cfg.threads,
         use_book: ctx.engine_cfg.use_book,
+        book_tolerance: ctx.engine_cfg.book_tolerance,
         book_loaded: res.book_path().exists(),
         ..Default::default()
     };
@@ -1154,6 +1169,7 @@ fn set_pref(ctx: &mut Ctx, cmd: &Cmd) -> bool {
         Cmd::SetOpen(b) => ctx.snap.lock().unwrap().open = b,
         Cmd::SetOpenRequests(b) => ctx.snap.lock().unwrap().open_requests = b,
         Cmd::SetUseBook(b) => ctx.set_use_book(b),
+        Cmd::SetBookTolerance(d) => ctx.set_book_tolerance(d),
         Cmd::SetWatchAnalysis(b) => ctx.snap.lock().unwrap().watch_analysis = b,
         Cmd::SetPonder(b) => ctx.snap.lock().unwrap().ponder = b,
         Cmd::SetLearn(b) => ctx.snap.lock().unwrap().engine.learn = b,
@@ -1943,6 +1959,7 @@ fn handle_cmd(
         | Cmd::SetOpen(_)
         | Cmd::SetOpenRequests(_)
         | Cmd::SetUseBook(_)
+        | Cmd::SetBookTolerance(_)
         | Cmd::SetWatchAnalysis(_)
         | Cmd::SetPonder(_)
         | Cmd::SetLearn(_) => {

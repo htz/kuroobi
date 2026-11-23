@@ -63,10 +63,17 @@ pub struct Saved {
     /// Learn each finished game into the book.
     #[serde(default = "yes")]
     pub learn: bool,
+    /// Discs below the best book move a random pick may go; learning's demoted moves never.
+    #[serde(default = "one")]
+    pub book_tolerance: f32,
 }
 
 fn yes() -> bool {
     true
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 pub enum Cmd {
@@ -96,6 +103,7 @@ pub enum Cmd {
         hash: [Option<Option<u32>>; 2],
         ponder: Option<bool>,
         learn: Option<bool>,
+        book_tolerance: Option<f32>,
     },
     Challenge {
         id: i64,
@@ -141,6 +149,7 @@ pub struct BotRow {
     pub hash: [Option<u32>; 2],
     pub ponder: bool,
     pub learn: bool,
+    pub book_tolerance: f32,
     /// off | connecting | online | draining | retrying | refused
     pub conn: String,
     pub view: Option<BotView>,
@@ -457,6 +466,7 @@ impl Manager {
         };
         cfg.threads = b.threads;
         cfg.use_book = b.book;
+        cfg.book_tolerance = b.book_tolerance;
         (cfg.midgame_hash_bits, cfg.solver_hash_bits) = hash_of(&b);
         let out = records_dir(id);
         let o = Options {
@@ -674,7 +684,17 @@ impl Manager {
                 hash,
                 ponder,
                 learn,
-            } => self.set(id, cap, threads, book, accept, level, hash, ponder, learn),
+                book_tolerance,
+            } => self.set(
+                id,
+                cap,
+                threads,
+                book,
+                accept,
+                level,
+                hash,
+                (ponder, learn, book_tolerance),
+            ),
             Cmd::Challenge { id, target } => {
                 if let Some(r) = self.running.get(&id) {
                     r.ctl.lock().unwrap().challenge_now = Some(target);
@@ -693,8 +713,7 @@ impl Manager {
         accept: Option<bool>,
         level: Option<Option<[u32; 2]>>,
         hash: [Option<Option<u32>>; 2],
-        ponder: Option<bool>,
-        learn: Option<bool>,
+        (ponder, learn, book_tolerance): (Option<bool>, Option<bool>, Option<f32>),
     ) {
         let Some(b) = self.find(id) else { return };
         let mut next = b.clone();
@@ -724,6 +743,9 @@ impl Manager {
         if let Some(x) = learn {
             next.learn = x;
         }
+        if let Some(x) = book_tolerance {
+            next.book_tolerance = x.max(0.0);
+        }
         *b = next.clone();
         if let Some(r) = self.running.get(&id) {
             let mut c = r.ctl.lock().unwrap();
@@ -735,6 +757,7 @@ impl Manager {
             c.hash = hash_of(&next);
             c.ponder = next.ponder;
             c.learn = next.learn;
+            c.book_tolerance = next.book_tolerance;
         }
         save(&self.saved);
     }
@@ -777,6 +800,7 @@ impl Manager {
                     hash,
                     ponder: false,
                     learn: true,
+                    book_tolerance: 1.0,
                 };
                 let m = matches_of(&b);
                 b.threads = threads.unwrap_or(free / (2 * m)).clamp(1, MAX_THREADS);
@@ -909,6 +933,7 @@ impl Manager {
                 hash: b.hash,
                 ponder: b.ponder,
                 learn: b.learn,
+                book_tolerance: b.book_tolerance,
                 conn,
                 view,
             });

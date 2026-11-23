@@ -43,6 +43,7 @@ export const api = {
   goto: (n: number) => call<GameView>('goto', { n }),
   setUseBook: (on: boolean) => call<void>('set_use_book', { on }),
   setLearn: (on: boolean) => call<void>('set_learn', { on }),
+  setBookTolerance: (discs: number) => call<void>('set_book_tolerance', { discs }),
   envOverrides: () => call<[string, string][]>('env_overrides'),
   learnGame: (myColor: string) => call<void>('learn_game', { myColor }),
   learnLog: () => call<LearnEntry[]>('learn_log', {}),
@@ -144,7 +145,8 @@ export const fsApi = {
   /** `cap` 0 is the bot's own setting on the site; `level` [0, 0] plays by the clock. */
   /** `hashMid`, `hashEnd`: table bits, 0 for the app's setting. */
   set: (id: number, s: { cap?: number; threads?: number; book?: boolean; accept?: boolean; level?: [number, number];
-                         hashMid?: number; hashEnd?: number; ponder?: boolean; learn?: boolean }) =>
+                         hashMid?: number; hashEnd?: number; ponder?: boolean; learn?: boolean;
+                         bookTolerance?: number }) =>
     call('fs_set', { id, ...s }),
   challenge: (id: number, target: number) => call('fs_challenge', { id, target }),
   changeToken: (id: number, token: string) => call('fs_change_token', { id, token }),
@@ -216,6 +218,7 @@ export const ggsApi = {
   setLogChannel: (channel: string) => call('ggs_set_log_channel', { channel }),
   setUseBook: (on: boolean) => call('ggs_set_use_book', { on }),
   setLearn: (on: boolean) => call('ggs_set_learn', { on }),
+  setBookTolerance: (discs: number) => call('ggs_set_book_tolerance', { discs }),
   setStandby: (cfg: StandbyCfg) => call('ggs_set_standby', { cfg }),
   saveKifu: (kifu: string, name: string) =>
     call<string | null>('ggs_save_kifu', { kifu, name }),

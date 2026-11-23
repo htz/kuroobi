@@ -234,6 +234,7 @@ interface StandbyStats {
 interface EngineCfgView {
   threads: number;
   use_book: boolean;
+  book_tolerance: number;
   book_loaded: boolean;
   learn: boolean;
 }
@@ -447,6 +448,8 @@ export interface FsBotRow {
   ponder: boolean;
   /** Finished games go into the book. */
   learn: boolean;
+  /** Discs below the best book move a random pick may go. */
+  book_tolerance: number;
   conn: FsConn;
   view: FsBotView | null;
 }

@@ -246,7 +246,9 @@ open or a text field has the focus.
 In back-to-back games against the same opponent, two deterministic
 engines easily repeat the same game record. Inside the book the choice
 is spread by a randomised pick with a tolerance (a draw among the moves
-within 1 disc of the best, weighted by how often each was played), but
+within **Book variety** discs of the best, 1 by default, weighted by how
+often each was played; set for Play, for GGS and per FlipSight bot; the
+width narrows in a straight line from the first move to none at move 30), but
 that alone does not prevent a lost line from being played out again —
 without a book the choice is completely deterministic, and the same loss
 is repeated exactly.
@@ -266,9 +268,17 @@ the search value at the end) is written back to the root with negamax.
 - Won games are imported too, so that a line which was only won because
   the opponent erred, where the alternative was better, is not kept
   believed good
-- There is no special logic for avoidance. "Not repeating the same loss"
-  is a property of the negamax values, not a mechanism that forbids
-  moves
+- The values alone are not enough. The book is only consulted while more
+  than 28 squares are empty, and only for positions whose every move has a
+  value; past that the search decides, and it picks the losing move again.
+  Within the tolerance, the randomised pick can also go back to a move the
+  loss pushed down. So a move **learning demoted** — below its value in
+  `book.txt`, or with no value there, and below the position's best learned
+  move — is never played: wherever the book or the search picks it, at any
+  number of empties, the learned best is played instead. A move the solver
+  read out stays, since learned values are game results, not solves. A person who
+  memorised a won game then finds KUROOBI leaving it at the losing move at
+  the latest
 
 GGS games, FlipSight games and games finished in Play are imported; a
 record that was merely loaded, a game that does not start from the

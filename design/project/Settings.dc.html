@@ -332,6 +332,15 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </sc-if>
 </div>
 </div>
+<!-- Book variety: among the book's moves within this many discs of the best, one is picked at random, weighted by games, the width narrowing in a straight line to none at move 30; "なし" always plays the best. Moves that learning demoted are never picked. Default 1 disc -->
+<sc-if value="{{bookLoaded}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">定石の揺らぎ</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<x-import component-from-global-scope="KuroobiUI.Select" value="1" options="{{tolOpts}}" width="var(--w-select-sm)"></x-import>
+</div>
+</div>
+</sc-if>
 <!-- Learning GGS games: kept with the app's settings, not GGS's. On by default -->
 <div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
 <span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">対局を定石に取り込む</span>
@@ -591,6 +600,7 @@ class Component extends DCLogic {
         ? 'ログインに成功したアカウントは保存され、次回から自動ログイン'
         : '本番以外のサーバーでの対局は定石に学習しない',
       bookLoaded: this.props.book !== 'missing',
+      tolOpts: [['0', 'なし'], ['0.5', '0.5 石'], ['1', '1 石'], ['2', '2 石'], ['4', '4 石']],
       bookMissing: this.props.book === 'missing',
       logChannel,
       logOk,

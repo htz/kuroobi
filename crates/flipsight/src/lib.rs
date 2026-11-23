@@ -104,6 +104,7 @@ pub struct Control {
     pub ponder: bool,
     /// Learn each finished game into the book.
     pub learn: bool,
+    pub book_tolerance: f32,
 }
 
 /// What the bot shows of itself.
@@ -818,6 +819,7 @@ impl Bot {
             hash: (engine_cfg.midgame_hash_bits, engine_cfg.solver_hash_bits),
             ponder: o.ponder,
             learn: o.learn,
+            book_tolerance: engine_cfg.book_tolerance,
         };
         let cpu = std::process::Command::new("sysctl")
             .args(["-n", "machdep.cpu.brand_string"])
@@ -1196,6 +1198,12 @@ impl Bot {
             self.engine_cfg.use_book = ctl.use_book;
             for slot in &mut self.slots {
                 slot.worker.send(Job::SetUseBook(ctl.use_book));
+            }
+        }
+        if ctl.book_tolerance != self.engine_cfg.book_tolerance {
+            self.engine_cfg.book_tolerance = ctl.book_tolerance;
+            for slot in &mut self.slots {
+                slot.worker.send(Job::SetBookTolerance(ctl.book_tolerance));
             }
         }
         self.me = v["bot"]["id"].as_i64().unwrap_or(self.me);

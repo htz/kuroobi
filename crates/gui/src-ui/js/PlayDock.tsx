@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Button, Segmented, Toggle } from './components/primitives';
+import { Button, Segmented, Select, Toggle } from './components/primitives';
+import { bookTolOptions } from './bookTol';
 import { Dock, KeyValue, Note, Section } from './components/layout';
 import { KifuTable } from './components/data';
 import { Strength, presetOf } from './components/strength';
@@ -15,11 +16,12 @@ import { t } from './i18n';
  * the record below. Learning lives in the engine settings.
  */
 export function PlayDock({
-  g, prefs, setClockSecs, open, onLoad, onExport, onEdit, editOff, study, moves,
+  g, prefs, setClockSecs, setBookTol, open, onLoad, onExport, onEdit, editOff, study, moves,
 }: {
   g: Game;
   prefs: Prefs;
   setClockSecs: (secs: number) => void;
+  setBookTol: (discs: number) => void;
   open: boolean;
   onLoad: () => void;
   onExport: () => void;
@@ -36,6 +38,14 @@ export function PlayDock({
           {/* The same row as every switch: words on the left, the switch on the right. */}
           <Toggle checked={g.useBook} disabled={!g.hasBook} onChange={g.setUseBook} label={t('dock.book.label')} />
           {!g.hasBook && <Note>{t('dock.book.missing')}</Note>}
+          {g.hasBook && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--sp-3)',
+                          fontSize: 'var(--fs-5)' }}>
+              <span>{t('dock.book.tolerance')}</span>
+              <Select width="var(--w-select-sm)" value={String(prefs.bookTolLocal)} options={bookTolOptions()}
+                      onChange={(v) => setBookTol(+v)} title={t('dock.book.tolerance')} />
+            </div>
+          )}
         </Section>
       </div>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>

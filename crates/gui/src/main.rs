@@ -551,6 +551,22 @@ async fn set_use_book(app: State<'_, App>, on: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn set_book_tolerance(app: State<'_, App>, discs: f32) -> Result<(), String> {
+    let (eng, stop) = (app.engine.clone(), app.stop.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_engine_in(&eng, &stop)?;
+        eng.lock()
+            .unwrap()
+            .as_mut()
+            .ok_or("err.engine_not_ready")?
+            .set_book_tolerance(discs);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn autoplay() -> String {
     std::env::var("KUROOBI_AUTOPLAY").unwrap_or_default()
 }
@@ -1998,6 +2014,11 @@ fn ggs_set_use_book(app: State<App>, on: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn ggs_set_book_tolerance(app: State<App>, discs: f32) -> Result<(), String> {
+    ggs_send(&app, ggs::Cmd::SetBookTolerance(discs))
+}
+
+#[tauri::command]
 fn ggs_set_learn(app: State<App>, on: bool) -> Result<(), String> {
     ggs_send(&app, ggs::Cmd::SetLearn(on))
 }
@@ -2243,6 +2264,7 @@ fn main() {
             goto,
             set_levels,
             set_use_book,
+            set_book_tolerance,
             local_threads,
             set_local_threads,
             hash_sizes,
@@ -2316,6 +2338,7 @@ fn main() {
             ggs_set_ponder,
             ggs_set_log_channel,
             ggs_set_use_book,
+            ggs_set_book_tolerance,
             ggs_set_learn,
             ggs_set_standby,
             ggs_snapshot,

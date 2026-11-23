@@ -237,6 +237,9 @@ book:
   tree:
     collapse: "閉じる"
     expand: "先を開く"
+book_tol:
+  discs: "{n} 石"
+  none: "なし"
 chat:
   empty_help: "下の欄から最初のメッセージを送れます"
   empty_thread: "{name} とのやりとりはまだありません"
@@ -359,6 +362,7 @@ dock:
   book:
     label: "定石"
     missing: "— ファイルがありません (設定から指定できます)"
+    tolerance: "揺らぎ"
   record:
     edit: "盤面編集"
     export: "書き出す…"
@@ -507,6 +511,7 @@ fs:
     add_row: "ボットを追加"
     add_title: "ボットを追加"
     book: "定石を使う"
+    book_tolerance: "定石の揺らぎ"
     cap: "同時対局数"
     cap_site: "ボット管理の設定 ({n})"
     cap_site_plain: "ボット管理の設定"
@@ -1228,6 +1233,7 @@ settings:
     decimals: "評価値の小数"
   play:
     book_help: "GGS の対局で定石の手を使う"
+    book_tolerance: "定石の揺らぎ"
     pick_book: "定石ファイルを指定"
   remove_ok: "削除する"
   reset:

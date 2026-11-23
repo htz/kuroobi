@@ -204,6 +204,30 @@ pub fn merge_learned(base: &mut Book, learned: &Book) {
     }
 }
 
+/// The learned best move to play instead of `mv`, when learning pushed `mv` below it: below its
+/// value in `base`, or with no value there at all. A move learning raised, or left as `base` had
+/// it, stays open to the book's random pick.
+pub fn demoted_replacement(
+    learned: &Book,
+    base: Option<&Book>,
+    board: &Board,
+    mv: Position,
+) -> Option<(Position, f32)> {
+    let cands = learned.candidates(board)?;
+    let &(best_pos, best) = cands.first()?;
+    let &(_, value) = cands.iter().find(|(p, _)| *p == mv)?;
+    if value >= best {
+        return None;
+    }
+    let was = base
+        .and_then(|b| b.candidates(board))
+        .and_then(|c| c.iter().find(|(p, _)| *p == mv).map(|(_, v)| *v));
+    if was.is_some_and(|w| value >= w) {
+        return None;
+    }
+    Some((best_pos, best))
+}
+
 pub fn undo_backup(
     learned: &mut Book,
     start: Option<&str>,
@@ -484,6 +508,53 @@ mod tests {
         merge_learned(&mut base, &learned);
         let v = base.get_raw(key0).unwrap().best().unwrap().value;
         assert!((v + 5.0).abs() < 1e-6);
+    }
+
+    fn after_f5(moves: &[(&str, f32)]) -> (Board, Book) {
+        let mut b = Board::new();
+        b.make_move(pos("f5")).unwrap();
+        let (key, i) = Book::key(&b);
+        let mut book = Book::new();
+        book.insert_raw(
+            key,
+            Entry {
+                moves: moves
+                    .iter()
+                    .map(|(m, v)| Candidate {
+                        mv: Book::map_move(pos(m), i),
+                        value: *v,
+                        games: 0,
+                    })
+                    .collect(),
+                depth: 20,
+                games: 0,
+                complete: true,
+            },
+        );
+        (b, book)
+    }
+
+    #[test]
+    fn a_move_learning_demoted_gives_way_to_the_best() {
+        let (b, base) = after_f5(&[("f6", -0.5), ("d6", -1.0)]);
+        let (_, learned) = after_f5(&[("f6", -2.0), ("d6", -1.0)]);
+        let (p, v) = demoted_replacement(&learned, Some(&base), &b, pos("f6")).expect("replaced");
+        assert_ne!(p, pos("f6"));
+        assert!((v + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_move_only_learning_knows_gives_way_when_below_the_best() {
+        let (b, learned) = after_f5(&[("f6", -2.0), ("d6", -1.0)]);
+        assert!(demoted_replacement(&learned, None, &b, pos("f6")).is_some());
+    }
+
+    #[test]
+    fn raised_and_best_moves_stay_open() {
+        let (b, base) = after_f5(&[("f6", -3.0), ("d6", -1.0)]);
+        let (_, learned) = after_f5(&[("f6", -2.0), ("d6", -1.0)]);
+        assert!(demoted_replacement(&learned, Some(&base), &b, pos("f6")).is_none());
+        assert!(demoted_replacement(&learned, Some(&base), &b, pos("d6")).is_none());
     }
 
     #[test]

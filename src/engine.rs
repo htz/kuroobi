@@ -31,6 +31,15 @@ const BACKUP_SHARE: f32 = 0.05;
 /// game results, not solves: at 20 empties or fewer, 103 of 1844 entries' best move lost 854 discs.
 const BOOK_MIN_EMPTIES: u8 = 28;
 
+/// The book's random pick narrows in a straight line from the full tolerance at the start to
+/// none at this many empties (move 30): variety belongs to the opening, not the midgame.
+const BOOK_VARIETY_ENDS: u8 = 30;
+
+fn book_tolerance_at(tolerance: f32, empties: u8) -> f32 {
+    let left = empties.saturating_sub(BOOK_VARIETY_ENDS) as f32;
+    tolerance * left / (60 - BOOK_VARIETY_ENDS) as f32
+}
+
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub depth: u32,
@@ -348,6 +357,10 @@ impl Engine {
         self.config.use_book = on;
     }
 
+    pub fn set_book_tolerance(&mut self, discs: f32) {
+        self.config.book_tolerance = discs.max(0.0);
+    }
+
     pub fn has_book(&self) -> bool {
         self.book.is_some()
     }
@@ -424,12 +437,13 @@ impl Engine {
         }
         self.refresh_learned();
         let book = self.book.as_ref()?;
-        let hit = if self.config.book_tolerance > 0.0 {
+        let tolerance = book_tolerance_at(self.config.book_tolerance, board.empty_count());
+        let hit = if tolerance > 0.0 {
             self.book_rand = self
                 .book_rand
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
-            book.probe_varied(board, self.config.book_tolerance, self.book_rand >> 11)
+            book.probe_varied(board, tolerance, self.book_rand >> 11)
         } else {
             book.probe(board)
         };
@@ -454,6 +468,37 @@ impl Engine {
 
     /// A move on a game clock; `clock` is the time this side has left for the rest of the game.
     pub fn play_clock(&mut self, board: &Board, clock: std::time::Duration) -> MoveEval {
+        let mv = self.play_clock_search(board, clock);
+        self.avoid_demoted(board, mv)
+    }
+
+    /// The learned book's best move in place of `mv` when learning demoted `mv` below it, at any
+    /// number of empties: a person who memorised the lost game would otherwise win it again. A
+    /// solved move stays: learned values are game results, not solves.
+    fn avoid_demoted(&mut self, board: &Board, mv: MoveEval) -> MoveEval {
+        if !self.config.use_book {
+            return mv;
+        }
+        let Some(pos) = mv.pos else { return mv };
+        if mv.exact {
+            return mv;
+        }
+        self.refresh_learned();
+        let Some((best_pos, best)) =
+            crate::learn::demoted_replacement(&self.learned, self.book_base.as_ref(), board, pos)
+        else {
+            return mv;
+        };
+        MoveEval {
+            pos: Some(best_pos),
+            value: best,
+            from_book: true,
+            learned: true,
+            ..Default::default()
+        }
+    }
+
+    fn play_clock_search(&mut self, board: &Board, clock: std::time::Duration) -> MoveEval {
         self.stop.reset();
         self.progress.clear();
         self.progress.set_kind(Progress::THINK);
@@ -522,6 +567,15 @@ impl Engine {
     }
 
     pub fn choose_within(
+        &mut self,
+        board: &Board,
+        deadline: Option<std::time::Instant>,
+    ) -> MoveEval {
+        let mv = self.choose_within_search(board, deadline);
+        self.avoid_demoted(board, mv)
+    }
+
+    fn choose_within_search(
         &mut self,
         board: &Board,
         deadline: Option<std::time::Instant>,
@@ -793,6 +847,15 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn book_variety_narrows_to_none_at_move_30() {
+        assert_eq!(book_tolerance_at(1.0, 60), 1.0);
+        assert!((book_tolerance_at(1.0, 45) - 0.5).abs() < 1e-6);
+        assert!((book_tolerance_at(2.0, 45) - 1.0).abs() < 1e-6);
+        assert_eq!(book_tolerance_at(1.0, 30), 0.0);
+        assert_eq!(book_tolerance_at(1.0, 29), 0.0);
+    }
 
     #[test]
     fn table_megabytes_count_the_tables_a_game_searches_with() {

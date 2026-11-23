@@ -22,6 +22,8 @@ export interface Prefs {
   learnLocal: boolean;
   /** Finished GGS games go into the book. */
   learnGgs: boolean;
+  /** Book variety on this board, in discs below the best book move. */
+  bookTolLocal: number;
   lang: LangPref;
   /** The last format picked in the export dialog. */
   exportFormat: ExportFormat;
@@ -30,7 +32,7 @@ export interface Prefs {
 const DEFAULTS: Prefs = {
   theme: 'os', tatami: 0, decimals: 1,
   coords: true, grain: true, flipMs: 120, facing: 'black',
-  clockSecs: 0, learnLocal: true, learnGgs: true, lang: 'auto', exportFormat: 'moves',
+  clockSecs: 0, learnLocal: true, learnGgs: true, bookTolLocal: 1, lang: 'auto', exportFormat: 'moves',
 };
 
 export const TATAMI: { labelKey: string; board: string; dark: string; line: string; grain: string }[] = [

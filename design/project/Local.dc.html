@@ -221,6 +221,8 @@ body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-4)/1.6 var(--
 <x-import component-from-global-scope="KuroobiUI.KeyValue" big="{{yes}}" label="白 · KUROOBI" value="8:31"></x-import>
 </sc-if>
 <x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{yes}}" label="定石"></x-import>
+<!-- Book variety: within this many discs of the best book move, picked at random, narrowing to none at move 30; demoted moves never. Words on the left, the choice on the right, as the switch above -->
+<div style="display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); font-size: var(--fs-5)"><span>揺らぎ</span><x-import component-from-global-scope="KuroobiUI.Select" value="1" options="{{tolOpts}}" width="var(--w-select-sm)"></x-import></div>
 </x-import>
 </div>
 <div style="flex: 1; min-height: 0; display: flex; flex-direction: column">
@@ -457,6 +459,7 @@ class Component extends DCLogic {
       bClock: band ? band[0] : undefined,
       wClock: band ? band[1] : undefined,
       byOpts: [{ value: 'level', label: 'レベル' }, { value: 'clock', label: '持ち時間' }],
+      tolOpts: [['0', 'なし'], ['0.5', '0.5 石'], ['1', '1 石'], ['2', '2 石'], ['4', '4 石']],
       byLevel: !(screen === 'play' && byClock),
       clockPick: screen === 'play' && (state === 'clock' || state === 'clock-custom'),
       clockCustom: state === 'clock-custom', clockValue: state === 'clock-custom' ? 'custom' : '600', clockLeft: screen === 'play' && state === 'clock-playing',

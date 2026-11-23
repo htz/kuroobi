@@ -14,6 +14,7 @@ import { FormulaField } from './GgsScreens';
 import { openNewLogin } from './ggs/Login';
 import { markApplied } from './applied';
 import { whenFull } from './when';
+import { bookTolOptions } from './bookTol';
 
 export const SETTINGS_CATS = ['engine', 'view', 'ai', 'ggs-me', 'ggs-account', 'ggs-play', 'ggs-form'] as const;
 export type SettingsCat = typeof SETTINGS_CATS[number];
@@ -498,6 +499,7 @@ function GgsPlaySettings({ snap, learn, setLearn }: { snap: GgsSnapshot; learn: 
   const [logChannel, setLogChannel] = useState(snap.log_channel);
   const logChannelOk = validLogChannel(logChannel);
   const [book, setBook] = useState(e.use_book);
+  const [tol, setTol] = useState(e.book_tolerance);
   const [err, setErr] = useState('');
 
   const first = useRef(true);
@@ -510,12 +512,13 @@ function GgsPlaySettings({ snap, learn, setLearn }: { snap: GgsSnapshot; learn: 
         await ggsApi.setPonder(ponder);
         if (logChannelOk) await ggsApi.setLogChannel(logChannel);
         await ggsApi.setUseBook(book);
+        await ggsApi.setBookTolerance(tol);
         setErr('');
         markApplied();
       } catch (x) { setErr(t('ggs.settings.apply_failed', { error: tErr(x) })); }
     })(), 400);
     return () => clearTimeout(timer);
-  }, [auto, watch, ponder, logChannel, book, logChannelOk]);
+  }, [auto, watch, ponder, logChannel, book, tol, logChannelOk]);
 
   return (
     <SettingGroup title={t('settings.cat.play')}>
@@ -530,6 +533,12 @@ function GgsPlaySettings({ snap, learn, setLearn }: { snap: GgsSnapshot; learn: 
           }}>{t('settings.play.pick_book')}</Button>
         )}
       </SettingRow>
+      {e.book_loaded && (
+        <SettingRow label={t('settings.play.book_tolerance')}>
+          <Select width="var(--w-select-sm)" value={String(tol)} options={bookTolOptions()} onChange={(v) => setTol(+v)}
+                  title={t('settings.play.book_tolerance')} />
+        </SettingRow>
+      )}
       <SettingRow label={t('ggs.settings.learn')}>
         <SettingToggle checked={learn} onChange={setLearn} />
       </SettingRow>

@@ -16,6 +16,7 @@ import { boardCells, boardIndex, clockText, endBytes, legDiff, liveConn, matches
 import { flipped } from '../prefs';
 import { Strength, presetOf } from '../components/strength';
 import { LEVELS } from '../state';
+import { bookTolOptions } from '../bookTol';
 
 type Ask = (a: { title: string; body: string; ok: string; danger?: boolean }) => Promise<boolean>;
 
@@ -274,6 +275,9 @@ function FsMine({ fs, ggs, confirm, say }: { fs: FsSnapshot; ggs: GgsSnapshot | 
                     onChange={(v) => run(fsApi.set(sel.id, { ponder: v }))} /></div>
           <div style={row}><span style={rowLabel}>{t('fs.mine.book')}</span>
             <Toggle checked={sel.book} onChange={(v) => run(fsApi.set(sel.id, { book: v }))} /></div>
+          <div style={row}><span style={rowLabel}>{t('fs.mine.book_tolerance')}</span>
+            <Select width="var(--w-select-sm)" value={String(sel.book_tolerance)} options={bookTolOptions()}
+                    onChange={(v) => run(fsApi.set(sel.id, { bookTolerance: +v }))} title={t('fs.mine.book_tolerance')} /></div>
           <div style={row}><span style={rowLabel}>{t('fs.mine.learn')}</span>
             <Toggle checked={sel.learn} onChange={(v) => run(fsApi.set(sel.id, { learn: v }))} /></div>
         </div>
