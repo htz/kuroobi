@@ -1996,6 +1996,14 @@ fn ggs_set_watch_analysis(app: State<App>, on: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn ggs_set_td_join(app: State<App>, on: bool, kinds: Vec<String>) -> Result<(), String> {
+    if on && kinds.is_empty() {
+        return Err("err.td_join_no_kind".into());
+    }
+    ggs_send(&app, ggs::Cmd::SetTdJoin(ggs::TdJoin { on, kinds }))
+}
+
+#[tauri::command]
 fn ggs_set_ponder(app: State<App>, on: bool) -> Result<(), String> {
     ggs_send(&app, ggs::Cmd::SetPonder(on))
 }
@@ -2335,6 +2343,7 @@ fn main() {
             ggs_set_open,
             ggs_set_open_requests,
             ggs_set_watch_analysis,
+            ggs_set_td_join,
             ggs_set_ponder,
             ggs_set_log_channel,
             ggs_set_use_book,

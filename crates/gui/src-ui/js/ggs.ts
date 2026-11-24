@@ -203,6 +203,7 @@ const gtypeNames = (): Record<string, string> => ({
   '8': t('ggs.gtype.std'),
   '8r16': t('ggs.gtype.rand16'),
   '8r': t('ggs.gtype.rand_opening'),
+  s8r: t('ggs.gtype.synchro_rand_opening'),
 });
 export function gtypeLabel(raw: string): string {
   // The stored-games list adds a mark after a colon ("s8r14:l"); the type is what comes before it.

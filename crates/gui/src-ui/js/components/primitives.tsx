@@ -98,6 +98,42 @@ export function Toggle({ checked, onChange, label, disabled }: {
   );
 }
 
+export function Checks<T extends string>({ values, options, onChange, disabled }: {
+  values: T[];
+  options: { value: T; label: React.ReactNode }[];
+  onChange?: (v: T[]) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div role="group" aria-disabled={disabled || undefined} style={{
+      display: 'flex', flexWrap: 'wrap', columnGap: 'var(--sp-5)', rowGap: 'var(--sp-1)', opacity: disabled ? 0.4 : 1,
+    }}>
+      {options.map(o => {
+        const on = values.includes(o.value);
+        return (
+          <button key={o.value} type="button" role="checkbox" aria-checked={on} disabled={disabled}
+            onClick={() => onChange?.(options.map(x => x.value).filter(v => (v === o.value ? !on : values.includes(v))))}
+            className="k-press"
+            style={{
+              height: H.ctrl, padding: 0, border: 0, background: 'transparent', color: 'var(--text)', font: 'inherit',
+              fontSize: FS.ctrl, display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', whiteSpace: 'nowrap',
+            }}>
+            <span style={{
+              flex: 'none', width: 16, height: 16, boxSizing: 'border-box', borderRadius: 'var(--r-1)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: on ? 'var(--accent)' : 'var(--bg)', border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+            }}>
+              {on && <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="var(--on-accent)" strokeWidth={3}
+                strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 12.5 9.5 17.5 19.5 6.5" /></svg>}
+            </span>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /** The closed look shared by `Select` and `Combobox`. */
 export const selectBox = (size: Size, width?: number | string): React.CSSProperties => ({
   height: H[size], minWidth: width, maxWidth: '100%',

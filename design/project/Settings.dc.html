@@ -418,6 +418,30 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </x-import>
 </sc-if>
 
+<sc-if value="{{showTourney}}" hint-placeholder-val="{{false}}">
+<!-- Tournaments: a director asks players to join by a private tell whose text is "tell /td join N" (GGS lets only superusers join someone else). That tell is carried out when its sender is the director of tournament N in /td's list and the tournament's game type (random-disc count ignored) is one of the kinds switched on below; from anyone else, or of another kind, nothing is sent. Off by default, s8r alone on; while off the kinds are disabled -->
+<x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="大会">
+<div style="display: flex; flex-direction: column">
+<div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">ディレクターの参加指示を受ける</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
+<span style="display: flex; align-items: center; height: var(--h-ctrl)"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{tdOn}}"></x-import></span>
+<!-- The switch's own condition, nested under it and shown only while the switch is on. Labels are gtypeLabel's (s8r without a disc count: 同期・ランダム開局). With none checked the red line shows and the setting is not applied: the last applied kinds stay in force -->
+<sc-if value="{{tdOn}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-direction: column; gap: var(--sp-1); margin-top: var(--sp-2); padding-left: var(--sp-3); border-left: 2px solid var(--border)">
+<span style="font-size: var(--fs-6); color: var(--sub)">参加する種類</span>
+<x-import component-from-global-scope="KuroobiUI.Checks" values="{{tdKindsOn}}" options="{{tdKinds}}"></x-import>
+<sc-if value="{{tdNone}}" hint-placeholder-val="{{false}}">
+<span style="font-size: var(--fs-6); color: var(--bad)">1 つ以上選んでください</span>
+</sc-if>
+</div>
+</sc-if>
+</div>
+</div>
+</div>
+</x-import>
+</sc-if>
+
 </div>
 </div>
 </x-import>
@@ -463,7 +487,7 @@ class Component extends DCLogic {
   renderVals() {
     const ui = window.KuroobiUI;
     if (ui && ui.setLang) ui.setLang('ja');
-    // Category shown: 'account' | 'play' | 'form'
+    // Category shown: 'account' | 'play' | 'form' | 'tourney'
     const cat = this.props.cat ?? 'account';
     const server = '127.0.0.1:15000';
     const isPublic = server === 'skatgame.net:5000';
@@ -487,6 +511,7 @@ class Component extends DCLogic {
         { id: 'account', name: 'サーバーとアカウント' },
       { id: 'play', name: '対局と観戦' },
       { id: 'form', name: '申し込みの条件' },
+      { id: 'tourney', name: '大会' },
       ].map(mark) },
     ];
     return {
@@ -559,7 +584,7 @@ class Component extends DCLogic {
       })(),
       showMe: cat === 'me',
       showAccount: cat === 'account',
-      catTitle: { engine: 'エンジン', view: '表示', ai: 'AI 連携', me: 'GGS · アカウント', account: 'GGS · サーバーとアカウント', play: 'GGS · 対局と観戦', form: 'GGS · 申し込みの条件' }[cat],
+      catTitle: { engine: 'エンジン', view: '表示', ai: 'AI 連携', me: 'GGS · アカウント', account: 'GGS · サーバーとアカウント', play: 'GGS · 対局と観戦', form: 'GGS · 申し込みの条件', tourney: 'GGS · 大会' }[cat],
       threadOpts: [['', '12 (自動)'], ['4', '4'], ['8', '8'], ['16', '16']],
       hashOpts: [['256', '256 MB'], ['512', '512 MB (既定)'], ['1024', '1 GB'], ['2048', '2 GB']],
       clockOpts: [['0', 'なし'], ['300', '5 分'], ['600', '10 分'], ['1200', '20 分']],
@@ -594,6 +619,7 @@ class Component extends DCLogic {
       ].map((sv) => ({ ...sv, accounts: sv.accounts.map((a) => ({ current: false, auto: false, ...a, mark: a.current ? 'inset 2px 0 0 var(--accent)' : 'none' })) })),
       showPlay: cat === 'play',
       showForm: cat === 'form',
+      showTourney: cat === 'tourney',
       server,
       isPublic,
       serverNote: isPublic
@@ -601,6 +627,11 @@ class Component extends DCLogic {
         : '本番以外のサーバーでの対局は定石に学習しない',
       bookLoaded: this.props.book !== 'missing',
       tolOpts: [['0', 'なし'], ['0.5', '0.5 石'], ['1', '1 石'], ['2', '2 石'], ['4', '4 石']],
+      tdKinds: [{ value: 's8r', label: '同期・ランダム開局' }, { value: '8r', label: 'ランダム開局' }, { value: 's8', label: '同期・通常' }, { value: '8', label: '通常' }],
+      // Director joins: 'on' (default), 'off', or 'none' (on with no kind checked)
+      tdOn: (this.props.td ?? 'on') !== 'off',
+      tdNone: this.props.td === 'none',
+      tdKindsOn: this.props.td === 'none' ? [] : ['s8r'],
       bookMissing: this.props.book === 'missing',
       logChannel,
       logOk,

@@ -81,6 +81,7 @@ const PASS: &[(&str, &str, &[&str], &str)] = &[
     ("ggs__set_auto_play", "ggs_set_auto_play", &["on:b"], "Whether the engine plays our GGS games."),
     ("ggs__set_use_book", "ggs_set_use_book", &["on:b"], "Whether GGS games use the opening book."),
     ("ggs__set_watch_analysis", "ggs_set_watch_analysis", &["on:b"], "Whether watched games are analysed."),
+    ("ggs__set_td_join", "ggs_set_td_join", &["on:b", "kinds:a"], "Whether a tournament director's private tell \"tell /td join N\" is carried out, checked against /td's list for the sender being tournament N's director and its game type being one of kinds (s8r, 8r, s8, 8; at least one while on)."),
     ("ggs__set_ponder", "ggs_set_ponder", &["on:b"], "Whether the threads search the opponent's positions while it is to move on every board of ours."),
     ("ggs__set_log_channel", "ggs_set_log_channel", &["channel:s"], "The channel the search log is told to (empty: none)."),
     ("ggs__set_learn", "ggs_set_learn", &["on:b"], "Whether finished GGS games are learned into the book."),
@@ -172,7 +173,7 @@ fn tools() -> Vec<Tool> {
         ("game__apply", "Play the engine's move from game__think, or pass when no move is given.", json!({"move": s}), vec![]),
         ("gui__show", "Select a menu in the GUI, and for settings a category.", json!({
             "menu": {"type": "string", "description": "play, study, book, settings, ggs-play, ggs-lobby, ggs-players, ggs-results, ggs-chat, ggs-tourney, ggs-console, ggs-login"},
-            "category": {"type": "string", "description": "settings only: engine, view, ai, ggs-me, ggs-account, ggs-play, ggs-form"}}), vec!["menu"]),
+            "category": {"type": "string", "description": "settings only: engine, view, ai, ggs-me, ggs-account, ggs-play, ggs-form, ggs-tourney"}}), vec!["menu"]),
         ("gui__current", "The menu (and settings category) selected in the GUI now.", none(), vec![]),
         ("gui__text", "The text the GUI window shows now.", none(), vec![]),
         ("gui__screenshot", "A picture of the GUI window only (other windows never show in it).", none(), vec![]),

@@ -404,6 +404,7 @@ struct SavedSettings {
     use_book: bool,
     book_tolerance: f32,
     learn: bool,
+    td_join: TdJoin,
 }
 
 impl Default for SavedSettings {
@@ -418,6 +419,7 @@ impl Default for SavedSettings {
             use_book: true,
             book_tolerance: 1.0,
             learn: true,
+            td_join: TdJoin::default(),
         }
     }
 }
@@ -438,6 +440,7 @@ pub(super) fn save_settings(ctx: &Ctx) {
         use_book: e.use_book,
         book_tolerance: e.book_tolerance,
         learn: e.learn,
+        td_join: s.td_join.clone(),
     };
     drop(s);
     if let Ok(text) = serde_json::to_string_pretty(&v) {
@@ -472,6 +475,9 @@ pub(super) fn restore_settings(ctx: &mut Ctx) {
     s.open_requests = v.open_requests;
     s.watch_analysis = v.watch_analysis;
     s.ponder = v.ponder;
+    if !(v.td_join.on && v.td_join.kinds.is_empty()) {
+        s.td_join = v.td_join;
+    }
     if valid_log_channel(&v.log_channel) {
         s.log_channel = v.log_channel;
     }

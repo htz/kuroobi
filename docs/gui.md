@@ -498,6 +498,13 @@ toolbar). If auto match is on
 while you are in a tournament, a band warns that other games will still
 be accepted and offers to change it.
 
+Directors ask players to join by a private tell reading
+`tell /td join N`, since GGS lets only superusers join someone else.
+With Settings > GGS > Tournaments > **Accept a director's join request**
+on, such a tell is carried out when `/td`'s own list names the sender as
+tournament N's director and its game type, random-disc count aside, is
+one of the checked kinds; anyone else's tell is ignored.
+
 ### Console
 
 The raw traffic with the server (All / Sent / Received, search, follow

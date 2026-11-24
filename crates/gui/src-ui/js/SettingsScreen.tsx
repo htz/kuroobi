@@ -3,11 +3,11 @@ import { api, emitApp, ggsApi, onApp, type ControlInfo, type SavedServer } from 
 import type { GgsSnapshot } from './types';
 import type { Prefs } from './prefs';
 import type { Account } from './components/accounts';
-import { DEFAULT_DECLINE, fingerKey } from './ggs';
+import { DEFAULT_DECLINE, fingerKey, gtypeLabel } from './ggs';
 import { t, tErr, useLang } from './i18n';
 import { Confirm, Field, ListRow, marked, Modal, Overlay } from './components/layout';
 import { ListHead } from './ggsui';
-import { Button, Dot, Segmented, Select, TextField } from './components/primitives';
+import { Button, Checks, Dot, Segmented, Select, TextField } from './components/primitives';
 import { Tag } from './components/ggs';
 import { EngineSettings, SettingGroup, SettingRow, SettingToggle, ViewSettings, type LearnSetting } from './Dialogs';
 import { FormulaField } from './GgsScreens';
@@ -16,7 +16,7 @@ import { markApplied } from './applied';
 import { whenFull } from './when';
 import { bookTolOptions } from './bookTol';
 
-export const SETTINGS_CATS = ['engine', 'view', 'ai', 'ggs-me', 'ggs-account', 'ggs-play', 'ggs-form'] as const;
+export const SETTINGS_CATS = ['engine', 'view', 'ai', 'ggs-me', 'ggs-account', 'ggs-play', 'ggs-form', 'ggs-tourney'] as const;
 export type SettingsCat = typeof SETTINGS_CATS[number];
 
 const groups = (): { title: string; items: [SettingsCat, string][] }[] => [
@@ -27,6 +27,7 @@ const groups = (): { title: string; items: [SettingsCat, string][] }[] => [
       ['ggs-account', t('settings.cat.account')],
       ['ggs-play', t('settings.cat.play')],
       ['ggs-form', t('settings.cat.form')],
+      ['ggs-tourney', t('settings.cat.tourney')],
     ],
   },
 ];
@@ -77,6 +78,8 @@ export function SettingsScreen({ cat, onCat, prefs, setPref, snap, onLogin, lear
             ? <GgsPlaySettings snap={snap} learn={prefs.learnGgs} setLearn={(on) => setPref('learnGgs', on)} /> : <Offline />)}
           {cat === 'ggs-form' && (snap && snap.conn === 'online'
             ? <GgsFormSettings snap={snap} /> : <Offline />)}
+          {cat === 'ggs-tourney' && (snap && snap.conn === 'online'
+            ? <GgsTourneySettings snap={snap} /> : <Offline />)}
         </div>
       </div>
     </div>
@@ -560,6 +563,48 @@ function GgsPlaySettings({ snap, learn, setLearn }: { snap: GgsSnapshot; learn: 
 }
 
 const flat = (x: string) => x.replace(/\s+/g, '');
+
+const TD_KINDS = ['s8r', '8r', 's8', '8'] as const;
+
+/** A director's private tell "tell /td join N", carried out for the kinds checked here. */
+function GgsTourneySettings({ snap }: { snap: GgsSnapshot }) {
+  const [on, setOn] = useState(snap.td_join.on);
+  const [kinds, setKinds] = useState<string[]>(snap.td_join.kinds);
+  const [err, setErr] = useState('');
+  const none = on && kinds.length === 0;
+
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    if (none) return;
+    void (async () => {
+      try {
+        await ggsApi.setTdJoin(on, kinds);
+        setErr('');
+        markApplied();
+      } catch (x) { setErr(t('ggs.settings.apply_failed', { error: tErr(x) })); }
+    })();
+  }, [on, kinds, none]);
+
+  return (
+    <SettingGroup title={t('settings.cat.tourney')}>
+      <SettingRow label={t('settings.tourney.director_join')} error={err || undefined}>
+        <SettingToggle checked={on} onChange={setOn} />
+        {on && (
+          <div style={{
+            display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', marginTop: 'var(--sp-2)',
+            paddingLeft: 'var(--sp-3)', borderLeft: '2px solid var(--border)',
+          }}>
+            <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('settings.tourney.kinds')}</span>
+            <Checks values={kinds} onChange={setKinds}
+                    options={TD_KINDS.map((k) => ({ value: k, label: gtypeLabel(k) }))} />
+            {none && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--bad)' }}>{t('settings.tourney.kinds_none')}</span>}
+          </div>
+        )}
+      </SettingRow>
+    </SettingGroup>
+  );
+}
 
 function GgsFormSettings({ snap }: { snap: GgsSnapshot }) {
   const login = snap.login;

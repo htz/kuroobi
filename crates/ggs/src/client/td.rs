@@ -351,9 +351,125 @@ fn td_apply_finger(td: &mut TdView, login: &str, head: &str, rest: &[&str]) {
     }
 }
 
+/// Whether a tournament director's request to join is carried out, and for which game types.
+#[derive(Clone, Serialize, serde::Deserialize, Debug, PartialEq)]
+pub struct TdJoin {
+    pub on: bool,
+    /// Game types without their random-disc count: `s8r`, `8r`, `s8`, `8`.
+    pub kinds: Vec<String>,
+}
+
+impl Default for TdJoin {
+    fn default() -> Self {
+        TdJoin {
+            on: false,
+            kinds: vec!["s8r".into()],
+        }
+    }
+}
+
+/// The tournament a private tell asks us to join. Directors write the command itself, as GGS lets
+/// only superusers join someone else.
+pub(super) fn join_request(text: &str) -> Option<u32> {
+    let rest = text.trim();
+    let rest = rest
+        .strip_prefix("tell /td join ")
+        .or_else(|| rest.strip_prefix("t /td join "))?;
+    rest.trim().parse().ok()
+}
+
+/// `s8r14` -> `s8r`: the random-disc count does not change the kind.
+pub(super) fn gtype_kind(gtype: &str) -> &str {
+    gtype.trim_end_matches(|c: char| c.is_ascii_digit() && gtype.contains('r'))
+}
+
+/// Why `from`'s request to join tournament `id` is not carried out, judged on /td's own list.
+pub(super) fn director_join_refusal(
+    td: &TdView,
+    cfg: &TdJoin,
+    id: u32,
+    from: &str,
+) -> Option<&'static str> {
+    if !cfg.on {
+        return Some("off");
+    }
+    let Some(t) = td.tourneys.iter().find(|t| t.id == id) else {
+        return Some("unknown tournament");
+    };
+    if t.director.is_empty() || !t.director.eq_ignore_ascii_case(from) {
+        return Some("not its director");
+    }
+    if !cfg.kinds.iter().any(|k| k == gtype_kind(&t.gtype)) {
+        return Some("game type not chosen");
+    }
+    if t.joined {
+        return Some("already joined");
+    }
+    if matches!(t.state.as_str(), "over" | "cancelled") {
+        return Some("over");
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn listed() -> TdView {
+        let mut td = TdView::default();
+        td_apply(
+            &mut td,
+            "kuroobi",
+            "tourneys: 2\n   id director  game #pl   round start             clock       type\n    3  HCyrano   /os  10   0/ 18  4:10        1:00//0:20      s8r14\n    4  HCyrano   /os   2   0/  4  4:10        1:00//0:20      8",
+            true,
+            100,
+        );
+        td
+    }
+
+    #[test]
+    fn a_director_tell_is_read_as_a_join_request() {
+        assert_eq!(join_request("tell /td join 3"), Some(3));
+        assert_eq!(join_request(" t /td join 12 "), Some(12));
+        assert_eq!(join_request("tell /td join three"), None);
+        assert_eq!(join_request("please tell /td join 3"), None);
+        assert_eq!(join_request("tell /td withdraw 3"), None);
+    }
+
+    #[test]
+    fn kinds_drop_the_random_disc_count() {
+        assert_eq!(gtype_kind("s8r14"), "s8r");
+        assert_eq!(gtype_kind("8r16"), "8r");
+        assert_eq!(gtype_kind("s8"), "s8");
+        assert_eq!(gtype_kind("8"), "8");
+    }
+
+    #[test]
+    fn only_the_director_of_a_chosen_kind_is_obeyed() {
+        let td = listed();
+        let on = TdJoin {
+            on: true,
+            kinds: vec!["s8r".into()],
+        };
+        assert_eq!(director_join_refusal(&td, &on, 3, "HCyrano"), None);
+        assert_eq!(director_join_refusal(&td, &on, 3, "hcyrano"), None);
+        assert_eq!(
+            director_join_refusal(&td, &on, 3, "someone"),
+            Some("not its director")
+        );
+        assert_eq!(
+            director_join_refusal(&td, &on, 4, "HCyrano"),
+            Some("game type not chosen")
+        );
+        assert_eq!(
+            director_join_refusal(&td, &on, 9, "HCyrano"),
+            Some("unknown tournament")
+        );
+        assert_eq!(
+            director_join_refusal(&td, &TdJoin::default(), 3, "HCyrano"),
+            Some("off")
+        );
+    }
 
     #[test]
     fn td_follows_a_tournament_from_announcement_to_end() {

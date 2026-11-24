@@ -477,6 +477,7 @@ err:
   record_unreadable: "Cannot read the game record. Check that the moves are in order."
   server_address: "Write the address as host:port"
   server_exists: "That server is already listed"
+  td_join_no_kind: "Choose at least one kind to join"
   unknown_resource: "Unknown resource ({name})"
   unsupported_verb: "Unsupported match command ({verb})"
 fs:
@@ -787,6 +788,7 @@ ggs:
     synchro_rand16: "Synchro, random 16"
     synchro_rand18: "Synchro, random 18"
     synchro_rand20: "Synchro, random 20"
+    synchro_rand_opening: "Synchro, random opening"
     synchro_std: "Synchro, standard"
   gtype_choice:
     rand16: "Standard, random 16"
@@ -1208,6 +1210,7 @@ settings:
     form: "Request rules"
     me: "Account"
     play: "Playing and watching"
+    tourney: "Tournaments"
   facing:
     auto: "You at bottom"
     black: "Black at bottom"
@@ -1318,6 +1321,10 @@ settings:
     label: "Threads"
     note: "The parallelism used by local games, study, learning and GGS games."
   title: "Settings"
+  tourney:
+    director_join: "Accept a director's join request"
+    kinds: "Kinds to join"
+    kinds_none: "Choose at least one"
   view:
     facing_help: "Applies to GGS games too"
 status:

@@ -283,6 +283,7 @@ export interface GgsSnapshot {
   open: boolean;
   open_requests: boolean;
   watch_analysis: boolean;
+  td_join: { on: boolean; kinds: string[] };
   /** While the opponent is to move on every board of ours, the threads search its position. */
   ponder: boolean;
   log_channel: string;

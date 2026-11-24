@@ -1225,6 +1225,33 @@
    "w": 1280,
    "x": 8160,
    "y": 0
+  },
+  "SettingsTourney.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Settings · GGS tournaments",
+   "w": 1280,
+   "x": 16320,
+   "y": 0,
+   "page": "settings"
+  },
+  "SettingsTourneyOff.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Settings · GGS tournaments, director joins off",
+   "w": 1280,
+   "x": 17680,
+   "y": 0,
+   "page": "settings"
+  },
+  "SettingsTourneyNone.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Settings · GGS tournaments, no kind checked",
+   "w": 1280,
+   "x": 19040,
+   "y": 0,
+   "page": "settings"
   }
  },
  "createdOnFiles": {

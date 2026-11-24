@@ -38,6 +38,7 @@ pub use store::{
     forget_server, save_server, saved_accounts, saved_servers, session_locked_by_other, set_auto,
     SavedAccount, SavedServer,
 };
+pub use td::TdJoin;
 pub use unfit::{unfit_view, UnfitView};
 
 use chat::*;
@@ -89,6 +90,7 @@ pub enum Cmd {
     SetWatchAnalysis(bool),
     SetPonder(bool),
     SetLogChannel(String),
+    SetTdJoin(TdJoin),
     SetUseBook(bool),
     SetBookTolerance(f32),
     SetLearn(bool),
@@ -400,6 +402,7 @@ pub struct Snapshot {
     pub last_search: Option<SearchStat>,
     pub fetched_ggf: Option<FetchedGgf>,
     pub td: TdView,
+    pub td_join: TdJoin,
 }
 
 #[derive(Clone, Serialize)]
@@ -824,6 +827,8 @@ struct Ctx {
     auto_asked: bool,
     /// The auto-match opponent whose finger was fetched to check the request; fetched once only.
     auto_fingered: String,
+    /// A director's request to join (tournament, director) waiting for /td's list to check it against.
+    td_join_wait: Option<(u32, String)>,
 }
 
 const MAX_WORKERS: usize = 2;
@@ -1084,6 +1089,7 @@ fn new_ctx(
         ask_matched: false,
         auto_asked: false,
         auto_fingered: String::new(),
+        td_join_wait: None,
     };
     ctx.snap.lock().unwrap().engine = EngineCfgView {
         threads: ctx.engine_cfg.threads,
@@ -1150,6 +1156,7 @@ fn wait_for_connect(ctx: &mut Ctx, rx: &Receiver<Cmd>) -> Option<(String, String
                 ctx.snap.lock().unwrap().log_channel = c;
                 save_settings(ctx);
             }
+            Ok(Cmd::SetTdJoin(j)) => set_td_join(ctx, j),
             Ok(cmd) => {
                 if !set_pref(ctx, &cmd) {
                     continue;
@@ -1586,6 +1593,7 @@ fn dispatch_line(
         }
         let text = std::mem::take(&mut w.td_block).join("\n");
         apply_td(ctx, login, &text, true);
+        answer_director_join(ctx, &mut send);
     }
     if let Some(first) = ln.strip_prefix("/td: ") {
         w.td_block.push(first.trim_end().to_string());
@@ -1595,6 +1603,10 @@ fn dispatch_line(
     for m in done {
         if m.from == "/td" {
             apply_td(ctx, login, &m.text, false);
+        } else if m.chan.is_empty() {
+            if let Some(id) = join_request(&m.text) {
+                ask_director_join(ctx, id, &m.from, &mut send);
+            }
         }
         deliver_chat(ctx, login, m);
     }
@@ -1990,6 +2002,10 @@ fn handle_cmd(
             ctx.dirty = true;
         }
         Cmd::SetLogChannel(_) => {}
+        Cmd::SetTdJoin(j) => {
+            set_td_join(ctx, j);
+            ctx.dirty = true;
+        }
         Cmd::ListStored => query(pending, "stored_list", "tell /os stored", send),
         Cmd::SetList { list, name, on } => {
             let sign = if on { '+' } else { '-' };
@@ -3660,6 +3676,54 @@ fn match_line_parts(line: &str) -> (Vec<String>, Vec<String>, String) {
         .map(|x| x.to_string())
         .unwrap_or_default();
     (names, ratings, gtype)
+}
+
+/// A kind-less setting is refused: the screen shows the error and the last kinds stay in force.
+fn set_td_join(ctx: &mut Ctx, j: TdJoin) {
+    if j.on && j.kinds.is_empty() {
+        return;
+    }
+    ctx.snap.lock().unwrap().td_join = j;
+    save_settings(ctx);
+}
+
+/// A private tell asking us to join: /td's list, fetched fresh, names the director to check it against.
+fn ask_director_join(ctx: &mut Ctx, id: u32, from: &str, send: &mut impl FnMut(String)) {
+    if !ctx.snap.lock().unwrap().td_join.on {
+        ctx.log(
+            "info",
+            &format!("director join: {from} asked for tournament {id}; off"),
+        );
+        return;
+    }
+    ctx.td_join_wait = Some((id, from.to_string()));
+    send("tell /td tourneys".into());
+}
+
+fn answer_director_join(ctx: &mut Ctx, send: &mut impl FnMut(String)) {
+    let Some((id, from)) = ctx.td_join_wait.clone() else {
+        return;
+    };
+    let s = ctx.snap.lock().unwrap();
+    if s.td.reply.as_ref().is_none_or(|r| r.cmd != "tourneys") {
+        return;
+    }
+    let refusal = director_join_refusal(&s.td, &s.td_join, id, &from);
+    drop(s);
+    ctx.td_join_wait = None;
+    match refusal {
+        None => {
+            ctx.log(
+                "info",
+                &format!("director join: {from} asked for tournament {id}; joining"),
+            );
+            send(format!("tell /td join {id}"));
+        }
+        Some(why) => ctx.log(
+            "info",
+            &format!("director join: {from} asked for tournament {id}; not joining ({why})"),
+        ),
+    }
 }
 
 fn apply_td(ctx: &mut Ctx, login: &str, text: &str, direct: bool) {
