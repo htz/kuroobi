@@ -478,6 +478,7 @@ err:
   server_address: "Write the address as host:port"
   server_exists: "That server is already listed"
   td_join_no_kind: "Choose at least one kind to join"
+  td_join_no_one: "Choose at least one to accept invitations from"
   unknown_resource: "Unknown resource ({name})"
   unsupported_verb: "Unsupported match command ({verb})"
 fs:
@@ -1322,9 +1323,16 @@ settings:
     note: "The parallelism used by local games, study, learning and GGS games."
   title: "Settings"
   tourney:
-    director_join: "Accept a director's join request"
+    add: "Add"
+    director_join: "Accept tournament invitations"
+    from: "From"
+    from_any: "Anyone"
+    from_picked: "Only these"
     kinds: "Kinds to join"
     kinds_none: "Choose at least one"
+    no_one: "Choose at least one"
+    player: "Player name"
+    remove: "Remove"
   view:
     facing_help: "Applies to GGS games too"
 status:
@@ -1367,6 +1375,11 @@ tourney:
   filter_who: "{who}"
   game_players: "Players"
   group_live: "Live and open"
+  invite:
+    go: "Invite"
+    open: "Invite…"
+    title: "Invite to tournament {id}"
+    to: "Player"
   next_of: "{name}'s next game"
   next_round: "Next round"
   no_games: "No games in this round"

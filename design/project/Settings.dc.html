@@ -419,17 +419,42 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </sc-if>
 
 <sc-if value="{{showTourney}}" hint-placeholder-val="{{false}}">
-<!-- Tournaments: a director asks players to join by a private tell whose text is "tell /td join N" (GGS lets only superusers join someone else). That tell is carried out when its sender is the director of tournament N in /td's list and the tournament's game type (random-disc count ignored) is one of the kinds switched on below; from anyone else, or of another kind, nothing is sent. Off by default, s8r alone on; while off the kinds are disabled -->
+<!-- Tournaments: an invitation is a private tell whose text is "tell /td join N" (GGS lets only superusers join someone else), usually from the tournament's director.
+     It is carried out when its sender is one we accept invitations from (anyone, or the director of tournament N in /td's list if checked, or a listed player) and the tournament's game type
+     (random-disc count ignored) is one of the kinds checked below; otherwise nothing is sent. Off by default; narrowed to the director, and s8r alone checked -->
 <x-import style="display: contents" component-from-global-scope="KuroobiUI.Section" title="大会">
 <div style="display: flex; flex-direction: column">
 <div style="display: flex; gap: var(--sp-4); padding: var(--sp-3) 0; border-bottom: 1px solid var(--border-weak)">
-<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">ディレクターの参加指示を受ける</span>
+<span style="width: 200px; flex: none; line-height: var(--h-ctrl); white-space: nowrap">大会の招待を受ける</span>
 <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); align-items: flex-start">
 <span style="display: flex; align-items: center; height: var(--h-ctrl)"><x-import component-from-global-scope="KuroobiUI.Toggle" checked="{{tdOn}}"></x-import></span>
 <!-- The switch's own condition, nested under it and shown only while the switch is on. Labels are gtypeLabel's (s8r without a disc count: 同期・ランダム開局). With none checked the red line shows and the setting is not applied: the last applied kinds stay in force -->
 <sc-if value="{{tdOn}}" hint-placeholder-val="{{true}}">
-<div style="display: flex; flex-direction: column; gap: var(--sp-1); margin-top: var(--sp-2); padding-left: var(--sp-3); border-left: 2px solid var(--border)">
-<span style="font-size: var(--fs-6); color: var(--sub)">参加する種類</span>
+<div style="align-self: stretch; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-1); margin-top: var(--sp-2); padding-left: var(--sp-3); border-left: 2px solid var(--border)">
+<!-- Whom an invitation is accepted from: anyone, or only those picked below. Picked: the director of that tournament and any number of players listed by name
+     (offline ones too; matched ignoring case), in any combination. One row per player, as the account rows; "Add" takes the typed name.
+     Narrowed with neither the director checked nor anyone listed, the red line shows and nothing is applied -->
+<span style="font-size: var(--fs-6); color: var(--sub)">受ける相手</span>
+<x-import component-from-global-scope="KuroobiUI.Segmented" value="{{tdWho}}" options="{{tdWhoOpts}}"></x-import>
+<sc-if value="{{tdPicked}}" hint-placeholder-val="{{true}}">
+<x-import component-from-global-scope="KuroobiUI.Checks" values="{{tdFromOn}}" options="{{tdFrom}}"></x-import>
+<div style="align-self: stretch; max-width: var(--w-control); display: flex; flex-direction: column">
+<sc-for list="{{tdPlayers}}" as="p" hint-placeholder-count="2">
+<div class="k-row" style="display: flex; align-items: center; gap: var(--sp-3); height: var(--h-row); padding: 0 var(--sp-2); border-bottom: 1px solid var(--border-weak); font-size: var(--fs-5); white-space: nowrap">
+<span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis">{{p}}</span>
+<x-import component-from-global-scope="KuroobiUI.Button" size="row" variant="ghost">外す</x-import>
+</div>
+</sc-for>
+<div style="display: flex; align-items: center; gap: var(--sp-2); padding-top: var(--sp-2)">
+<x-import component-from-global-scope="KuroobiUI.TextField" value="" placeholder="プレイヤー名" width="{{160}}"></x-import>
+<x-import component-from-global-scope="KuroobiUI.Button">追加</x-import>
+</div>
+</div>
+<sc-if value="{{tdNoOne}}" hint-placeholder-val="{{false}}">
+<span style="font-size: var(--fs-6); color: var(--bad)">受ける相手を 1 つ以上選んでください</span>
+</sc-if>
+</sc-if>
+<span style="font-size: var(--fs-6); color: var(--sub); margin-top: var(--sp-2)">参加する種類</span>
 <x-import component-from-global-scope="KuroobiUI.Checks" values="{{tdKindsOn}}" options="{{tdKinds}}"></x-import>
 <sc-if value="{{tdNone}}" hint-placeholder-val="{{false}}">
 <span style="font-size: var(--fs-6); color: var(--bad)">1 つ以上選んでください</span>
@@ -628,10 +653,18 @@ class Component extends DCLogic {
       bookLoaded: this.props.book !== 'missing',
       tolOpts: [['0', 'なし'], ['0.5', '0.5 石'], ['1', '1 石'], ['2', '2 石'], ['4', '4 石']],
       tdKinds: [{ value: 's8r', label: '同期・ランダム開局' }, { value: '8r', label: 'ランダム開局' }, { value: 's8', label: '同期・通常' }, { value: '8', label: '通常' }],
-      // Director joins: 'on' (default), 'off', or 'none' (on with no kind checked)
+      // Tournament invitations: 'on' (default), 'off', 'none' (on with no kind checked) 'noone' (narrowed to nobody) or 'any' (taken from anyone)
       tdOn: (this.props.td ?? 'on') !== 'off',
       tdNone: this.props.td === 'none',
       tdKindsOn: this.props.td === 'none' ? [] : ['s8r'],
+      // 'noone': on, the director unchecked and nobody listed
+      tdWhoOpts: [{ value: 'any', label: '誰でも' }, { value: 'picked', label: '相手を絞る' }],
+      tdWho: this.props.td === 'any' ? 'any' : 'picked',
+      tdPicked: this.props.td !== 'any',
+      tdFrom: [{ value: 'director', label: '主催' }],
+      tdFromOn: this.props.td === 'noone' ? [] : ['director'],
+      tdPlayers: this.props.td === 'noone' ? [] : ['HCyrano', 'nyanyan4'],
+      tdNoOne: this.props.td === 'noone',
       bookMissing: this.props.book === 'missing',
       logChannel,
       logOk,

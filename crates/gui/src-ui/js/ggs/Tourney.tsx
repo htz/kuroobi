@@ -3,7 +3,7 @@ import { ggsApi } from '../api';
 import type { GgsSnapshot, TourneyView } from '../types';
 import { gtypeLabel, onlineRows } from '../ggs';
 import { t } from '../i18n';
-import { captionStyle, Combobox, ListRow, Toolbar, TwoLines } from '../components/layout';
+import { captionStyle, Combobox, Field, ListRow, Modal, Overlay, Toolbar, TwoLines } from '../components/layout';
 import { Button, Dot, Progress, Segmented, TextField } from '../components/primitives';
 import { Tag, type NavId } from '../components/ggs';
 import { askSheet } from '../AskSheet';
@@ -157,6 +157,36 @@ export function Tourney({ snap, onNav }: { snap: GgsSnapshot; onNav: (id: NavId)
   );
 }
 
+/** A director asks a player to join by the private tell "tell /td join N"; a bot that obeys its director joins itself. */
+function InviteDialog({ snap, id, entrants, onClose }: {
+  snap: GgsSnapshot; id: number; entrants: string[]; onClose: () => void;
+}) {
+  useEffect(() => { void ggsApi.who(); }, []);
+  const lower = new Set([snap.login, ...entrants].map((n) => n.toLowerCase()));
+  const options: [string, string, string?][] = onlineRows(snap)
+    .filter((u) => !lower.has(u.name.toLowerCase()))
+    .map((u) => [u.name, u.name, u.rating_r != null ? String(Math.round(u.rating_r)) : undefined]);
+  const [who, setWho] = useState('');
+  const pick = options.some(([n]) => n === who) ? who : options[0]?.[0] ?? '';
+  return (
+    <Overlay onClose={onClose}>
+      <Modal title={t('tourney.invite.title', { id })} onClose={onClose}
+             actions={<>
+               <span style={{ flex: 1 }} />
+               <Button size="field" variant="ghost" onClick={onClose}>{t('dialog.cancel')}</Button>
+               <Button size="field" variant="primary" disabled={!pick}
+                       onClick={() => { act(ggsApi.raw(`tell ${pick} tell /td join ${id}`)); onClose(); }}>
+                 {t('tourney.invite.go')}
+               </Button>
+             </>}>
+        <Field label={t('tourney.invite.to')}>
+          <Combobox value={pick} onChange={setWho} options={options} title={t('tourney.invite.to')} />
+        </Field>
+      </Modal>
+    </Overlay>
+  );
+}
+
 function TourneyDetail({ snap, x, now, errText }: {
   snap: GgsSnapshot; x: TourneyView; now: number; errText: string;
 }) {
@@ -224,6 +254,8 @@ function TourneyDetail({ snap, x, now, errText }: {
     return names.length ? names : x.players;
   })();
   const joining = info.get('joining');
+  const canInvite = !!me && director.toLowerCase() === me.toLowerCase() && !finished(x) && joining !== 'closed' && (beforeStart(x) || isSwiss(x));
+  const [inviting, setInviting] = useState(false);
   const shown = picked.length
     ? sched.filter((r) => !r.bye && picked.every((n) => r.a === n || r.b === n))
     : sched.filter((r) => r.round === round);
@@ -245,6 +277,7 @@ function TourneyDetail({ snap, x, now, errText }: {
 
   return (
     <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      {inviting && <InviteDialog snap={snap} id={x.id} entrants={entrants} onClose={() => setInviting(false)} />}
       {errText && <div style={{ paddingTop: 'var(--sp-2)' }}><Band tone="bad">{errText}</Band></div>}
       {x.joined && !finished(x) && snap.standby.enabled && (
         <div style={{ paddingTop: 'var(--sp-2)' }}>
@@ -288,7 +321,10 @@ function TourneyDetail({ snap, x, now, errText }: {
           <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', height: 'var(--h-bar)', padding: '0 var(--sp-3)' }}>
             <b style={{ fontWeight: 600 }}>{t('tourney.entrants')}</b>
             <span style={sub}>{t('ggs.tourney.players', { n: entrants.length })}</span>
-            {joining && <span style={{ marginLeft: 'auto' }}><Tag tone={joining === 'open' ? 'ok' : 'sub'}>{joining === 'open' ? t('ggs.tourney.joining_open') : t('ggs.tourney.joining_closed')}</Tag></span>}
+            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+              {joining && <Tag tone={joining === 'open' ? 'ok' : 'sub'}>{joining === 'open' ? t('ggs.tourney.joining_open') : t('ggs.tourney.joining_closed')}</Tag>}
+              {canInvite && <Button size="row" onClick={() => setInviting(true)}>{t('tourney.invite.open')}</Button>}
+            </span>
           </div>
           <HeadRow cols={[['#', 32, 'right'], [t('ggs.tourney.col.player'), undefined], [t('ggs.pool.random'), 96, 'right']]} />
           <Rows>

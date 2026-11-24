@@ -3678,21 +3678,21 @@ fn match_line_parts(line: &str) -> (Vec<String>, Vec<String>, String) {
     (names, ratings, gtype)
 }
 
-/// A kind-less setting is refused: the screen shows the error and the last kinds stay in force.
+/// An incomplete setting is refused: the screen shows the error and the last one stays in force.
 fn set_td_join(ctx: &mut Ctx, j: TdJoin) {
-    if j.on && j.kinds.is_empty() {
+    if j.incomplete() {
         return;
     }
     ctx.snap.lock().unwrap().td_join = j;
     save_settings(ctx);
 }
 
-/// A private tell asking us to join: /td's list, fetched fresh, names the director to check it against.
+/// A private tell asking us to join: /td's list, fetched fresh, has the director and game type to check it against.
 fn ask_director_join(ctx: &mut Ctx, id: u32, from: &str, send: &mut impl FnMut(String)) {
     if !ctx.snap.lock().unwrap().td_join.on {
         ctx.log(
             "info",
-            &format!("director join: {from} asked for tournament {id}; off"),
+            &format!("td join: {from} asked for tournament {id}; off"),
         );
         return;
     }
@@ -3715,13 +3715,13 @@ fn answer_director_join(ctx: &mut Ctx, send: &mut impl FnMut(String)) {
         None => {
             ctx.log(
                 "info",
-                &format!("director join: {from} asked for tournament {id}; joining"),
+                &format!("td join: {from} asked for tournament {id}; joining"),
             );
             send(format!("tell /td join {id}"));
         }
         Some(why) => ctx.log(
             "info",
-            &format!("director join: {from} asked for tournament {id}; not joining ({why})"),
+            &format!("td join: {from} asked for tournament {id}; not joining ({why})"),
         ),
     }
 }

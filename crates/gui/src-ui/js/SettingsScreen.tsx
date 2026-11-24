@@ -566,39 +566,79 @@ const flat = (x: string) => x.replace(/\s+/g, '');
 
 const TD_KINDS = ['s8r', '8r', 's8', '8'] as const;
 
-/** A director's private tell "tell /td join N", carried out for the kinds checked here. */
+/** A private tell "tell /td join N", carried out when its sender and the tournament's kind pass the conditions here. */
 function GgsTourneySettings({ snap }: { snap: GgsSnapshot }) {
-  const [on, setOn] = useState(snap.td_join.on);
-  const [kinds, setKinds] = useState<string[]>(snap.td_join.kinds);
+  const j0 = snap.td_join;
+  const [on, setOn] = useState(j0.on);
+  const [kinds, setKinds] = useState<string[]>(j0.kinds);
+  const [fromAny, setFromAny] = useState(j0.from_any);
+  const [fromDirector, setFromDirector] = useState(j0.from_director);
+  const [players, setPlayers] = useState<string[]>(j0.players);
+  const [typed, setTyped] = useState('');
   const [err, setErr] = useState('');
-  const none = on && kinds.length === 0;
+  const noKind = on && kinds.length === 0;
+  const noOne = on && !fromAny && !fromDirector && players.length === 0;
+  const name = typed.trim();
+  const canAdd = name !== '' && !/\s/.test(name) && !players.some((p) => p.toLowerCase() === name.toLowerCase());
+  const add = () => { if (canAdd) { setPlayers([...players, name]); setTyped(''); } };
 
   const first = useRef(true);
   useEffect(() => {
     if (first.current) { first.current = false; return; }
-    if (none) return;
+    if (noKind || noOne) return;
     void (async () => {
       try {
-        await ggsApi.setTdJoin(on, kinds);
+        await ggsApi.setTdJoin({ on, kinds, fromAny, fromDirector, players });
         setErr('');
         markApplied();
       } catch (x) { setErr(t('ggs.settings.apply_failed', { error: tErr(x) })); }
     })();
-  }, [on, kinds, none]);
+  }, [on, kinds, fromAny, fromDirector, players, noKind, noOne]);
 
+  const caption = { fontSize: 'var(--fs-6)', color: 'var(--sub)' };
+  const bad = { fontSize: 'var(--fs-6)', color: 'var(--bad)' };
   return (
     <SettingGroup title={t('settings.cat.tourney')}>
       <SettingRow label={t('settings.tourney.director_join')} error={err || undefined}>
         <SettingToggle checked={on} onChange={setOn} />
         {on && (
           <div style={{
-            display: 'flex', flexDirection: 'column', gap: 'var(--sp-1)', marginTop: 'var(--sp-2)',
+            alignSelf: 'stretch', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 'var(--sp-1)', marginTop: 'var(--sp-2)',
             paddingLeft: 'var(--sp-3)', borderLeft: '2px solid var(--border)',
           }}>
-            <span style={{ fontSize: 'var(--fs-6)', color: 'var(--sub)' }}>{t('settings.tourney.kinds')}</span>
+            <span style={caption}>{t('settings.tourney.from')}</span>
+            <Segmented value={fromAny ? 'any' : 'picked'} onChange={(v) => setFromAny(v === 'any')}
+                       options={[{ value: 'any' as const, label: t('settings.tourney.from_any') },
+                                 { value: 'picked' as const, label: t('settings.tourney.from_picked') }]} />
+            {!fromAny && (
+              <>
+                <Checks values={fromDirector ? ['director'] : []} onChange={(v) => setFromDirector(v.includes('director'))}
+                        options={[{ value: 'director', label: t('tourney.director') }]} />
+                <div style={{ alignSelf: 'stretch', maxWidth: 'var(--w-control)', display: 'flex', flexDirection: 'column' }}>
+                  {players.map((p) => (
+                    <div key={p} className="k-row" style={{
+                      display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', height: 'var(--h-row)', padding: '0 var(--sp-2)',
+                      borderBottom: '1px solid var(--border-weak)', fontSize: 'var(--fs-5)', whiteSpace: 'nowrap',
+                    }}>
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p}</span>
+                      <Button size="row" variant="ghost" onClick={() => setPlayers(players.filter((x) => x !== p))}>
+                        {t('settings.tourney.remove')}
+                      </Button>
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', paddingTop: 'var(--sp-2)' }}>
+                    <TextField value={typed} onChange={setTyped} placeholder={t('settings.tourney.player')} width={160}
+                               onEnter={add} />
+                    <Button disabled={!canAdd} onClick={add}>{t('settings.tourney.add')}</Button>
+                  </div>
+                </div>
+                {noOne && <span style={bad}>{t('settings.tourney.no_one')}</span>}
+              </>
+            )}
+            <span style={{ ...caption, marginTop: 'var(--sp-2)' }}>{t('settings.tourney.kinds')}</span>
             <Checks values={kinds} onChange={setKinds}
                     options={TD_KINDS.map((k) => ({ value: k, label: gtypeLabel(k) }))} />
-            {none && <span style={{ fontSize: 'var(--fs-6)', color: 'var(--bad)' }}>{t('settings.tourney.kinds_none')}</span>}
+            {noKind && <span style={bad}>{t('settings.tourney.kinds_none')}</span>}
           </div>
         )}
       </SettingRow>

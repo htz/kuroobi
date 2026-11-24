@@ -81,7 +81,7 @@ const PASS: &[(&str, &str, &[&str], &str)] = &[
     ("ggs__set_auto_play", "ggs_set_auto_play", &["on:b"], "Whether the engine plays our GGS games."),
     ("ggs__set_use_book", "ggs_set_use_book", &["on:b"], "Whether GGS games use the opening book."),
     ("ggs__set_watch_analysis", "ggs_set_watch_analysis", &["on:b"], "Whether watched games are analysed."),
-    ("ggs__set_td_join", "ggs_set_td_join", &["on:b", "kinds:a"], "Whether a tournament director's private tell \"tell /td join N\" is carried out, checked against /td's list for the sender being tournament N's director and its game type being one of kinds (s8r, 8r, s8, 8; at least one while on)."),
+    ("ggs__set_td_join", "ggs_set_td_join", &["on:b", "kinds:a", "from_any:b", "from_director:b", "players:a"], "Whether a tournament invitation, the private tell \"tell /td join N\", is carried out: from anyone (from_any), else only from tournament N's director in /td's list (from_director) or the listed players; and only when its game type is one of kinds (s8r, 8r, s8, 8). While on, at least one kind and someone to take it from."),
     ("ggs__set_ponder", "ggs_set_ponder", &["on:b"], "Whether the threads search the opponent's positions while it is to move on every board of ours."),
     ("ggs__set_log_channel", "ggs_set_log_channel", &["channel:s"], "The channel the search log is told to (empty: none)."),
     ("ggs__set_learn", "ggs_set_learn", &["on:b"], "Whether finished GGS games are learned into the book."),

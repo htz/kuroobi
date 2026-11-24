@@ -214,7 +214,8 @@ export const ggsApi = {
   setOpen: (on: boolean) => call('ggs_set_open', { on }),
   setOpenRequests: (on: boolean) => call('ggs_set_open_requests', { on }),
   setWatchAnalysis: (on: boolean) => call('ggs_set_watch_analysis', { on }),
-  setTdJoin: (on: boolean, kinds: string[]) => call('ggs_set_td_join', { on, kinds }),
+  setTdJoin: (j: { on: boolean; kinds: string[]; fromAny: boolean; fromDirector: boolean; players: string[] }) =>
+    call('ggs_set_td_join', j),
   setPonder: (on: boolean) => call('ggs_set_ponder', { on }),
   setLogChannel: (channel: string) => call('ggs_set_log_channel', { channel }),
   setUseBook: (on: boolean) => call('ggs_set_use_book', { on }),

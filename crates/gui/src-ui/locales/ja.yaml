@@ -471,6 +471,7 @@ err:
   server_address: "アドレスは「ホスト名:ポート」で書いてください"
   server_exists: "そのアドレスのサーバーはもうあります"
   td_join_no_kind: "参加する種類を 1 つ以上選んでください"
+  td_join_no_one: "受ける相手を 1 つ以上選んでください"
   unknown_resource: "不明なリソースです ({name})"
   unsupported_verb: "対応していない対局コマンドです ({verb})"
 fs:
@@ -1297,9 +1298,16 @@ settings:
     note: "ローカル対局・検討・学習・GGS 対局が使う並列数"
   title: "設定"
   tourney:
-    director_join: "ディレクターの参加指示を受ける"
+    add: "追加"
+    director_join: "大会の招待を受ける"
+    from: "受ける相手"
+    from_any: "誰でも"
+    from_picked: "相手を絞る"
     kinds: "参加する種類"
     kinds_none: "1 つ以上選んでください"
+    no_one: "受ける相手を 1 つ以上選んでください"
+    player: "プレイヤー名"
+    remove: "外す"
   view:
     facing_help: "GGS の対局にも効く"
 status:
@@ -1340,6 +1348,11 @@ tourney:
   filter_who: "{who} の対局"
   game_players: "対局者"
   group_live: "開催中・開催予定"
+  invite:
+    go: "招待"
+    open: "招待…"
+    title: "大会 {id} に招待"
+    to: "相手"
   next_of: "{name} の次の対局"
   next_round: "次のラウンド"
   no_games: "このラウンドの対局はありません"

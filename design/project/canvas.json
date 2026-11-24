@@ -1238,7 +1238,7 @@
   "SettingsTourneyOff.dc.html": {
    "expand": "fill",
    "h": 800,
-   "title": "Settings · GGS tournaments, director joins off",
+   "title": "Settings · GGS tournaments, invitations off",
    "w": 1280,
    "x": 17680,
    "y": 0,
@@ -1252,6 +1252,33 @@
    "x": 19040,
    "y": 0,
    "page": "settings"
+  },
+  "SettingsTourneyNoOne.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Settings · GGS tournaments, nobody to accept invitations from",
+   "w": 1280,
+   "x": 20400,
+   "y": 0,
+   "page": "settings"
+  },
+  "SettingsTourneyAny.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Settings · GGS tournaments, invitations from anyone",
+   "w": 1280,
+   "x": 21760,
+   "y": 0,
+   "page": "settings"
+  },
+  "TourneyInvite.dc.html": {
+   "expand": "fill",
+   "h": 800,
+   "title": "Tournaments · Invite (director, before the start)",
+   "w": 1280,
+   "x": 17680,
+   "y": 0,
+   "page": "tourney"
   }
  },
  "createdOnFiles": {
@@ -1679,6 +1706,7 @@
   "ChatNew.dc.html",
   "Tourney.dc.html",
   "TourneyBefore.dc.html",
+  "TourneyInvite.dc.html",
   "TourneyFinished.dc.html",
   "TourneyFiltered.dc.html",
   "TourneyJoined.dc.html",
@@ -1737,7 +1765,12 @@
   "FsBotPhoto.dc.html",
   "FsResultsNoChart.dc.html",
   "FsBotsFiltered.dc.html",
-  "ResultsFolded.dc.html"
+  "ResultsFolded.dc.html",
+  "SettingsTourney.dc.html",
+  "SettingsTourneyOff.dc.html",
+  "SettingsTourneyNone.dc.html",
+  "SettingsTourneyNoOne.dc.html",
+  "SettingsTourneyAny.dc.html"
  ],
  "pages": [
   {

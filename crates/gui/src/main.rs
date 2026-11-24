@@ -1996,11 +1996,30 @@ fn ggs_set_watch_analysis(app: State<App>, on: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn ggs_set_td_join(app: State<App>, on: bool, kinds: Vec<String>) -> Result<(), String> {
-    if on && kinds.is_empty() {
-        return Err("err.td_join_no_kind".into());
+fn ggs_set_td_join(
+    app: State<App>,
+    on: bool,
+    kinds: Vec<String>,
+    from_any: bool,
+    from_director: bool,
+    players: Vec<String>,
+) -> Result<(), String> {
+    let j = ggs::TdJoin {
+        on,
+        kinds,
+        from_any,
+        from_director,
+        players,
+    };
+    if j.incomplete() {
+        return Err(if j.kinds.is_empty() {
+            "err.td_join_no_kind"
+        } else {
+            "err.td_join_no_one"
+        }
+        .into());
     }
-    ggs_send(&app, ggs::Cmd::SetTdJoin(ggs::TdJoin { on, kinds }))
+    ggs_send(&app, ggs::Cmd::SetTdJoin(j))
 }
 
 #[tauri::command]

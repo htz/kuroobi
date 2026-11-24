@@ -96,6 +96,10 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <div style="flex: 1; min-height: 0; display: flex; flex-direction: column">
 <div style="flex: none; display: flex; align-items: center; gap: var(--sp-2); height: var(--h-bar); padding: 0 var(--sp-3); white-space: nowrap">
 <span style="font-weight: 600">参加者</span><span style="font-size: var(--fs-6); color: var(--sub)">{{entrantCount}}</span>
+<!-- "Invite…", for the tournament's director only and while it can be joined: opens the invite dialog (below) -->
+<sc-if value="{{canInvite}}" hint-placeholder-val="{{true}}">
+<span style="margin-left: auto"><x-import component-from-global-scope="KuroobiUI.Button" size="row">招待…</x-import></span>
+</sc-if>
 </div>
 <div style="flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--h-head); padding: 0 var(--sp-3); border-bottom: 1px solid var(--border); font-size: var(--fs-7); font-weight: 600; letter-spacing: .08em; color: var(--sub); white-space: nowrap">
 <span style="width: 32px; text-align: right">#</span><span style="flex: 1; min-width: 0">プレイヤー</span><span style="width: 96px; text-align: right">ランダム</span><span style="width: 96px; text-align: right">登録</span>
@@ -231,6 +235,15 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 <!-- Create a tournament: the director is whoever creates it, and GGS announces it to everyone at once. Pairing, format and clock as in a request;
      rounds 1 or more (a round robin stops once every pair has met twice); start 1–30 min later. "Join it too" sends join right after the reply;
      an unregistered account cannot join, so the switch is off and dimmed. The director's reply error shows at the bottom left -->
+<!-- Invite: pick a player logged in now who has not entered (Combobox, found by typing; rating aside). "Invite" sends them the invitation, the private tell "tell /td join N"
+     directors send, and closes; a bot that accepts its director's invitations joins on its own -->
+<sc-if value="{{inviteDlg}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiUI.Overlay" on-close="{{noop}}">
+<x-import component-from-global-scope="KuroobiUI.Modal" title="大会 15 に招待" on-close="{{noop}}" actions="{{inviteActions}}">
+<x-import component-from-global-scope="KuroobiUI.Field" label="相手"><x-import component-from-global-scope="KuroobiUI.Combobox" value="ymatioun" options="{{inviteOpts}}"></x-import></x-import>
+</x-import>
+</x-import>
+</sc-if>
 <sc-if value="{{createDlg}}" hint-placeholder-val="{{false}}">
 <x-import component-from-global-scope="KuroobiUI.Overlay" on-close="{{noop}}">
 <x-import component-from-global-scope="KuroobiUI.Modal" title="大会を作る" on-close="{{noop}}" actions="{{createActions}}">
@@ -248,7 +261,7 @@ a{color:var(--accent)}a:hover{color:var(--text)}
 </sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"stage":{"editor":"select","options":["running","before","joined","finished","filtered","pair","error"],"default":"running"},"view":{"editor":"select","options":["cross","games"],"default":"cross"},"players":{"editor":"select","options":["8","100"],"default":"8"},"dialog":{"editor":"select","options":["none","create","create-unregistered","create-refused"],"default":"none"},"$preview":{"width":1280,"height":800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"stage":{"editor":"select","options":["running","before","joined","finished","filtered","pair","error"],"default":"running"},"view":{"editor":"select","options":["cross","games"],"default":"cross"},"players":{"editor":"select","options":["8","100"],"default":"8"},"dialog":{"editor":"select","options":["none","create","create-unregistered","create-refused","invite"],"default":"none"},"$preview":{"width":1280,"height":800}}'>
 class Component extends DCLogic {
   renderVals() {
     const ui = window.KuroobiUI;
@@ -355,7 +368,7 @@ class Component extends DCLogic {
     const pickB = stage0 === 'pair' ? 'ymatioun' : '';
     const dl = this.props.dialog ?? 'none';
     const h = window.React ? window.React.createElement : null;
-    const create = dl === 'none' ? { createDlg: false } : {
+    const create = dl === 'none' || dl === 'invite' ? { createDlg: false } : {
       createDlg: true, createUnreg: dl === 'create-unregistered', createJoin: dl !== 'create-unregistered',
       joinDim: dl === 'create-unregistered' ? 0.4 : 1,
       styleOpts: [{ value: 'r', label: '総当たり' }, { value: 's', label: 'スイス式' }],
@@ -384,6 +397,14 @@ class Component extends DCLogic {
       }[stage],
       isRunning: stage === 'running' || stage === 'filtered', notRunning: stage === 'before' || stage === 'finished',
       isBefore: stage === 'before', notBefore: stage !== 'before',
+      // alice directs the tournament that has not started
+      canInvite: stage === 'before',
+      inviteDlg: dl === 'invite',
+      inviteActions: h && ui ? h(window.React.Fragment, null,
+        h('span', { style: { flex: 1 } }),
+        h(ui.Button, { size: 'field', variant: 'ghost' }, 'キャンセル'),
+        h(ui.Button, { size: 'field', variant: 'primary' }, '招待')) : null,
+      inviteOpts: [['ymatioun', 'ymatioun', '2701'], ['natsu', 'natsu', '2652'], ['morgoth', 'morgoth', '2664'], ['Melody', 'Melody', '2633']],
       canJoin: stage === 'before' && stage0 !== 'joined', canWithdraw: stage0 === 'joined',
       tdError: stage0 === 'error',
       stageHead: stage === 'before' ? '開始まで 12:30' : '優勝 ymatioun',

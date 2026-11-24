@@ -475,7 +475,7 @@ pub(super) fn restore_settings(ctx: &mut Ctx) {
     s.open_requests = v.open_requests;
     s.watch_analysis = v.watch_analysis;
     s.ponder = v.ponder;
-    if !(v.td_join.on && v.td_join.kinds.is_empty()) {
+    if !v.td_join.incomplete() {
         s.td_join = v.td_join;
     }
     if valid_log_channel(&v.log_channel) {

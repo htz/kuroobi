@@ -351,12 +351,17 @@ fn td_apply_finger(td: &mut TdView, login: &str, head: &str, rest: &[&str]) {
     }
 }
 
-/// Whether a tournament director's request to join is carried out, and for which game types.
+/// Whether a request to join a tournament is carried out: from whom, and for which game types.
 #[derive(Clone, Serialize, serde::Deserialize, Debug, PartialEq)]
+#[serde(default)]
 pub struct TdJoin {
     pub on: bool,
     /// Game types without their random-disc count: `s8r`, `8r`, `s8`, `8`.
     pub kinds: Vec<String>,
+    /// From anyone; otherwise only from the tournament's director (when `from_director`) and `players`.
+    pub from_any: bool,
+    pub from_director: bool,
+    pub players: Vec<String>,
 }
 
 impl Default for TdJoin {
@@ -364,12 +369,23 @@ impl Default for TdJoin {
         TdJoin {
             on: false,
             kinds: vec!["s8r".into()],
+            from_any: false,
+            from_director: true,
+            players: Vec::new(),
         }
     }
 }
 
-/// The tournament a private tell asks us to join. Directors write the command itself, as GGS lets
-/// only superusers join someone else.
+impl TdJoin {
+    /// What the screen refuses to apply: on with no kind, or narrowed to nobody.
+    pub fn incomplete(&self) -> bool {
+        self.on
+            && (self.kinds.is_empty()
+                || (!self.from_any && !self.from_director && self.players.is_empty()))
+    }
+}
+
+/// The tournament a private tell asks us to join: the command itself, written for us to send.
 pub(super) fn join_request(text: &str) -> Option<u32> {
     let rest = text.trim();
     let rest = rest
@@ -384,6 +400,7 @@ pub(super) fn gtype_kind(gtype: &str) -> &str {
 }
 
 /// Why `from`'s request to join tournament `id` is not carried out, judged on /td's own list.
+/// Directors write the request, as GGS lets only superusers join someone else; others may too.
 pub(super) fn director_join_refusal(
     td: &TdView,
     cfg: &TdJoin,
@@ -396,8 +413,10 @@ pub(super) fn director_join_refusal(
     let Some(t) = td.tourneys.iter().find(|t| t.id == id) else {
         return Some("unknown tournament");
     };
-    if t.director.is_empty() || !t.director.eq_ignore_ascii_case(from) {
-        return Some("not its director");
+    let director = !t.director.is_empty() && t.director.eq_ignore_ascii_case(from);
+    let listed = cfg.players.iter().any(|p| p.eq_ignore_ascii_case(from));
+    if !(cfg.from_any || (cfg.from_director && director) || listed) {
+        return Some("not someone we take it from");
     }
     if !cfg.kinds.iter().any(|k| k == gtype_kind(&t.gtype)) {
         return Some("game type not chosen");
@@ -449,13 +468,13 @@ mod tests {
         let td = listed();
         let on = TdJoin {
             on: true,
-            kinds: vec!["s8r".into()],
+            ..TdJoin::default()
         };
         assert_eq!(director_join_refusal(&td, &on, 3, "HCyrano"), None);
         assert_eq!(director_join_refusal(&td, &on, 3, "hcyrano"), None);
         assert_eq!(
             director_join_refusal(&td, &on, 3, "someone"),
-            Some("not its director")
+            Some("not someone we take it from")
         );
         assert_eq!(
             director_join_refusal(&td, &on, 4, "HCyrano"),
@@ -469,6 +488,54 @@ mod tests {
             director_join_refusal(&td, &TdJoin::default(), 3, "HCyrano"),
             Some("off")
         );
+    }
+
+    #[test]
+    fn listed_players_or_anyone_may_ask_too() {
+        let td = listed();
+        let players = TdJoin {
+            on: true,
+            from_director: false,
+            players: vec!["Nyanyan4".into()],
+            ..TdJoin::default()
+        };
+        assert_eq!(director_join_refusal(&td, &players, 3, "nyanyan4"), None);
+        assert_eq!(
+            director_join_refusal(&td, &players, 3, "HCyrano"),
+            Some("not someone we take it from")
+        );
+        let any = TdJoin {
+            on: true,
+            from_any: true,
+            from_director: false,
+            ..TdJoin::default()
+        };
+        assert_eq!(director_join_refusal(&td, &any, 3, "someone"), None);
+        assert_eq!(
+            director_join_refusal(&td, &any, 4, "someone"),
+            Some("game type not chosen")
+        );
+    }
+
+    #[test]
+    fn nobody_to_take_it_from_is_incomplete() {
+        let none = TdJoin {
+            on: true,
+            from_director: false,
+            ..TdJoin::default()
+        };
+        assert!(none.incomplete());
+        assert!(!TdJoin {
+            on: false,
+            ..none.clone()
+        }
+        .incomplete());
+        assert!(TdJoin {
+            on: true,
+            kinds: vec![],
+            ..TdJoin::default()
+        }
+        .incomplete());
     }
 
     #[test]
