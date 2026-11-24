@@ -165,6 +165,8 @@ fn tools() -> Vec<Tool> {
         ("ggs__tourney", "One tournament now: state, round, next start, players, rankings and schedule text, and our matches in it with their disc differences.", json!({"id": {"type": "integer"}}), vec!["id"]),
         ("ggs__tourney_join", "Join a tournament (before it starts).", json!({"id": {"type": "integer"}}), vec!["id"]),
         ("ggs__tourney_withdraw", "Withdraw from a tournament (before it starts).", json!({"id": {"type": "integer"}}), vec!["id"]),
+        ("ggs__tourney_invite", "Invite a player to a tournament: the private tell \"tell /td join N\" directors send (GGS lets only superusers join someone else). A bot accepting invitations joins on its own, usually only when the sender directs that tournament.",
+         json!({"id": {"type": "integer"}, "player": {"type": "string"}}), vec!["id", "player"]),
         ("ggs__tourney_create", "Create a tournament on the director (/td); whoever creates it directs it, and everyone is told at once. style r (round robin) or s (Swiss); gtype as in a request (s8r14, 8, ...); clock as GGS writes it (05:00//02:00); rounds 1 or more; start_minutes 1-30.",
          json!({"style": {"type": "string", "enum": ["r", "s"]}, "gtype": {"type": "string"}, "clock": {"type": "string"}, "rounds": {"type": "integer"}, "start_minutes": {"type": "integer"}}),
          vec!["style", "gtype", "clock", "rounds", "start_minutes"]),
@@ -428,6 +430,24 @@ fn run_tool(name: &str, mut args: Map<String, Value>) -> Result<Value, String> {
         }
         "ggs__tourney_join" => td(i, &format!("join {}", arg(&args, "id")?)),
         "ggs__tourney_withdraw" => td(i, &format!("withdraw {}", arg(&args, "id")?)),
+        "ggs__tourney_invite" => {
+            let id = arg(&args, "id")?
+                .as_u64()
+                .filter(|&n| n > 0)
+                .ok_or("`id` must be a tournament number")?;
+            let player = arg(&args, "player")?
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            if player.is_empty() || player.contains(char::is_whitespace) {
+                return Err("`player` must be one name".into());
+            }
+            command(
+                i,
+                "ggs_raw",
+                json!({"cmd": format!("tell {player} tell /td join {id}")}),
+            )
+        }
         "ggs__tourney_create" => {
             let word = |k: &str| -> Result<String, String> {
                 let v = arg(&args, k)?;
