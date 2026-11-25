@@ -8,11 +8,7 @@ arch=${1:?usage: package.sh <arm64|x86_64> [out dir]}
 out=${2:-target/bundle/$arch}
 case $arch in
   arm64) triple=aarch64-apple-darwin ;;
-  # AVX2 and BMI2: every Intel Mac since 2013 has them, and the vector kernels need them.
-  x86_64)
-    triple=x86_64-apple-darwin
-    export CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS="-C target-cpu=x86-64-v3"
-    ;;
+  x86_64) triple=x86_64-apple-darwin ;;
   *) echo "unknown architecture: $arch (arm64 or x86_64)" >&2; exit 1 ;;
 esac
 cargo build --release -p flipsight --target "$triple"
