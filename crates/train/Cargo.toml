@@ -13,3 +13,5 @@ libc = "0.2"
 default = ["gpu"]
 # GPU training (`nnue_train --gpu`, `linear_train --gpu`).
 gpu = ["kuroobi/gpu"]
+# Trains and writes Kuroobi for web's smaller network.
+nnue-web = ["kuroobi/nnue-web"]

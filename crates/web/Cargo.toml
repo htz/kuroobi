@@ -1,0 +1,17 @@
+[package]
+name = "web"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Kuroobi for web's engine: the functions the page calls, built for the browser"
+
+# Not in the workspace's default-members: features unify across what one cargo run builds,
+# so building this beside the app would hand the app the small web network.
+# Build it alone: cargo build -p web --release --target wasm32-unknown-unknown
+
+[lib]
+name = "kuroobi_ai"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+kuroobi = { path = "../..", default-features = false, features = ["nnue-web", "nnue-order"] }

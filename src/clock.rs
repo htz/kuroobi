@@ -3,9 +3,10 @@
 //! with ever wider ProbCut margins until only the exact solve is left. Integer disc scores,
 //! siblings after the first shared among threads, and a time rule from the clock alone.
 
+use crate::time::Instant;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::bitboard;
 use crate::fan::{AbortChain, FanList, HasKids, Kids};

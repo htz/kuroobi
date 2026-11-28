@@ -4,14 +4,17 @@ use std::path::PathBuf;
 
 use crate::book::{Book, BookCandidate};
 use crate::clock::ClockSearch;
-use crate::linear::Linear;
 use crate::midgame::{NnueSearch, SharedTt, StopHandle};
 use crate::nnue::Nnue;
-use crate::pattern::{LINEAR_PATTERNS, NNUE_PATTERNS};
+use crate::order::OrderEval as Linear;
+#[cfg(not(feature = "nnue-order"))]
+use crate::pattern::LINEAR_PATTERNS;
+use crate::pattern::NNUE_PATTERNS;
 use crate::solver::{final_score, EndSolverMode, EndSolverResult, Solver};
 use crate::{Board, Position};
 
-fn stone_scale(v: f32) -> f32 {
+/// A search value as discs for the screen, clamped to the board.
+pub fn stone_scale(v: f32) -> f32 {
     let v = if v.abs() >= 999.0 { v / 1000.0 } else { v };
     if v.is_finite() {
         v.clamp(-64.0, 64.0)
@@ -177,18 +180,34 @@ pub struct EngineAssets {
 
 impl EngineAssets {
     pub fn load(config: &EngineConfig) -> Result<EngineAssets, String> {
-        let mut linear = Linear::new(LINEAR_PATTERNS);
-        linear
-            .load_weights(&config.weights)
-            .map_err(|e| format!("weights {}: {e}", config.weights.display()))?;
         let mut nn = Nnue::new(NNUE_PATTERNS);
         nn.load(&config.nnue)
             .map_err(|e| format!("nnue {}: {e}", config.nnue.display()))?;
         nn.quantize();
+        let nnue = std::sync::Arc::new(nn);
+        #[cfg(feature = "nnue-order")]
+        let linear = Linear(nnue.clone());
+        #[cfg(not(feature = "nnue-order"))]
+        let linear = {
+            let mut linear = Linear::new(LINEAR_PATTERNS);
+            linear
+                .load_weights(&config.weights)
+                .map_err(|e| format!("weights {}: {e}", config.weights.display()))?;
+            linear
+        };
         Ok(EngineAssets {
             linear: std::sync::Arc::new(linear),
-            nnue: std::sync::Arc::new(nn),
+            nnue,
         })
+    }
+
+    /// Assets from a network already in memory, for a build that orders the solve with it (the web's).
+    #[cfg(feature = "nnue-order")]
+    pub fn from_nnue(nnue: std::sync::Arc<Nnue>) -> EngineAssets {
+        EngineAssets {
+            linear: std::sync::Arc::new(Linear(nnue.clone())),
+            nnue,
+        }
     }
 }
 
@@ -227,11 +246,7 @@ impl Engine {
         let learned_gen = crate::learn::learned_gen();
         let learned = Book::load(&learn_path).unwrap_or_default();
         let book = merged_book(book_base.clone(), &learned).map(std::sync::Arc::new);
-        let book_rand = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0x9e3779b97f4a7c15)
-            | 1;
+        let book_rand = crate::time::seed();
         Ok(Engine {
             linear,
             search,
@@ -253,7 +268,7 @@ impl Engine {
 
     fn watch_deadline(
         &self,
-        deadline: Option<std::time::Instant>,
+        deadline: Option<crate::time::Instant>,
     ) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
         Some(crate::midgame::watch_deadline(deadline?, self.stop.clone()))
     }
@@ -261,9 +276,9 @@ impl Engine {
     fn backup_move(
         &mut self,
         board: &Board,
-        deadline: std::time::Instant,
+        deadline: crate::time::Instant,
     ) -> (Option<Position>, f32) {
-        let now = std::time::Instant::now();
+        let now = crate::time::Instant::now();
         let until = now
             + deadline
                 .saturating_duration_since(now)
@@ -272,7 +287,7 @@ impl Engine {
             .search
             .best_move_deadline(board, BACKUP_DEPTH, Some(until));
         // The backup's own deadline trips the shared stop; left set, it kills the solve at once.
-        if std::time::Instant::now() >= until {
+        if crate::time::Instant::now() >= until {
             self.stop.reset();
         }
         (pos, value)
@@ -293,7 +308,7 @@ impl Engine {
     fn solve_within(
         &mut self,
         board: &Board,
-        deadline: Option<std::time::Instant>,
+        deadline: Option<crate::time::Instant>,
         kind: u8,
         solve: impl FnOnce(&mut Solver, &Linear) -> EndSolverResult,
     ) -> (EndSolverResult, bool, Option<MoveEval>) {
@@ -525,7 +540,7 @@ impl Engine {
             mpc_t: (c.depth > 0).then(|| c.margin as f32 / 2.0),
             ..Default::default()
         };
-        if c.solve && !self.stop.is_stopped() && std::time::Instant::now() < c.deadline {
+        if c.solve && !self.stop.is_stopped() && crate::time::Instant::now() < c.deadline {
             self.progress.set_kind(Progress::SOLVE);
             let watcher = self.watch_deadline(Some(c.deadline));
             let r = self
@@ -569,7 +584,7 @@ impl Engine {
     pub fn choose_within(
         &mut self,
         board: &Board,
-        deadline: Option<std::time::Instant>,
+        deadline: Option<crate::time::Instant>,
     ) -> MoveEval {
         let mv = self.choose_within_search(board, deadline);
         self.avoid_demoted(board, mv)
@@ -578,7 +593,7 @@ impl Engine {
     fn choose_within_search(
         &mut self,
         board: &Board,
-        deadline: Option<std::time::Instant>,
+        deadline: Option<crate::time::Instant>,
     ) -> MoveEval {
         self.stop.reset();
         self.progress.clear();
@@ -768,10 +783,11 @@ impl Engine {
                 ..Default::default()
             }
         } else {
-            let (pos, value, _) = self.search.best_move_deadline(board, depth, None);
+            let (pos, value, reached) = self.search.best_move_deadline(board, depth, None);
             MoveEval {
                 pos,
                 value: stone_scale(value),
+                depth: reached,
                 ..Default::default()
             }
         }
@@ -900,7 +916,7 @@ mod tests {
             ..Default::default()
         })
         .expect("engine");
-        let t0 = std::time::Instant::now();
+        let t0 = crate::time::Instant::now();
         let mv = engine.play_clock(&Board::new(), std::time::Duration::from_secs(60));
         assert!(Board::new().movable() & mv.pos.unwrap().to_bit() != 0);
         assert!(t0.elapsed() < std::time::Duration::from_secs(10));

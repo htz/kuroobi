@@ -12,7 +12,11 @@ use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 pub mod gpu;
 mod stack_q;
 
+#[cfg(not(feature = "nnue-web"))]
 pub const H: usize = 128;
+/// Kuroobi for web's network: 26.9 MB brotli as i8 tables, inside the 30 MB a page should fetch.
+#[cfg(feature = "nnue-web")]
+pub const H: usize = 64;
 
 pub const ACC_DIMS: usize = 2 * H;
 
@@ -29,12 +33,20 @@ const SO_L1: usize = 16;
 const SO_L2: usize = 64;
 const SO_SCORE: f32 = 64.0;
 
+#[cfg(not(feature = "nnue-web"))]
 const PA_DIMS: usize = 128;
+#[cfg(not(feature = "nnue-web"))]
 const PA_BUCKETS: usize = 6;
+#[cfg(feature = "nnue-web")]
+const PA_DIMS: usize = 16;
+#[cfg(feature = "nnue-web")]
+const PA_BUCKETS: usize = 1;
+
+const _: () = assert!(SO_STAGES.is_multiple_of(PA_BUCKETS));
 
 #[inline]
 fn pa_bucket(stage: usize) -> usize {
-    (stage / (SO_STAGES / PA_BUCKETS)).min(PA_BUCKETS - 1)
+    so_stage(stage) * PA_BUCKETS / SO_STAGES
 }
 
 /// True when the stages own every phase-adaptive bucket they touch, so training them alone moves no other stage.
@@ -877,19 +889,25 @@ impl EvalSlot {
 
 impl Nnue {
     pub fn new(patterns: &'static [Pattern]) -> Nnue {
+        Nnue::with_tables(patterns, true)
+    }
+
+    /// Without `tables` the two feature tables stay empty, for a network that only ever holds integer ones.
+    fn with_tables(patterns: &'static [Pattern], tables: bool) -> Nnue {
         let indexer = PatternIndexer::new(patterns);
         let n_masks = indexer.n_masks();
         let n_features = patterns.iter().map(|p| p.table_size()).sum();
         let mask_off = indexer.mask_offsets();
+        let len = |n: usize| if tables { n } else { 0 };
 
         Nnue {
             indexer,
             n_masks,
             mask_off,
             n_features,
-            ft: vec![0.0; n_features * ACC_DIMS],
+            ft: vec![0.0; len(n_features * ACC_DIMS)],
             ft_bias: vec![0.0; ACC_DIMS],
-            pa: vec![0.0; n_features * PA_BUCKETS * PA_DIMS],
+            pa: vec![0.0; len(n_features * PA_BUCKETS * PA_DIMS)],
             pa_bias: vec![0.0; PA_DIMS * PA_BUCKETS],
             so_l1_w: vec![0.0; SO_SIZES.0],
             so_l1_b: vec![0.0; SO_SIZES.1],
@@ -920,6 +938,10 @@ impl Nnue {
     }
 
     pub fn quantize(&mut self) {
+        // A web model has no f32 tables to build from: its integer tables were built when it was read.
+        if self.ft.is_empty() {
+            return;
+        }
         self.sq = stack_q::StackQ::build(self);
     }
 
@@ -951,9 +973,9 @@ impl Nnue {
                 self.pa[r * PA_DIMS + j] = next() * bound;
             }
         }
-        for b in 1..PA_BUCKETS {
-            let (head, tail) = self.pa.split_at_mut(b * rows * PA_DIMS);
-            tail[..rows * PA_DIMS].copy_from_slice(&head[..rows * PA_DIMS]);
+        let (first, rest) = self.pa.split_at_mut(rows * PA_DIMS);
+        for bucket in rest.chunks_mut(rows * PA_DIMS) {
+            bucket.copy_from_slice(first);
         }
         self.pa_bias.fill(0.0);
         let b1 = 1.0 / (SO_L1_IN as f32).sqrt();
@@ -1054,6 +1076,10 @@ impl Nnue {
         sa.put(a.1.black, a.1.white, ta, va);
         sb.put(b.1.black, b.1.white, tb, vb);
         (va, vb)
+    }
+
+    pub fn indexer(&self) -> &PatternIndexer {
+        &self.indexer
     }
 
     /// The search's evaluation: the integer network, which needs [`Nnue::quantize`] first.
@@ -1562,6 +1588,11 @@ impl Nnue {
         let mut r = &mut *r;
         let mut magic = [0u8; 8];
         r.read_exact(&mut magic)?;
+        if &magic == WEB_MAGIC {
+            self.ft = Vec::new();
+            self.pa = Vec::new();
+            return self.read_web_body(r);
+        }
         if &magic != b"BBRVNN11" {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -1629,6 +1660,168 @@ impl Nnue {
         self.mpc_alpha = MpcAlpha::read_from(&mut r)?;
         Ok(())
     }
+
+    /// The network as the browser loads it: both feature tables on the web grid as i8, everything else as [`Nnue::write_to`] writes it.
+    pub fn write_web(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
+        w.write_all(WEB_MAGIC)?;
+        for n in [ACC_DIMS, self.n_features, PA_BUCKETS, PA_DIMS, SO_LEN] {
+            w.write_all(&(n as u32).to_le_bytes())?;
+        }
+        w.write_all(&u32::from(self.mpc_sigma.is_some()).to_le_bytes())?;
+        let sigma = self.mpc_sigma.unwrap_or(MpcSigma::from_array([0.0; 6]));
+        for v in sigma.to_array() {
+            w.write_all(&v.to_le_bytes())?;
+        }
+        let (ft_steps, ft_q) = web_grid(&self.ft, ACC_DIMS);
+        let (mut pa_steps, mut pa_q) = (Vec::new(), Vec::new());
+        for bucket in self.pa.chunks(self.n_features * PA_DIMS) {
+            let (s, q) = web_grid(bucket, PA_DIMS);
+            pa_steps.extend(s);
+            pa_q.extend(q);
+        }
+        for v in ft_steps.iter().chain(&pa_steps) {
+            w.write_all(&v.to_le_bytes())?;
+        }
+        let bytes: Vec<u8> = ft_q.iter().chain(&pa_q).map(|&k| k as u8).collect();
+        w.write_all(&bytes)?;
+        for &v in self
+            .ft_bias
+            .iter()
+            .chain(&self.so_l1_w)
+            .chain(&self.so_l1_b)
+            .chain(&self.so_l2_w)
+            .chain(&self.so_l2_b)
+            .chain(&self.so_out_w)
+            .chain(&self.so_out_b)
+            .chain(&self.pa_bias)
+        {
+            w.write_all(&v.to_le_bytes())?;
+        }
+        if let Some(a) = &self.mpc_alpha {
+            a.write_to(w)?;
+        }
+        Ok(())
+    }
+
+    /// Reads what [`Nnue::write_web`] wrote without ever holding the f32 tables, ready to search.
+    pub fn read_web(
+        patterns: &'static [Pattern],
+        r: &mut impl std::io::Read,
+    ) -> std::io::Result<Nnue> {
+        let mut nn = Nnue::with_tables(patterns, false);
+        let mut magic = [0u8; 8];
+        r.read_exact(&mut magic)?;
+        if &magic != WEB_MAGIC {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "not a web model",
+            ));
+        }
+        nn.read_web_body(r)?;
+        Ok(nn)
+    }
+
+    /// The web model after its magic; leaves the f32 tables as they are and builds the integer ones.
+    fn read_web_body(&mut self, r: &mut impl std::io::Read) -> std::io::Result<()> {
+        use std::io::Read;
+        let bad =
+            |what: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, what.to_string());
+        let mut u = [0u8; 4];
+        for (n, what) in [
+            (ACC_DIMS, "accumulator width mismatch"),
+            (self.n_features, "n_features mismatch"),
+            (PA_BUCKETS, "phase bucket count mismatch"),
+            (PA_DIMS, "phase width mismatch"),
+            (SO_LEN, "stacked read-out size mismatch"),
+        ] {
+            r.read_exact(&mut u)?;
+            if u32::from_le_bytes(u) as usize != n {
+                return Err(bad(what));
+            }
+        }
+        let f32s = |r: &mut dyn Read, n: usize| -> std::io::Result<Vec<f32>> {
+            let mut b = vec![0u8; n * 4];
+            r.read_exact(&mut b)?;
+            Ok(b.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&c| f32::from_le_bytes(c))
+                .collect())
+        };
+        r.read_exact(&mut u)?;
+        let present = u32::from_le_bytes(u) != 0;
+        let coef = f32s(r, MpcSigma::LEN)?;
+        self.mpc_sigma = present.then(|| MpcSigma::from_array(coef.try_into().unwrap()));
+        let ft_steps = f32s(r, ACC_DIMS)?;
+        let pa_steps = f32s(r, PA_BUCKETS * PA_DIMS)?;
+        // One row at a time, so the i8 tables never sit in memory beside the integer ones.
+        let rows = |r: &mut dyn Read, steps: &[f32], n_rows: usize| -> std::io::Result<Vec<i16>> {
+            let width = steps.len();
+            let mut out = Vec::with_capacity(n_rows * width);
+            let mut buf = vec![0u8; width];
+            for _ in 0..n_rows {
+                r.read_exact(&mut buf)?;
+                out.extend(
+                    buf.iter()
+                        .zip(steps)
+                        .map(|(&k, &s)| stack_q::row(k as i8 as f32 * s)),
+                );
+            }
+            Ok(out)
+        };
+        let ft_b = rows(r, &ft_steps, self.n_features)?;
+        let mut pa_b = Vec::with_capacity(PA_BUCKETS * self.n_features * PA_DIMS);
+        for steps in pa_steps.chunks(PA_DIMS) {
+            pa_b.extend(rows(r, steps, self.n_features)?);
+        }
+        for t in [
+            &mut self.ft_bias,
+            &mut self.so_l1_w,
+            &mut self.so_l1_b,
+            &mut self.so_l2_w,
+            &mut self.so_l2_b,
+            &mut self.so_out_w,
+            &mut self.so_out_b,
+            &mut self.pa_bias,
+        ] {
+            let n = t.len();
+            *t = f32s(r, n)?;
+        }
+        self.mpc_alpha = MpcAlpha::read_from(r)?;
+        self.sq = stack_q::StackQ::build_from_rows(self, ft_b, pa_b);
+        Ok(())
+    }
+}
+
+/// Tags a web model, whose two feature tables are i8 on [`web_grid`] instead of f32.
+const WEB_MAGIC: &[u8; 8] = b"BBRVWEB1";
+/// Steps either side of zero on the web grid: every i8 but `i8::MIN`.
+const WEB_LEVELS: f32 = 127.0;
+
+/// `t` on the web grid, lane by lane across rows of `width`: one step is the lane's largest magnitude over [`WEB_LEVELS`].
+/// An entry stands for its i8 times its lane's step.
+fn web_grid(t: &[f32], width: usize) -> (Vec<f32>, Vec<i8>) {
+    let mut steps = vec![1.0f32; width];
+    for (lane, step) in steps.iter_mut().enumerate() {
+        let m = t
+            .iter()
+            .skip(lane)
+            .step_by(width)
+            .fold(0f32, |m, v| m.max(v.abs()));
+        if m > 0.0 {
+            *step = m / WEB_LEVELS;
+        }
+    }
+    let q = t
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| {
+            (v / steps[i % width])
+                .round()
+                .clamp(-WEB_LEVELS, WEB_LEVELS) as i8
+        })
+        .collect();
+    (steps, q)
 }
 
 #[cfg(test)]
@@ -1661,6 +1854,91 @@ pub(crate) fn test_patterns() -> &'static [crate::pattern::Pattern] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Boards from a fixed walk of legal moves, with every few plies kept.
+    fn walk_boards() -> Vec<Board> {
+        let mut s: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut out = Vec::new();
+        for _ in 0..12 {
+            let mut b = Board::new();
+            while !b.is_game_over() {
+                let moves: Vec<_> = b.movable_iter().collect();
+                if moves.is_empty() {
+                    b.pass();
+                    continue;
+                }
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                b.make_move(moves[(s % moves.len() as u64) as usize])
+                    .unwrap();
+                if b.empty_count().is_multiple_of(5) && b.movable_count() > 0 {
+                    out.push(b);
+                }
+            }
+        }
+        out
+    }
+
+    /// The f32 tables moved onto the web grid, which is what a web model stands for.
+    fn snap_to_web_grid(nn: &mut Nnue) {
+        let snap = |t: &mut [f32], width: usize| {
+            let (steps, q) = web_grid(t, width);
+            for (i, v) in t.iter_mut().enumerate() {
+                *v = q[i] as f32 * steps[i % width];
+            }
+        };
+        snap(&mut nn.ft, ACC_DIMS);
+        let per_bucket = nn.n_features * PA_DIMS;
+        for bucket in nn.pa.chunks_mut(per_bucket) {
+            snap(bucket, PA_DIMS);
+        }
+    }
+
+    #[test]
+    fn a_web_model_searches_exactly_like_its_tables_rounded_to_the_grid() {
+        let mut nn = Nnue::new(test_patterns());
+        nn.init_weights();
+        nn.set_mpc_sigma(Some(MpcSigma::from_array([
+            -0.05, 0.3, -0.6, 0.011, 0.5, 3.25,
+        ])));
+        nn.set_mpc_alpha(Some(alpha_for_test()));
+        let mut bytes = Vec::new();
+        nn.write_web(&mut bytes).unwrap();
+
+        let web = Nnue::read_web(test_patterns(), &mut bytes.as_slice()).unwrap();
+        assert!(
+            web.ft.is_empty() && web.pa.is_empty(),
+            "no f32 tables are held"
+        );
+        let mut native = Nnue::new(test_patterns());
+        native.read_from(&mut bytes.as_slice()).unwrap();
+        snap_to_web_grid(&mut nn);
+        nn.quantize();
+
+        assert_eq!(web.mpc_sigma(), nn.mpc_sigma());
+        assert_eq!(web.mpc_alpha(), nn.mpc_alpha());
+        let boards = walk_boards();
+        assert!(boards.len() > 100);
+        for b in &boards {
+            let ix = nn.indexer.init(b.black, b.white);
+            let want = nn.eval_from_indices(&ix, b).to_bits();
+            assert_eq!(web.eval_from_indices(&ix, b).to_bits(), want, "{b:?}");
+            assert_eq!(native.eval_from_indices(&ix, b).to_bits(), want, "{b:?}");
+        }
+    }
+
+    #[test]
+    fn the_web_grid_keeps_each_lane_s_largest_weight_exact() {
+        let t = [0.25, -2.0, 0.0, 1.0, 0.125, 0.0];
+        let (steps, q) = web_grid(&t, 3);
+        assert_eq!(
+            steps,
+            vec![1.0 / 127.0, 2.0 / 127.0, 1.0],
+            "an all-zero lane keeps a step of one"
+        );
+        assert_eq!(q, vec![32, -127, 0, 127, 8, 0]);
+    }
 
     #[test]
     fn head_only_ranges_must_cover_whole_pattern_add_buckets() {

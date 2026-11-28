@@ -344,9 +344,11 @@ impl TtEntry {
     };
 }
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 #[derive(Clone, Default)]
 pub struct StopHandle(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 impl StopHandle {
     pub fn new() -> StopHandle {
         StopHandle(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
@@ -563,15 +565,16 @@ impl Pool {
 }
 
 /// Trips `stop` once `at` passes; storing `true` in the returned flag ends the watch.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub fn watch_deadline(
-    at: std::time::Instant,
+    at: crate::time::Instant,
     stop: StopHandle,
 ) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
     let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let watching = done.clone();
     std::thread::spawn(move || {
         while !watching.load(std::sync::atomic::Ordering::Relaxed) {
-            let now = std::time::Instant::now();
+            let now = crate::time::Instant::now();
             if now >= at {
                 stop.stop();
                 return;
@@ -582,14 +585,87 @@ pub fn watch_deadline(
     done
 }
 
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+pub use single_thread_stop::{watch_deadline, StopHandle};
+
+/// A browser runs the search on one thread, so nothing beside it can trip a deadline: the stop checks the clock itself.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+mod single_thread_stop {
+    use crate::time::Instant;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+    use std::sync::{Arc, Mutex};
+
+    /// Checks between clock reads: a JS call each, and a solve asks every node.
+    const POLLS_PER_READ: u32 = 1024;
+
+    #[derive(Default)]
+    struct State {
+        stopped: AtomicBool,
+        polls: AtomicU32,
+        /// The deadline being watched, until its caller sets the flag beside it.
+        watch: Mutex<Option<(Instant, Arc<AtomicBool>)>>,
+    }
+
+    #[derive(Clone, Default)]
+    pub struct StopHandle(Arc<State>);
+
+    impl StopHandle {
+        pub fn new() -> StopHandle {
+            StopHandle::default()
+        }
+        pub fn stop(&self) {
+            self.0.stopped.store(true, Relaxed);
+        }
+        pub fn reset(&self) {
+            self.0.stopped.store(false, Relaxed);
+            *self.0.watch.lock().unwrap() = None;
+        }
+        #[inline]
+        pub fn is_stopped(&self) -> bool {
+            if self.0.stopped.load(Relaxed) {
+                return true;
+            }
+            if !self
+                .0
+                .polls
+                .fetch_add(1, Relaxed)
+                .is_multiple_of(POLLS_PER_READ)
+            {
+                return false;
+            }
+            let mut watch = self.0.watch.lock().unwrap();
+            let Some((at, done)) = watch.as_ref() else {
+                return false;
+            };
+            if done.load(Relaxed) {
+                *watch = None;
+                return false;
+            }
+            if Instant::now() < *at {
+                return false;
+            }
+            *watch = None;
+            self.0.stopped.store(true, Relaxed);
+            true
+        }
+    }
+
+    /// Trips `stop` once `at` passes; storing `true` in the returned flag ends the watch.
+    pub fn watch_deadline(at: Instant, stop: StopHandle) -> Arc<AtomicBool> {
+        let done = Arc::new(AtomicBool::new(false));
+        *stop.0.watch.lock().unwrap() = Some((at, done.clone()));
+        done
+    }
+}
+
 fn out_of_time(
-    deadline: Option<std::time::Instant>,
+    deadline: Option<crate::time::Instant>,
     reached: u32,
     last_pass: std::time::Duration,
     prev_pass: std::time::Duration,
 ) -> bool {
     deadline.is_some_and(|dl| {
-        let now = std::time::Instant::now();
+        let now = crate::time::Instant::now();
         now >= dl || (reached > 0 && now + next_pass_eta(last_pass, prev_pass) >= dl)
     })
 }
@@ -724,7 +800,7 @@ impl NnueSearch {
         &mut self,
         b: &Board,
         depth: u32,
-        deadline: Option<std::time::Instant>,
+        deadline: Option<crate::time::Instant>,
     ) -> (Option<Position>, f32, u32) {
         if b.movable() == 0 {
             // The side to move passes; the game goes on unless the opponent cannot move either.
@@ -748,7 +824,7 @@ impl NnueSearch {
         &mut self,
         b: &Board,
         depth: u32,
-        deadline: Option<std::time::Instant>,
+        deadline: Option<crate::time::Instant>,
     ) -> (Option<Position>, f32, u32) {
         if self.threads > 1 && depth >= 2 {
             return self.lazy_smp(b, depth, deadline);
@@ -761,12 +837,12 @@ impl NnueSearch {
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
         let mut prev_pass = std::time::Duration::ZERO;
-        let clock = deadline.map(|dl| (std::time::Instant::now(), dl));
+        let clock = deadline.map(|dl| (crate::time::Instant::now(), dl));
         for d in 1..=depth {
             if out_of_time(deadline, reached, last_pass, prev_pass) {
                 break;
             }
-            let t0 = std::time::Instant::now();
+            let t0 = crate::time::Instant::now();
             self.root_hash = zobrist::board_hash(b.player_bb(), b.opponent_bb());
             self.root_move = None;
             let v = self.negamax(b, &mut acc, d, f32::NEG_INFINITY, f32::INFINITY);
@@ -799,7 +875,7 @@ impl NnueSearch {
         two_ago: Option<Position>,
         depth: u32,
         value: f32,
-        clock: Option<(std::time::Instant, std::time::Instant)>,
+        clock: Option<(crate::time::Instant, crate::time::Instant)>,
     ) -> bool {
         let Some((start, soft)) = clock else {
             return false;
@@ -875,7 +951,7 @@ impl NnueSearch {
         &mut self,
         b: &Board,
         depth: u32,
-        deadline: Option<std::time::Instant>,
+        deadline: Option<crate::time::Instant>,
     ) -> (Option<Position>, f32, u32) {
         use std::sync::atomic::Ordering;
         let mut nodes = 0;
@@ -887,7 +963,7 @@ impl NnueSearch {
         let mut reached = 0;
         let mut last_pass = std::time::Duration::ZERO;
         let mut prev_pass = std::time::Duration::ZERO;
-        let clock = deadline.map(|dl| (std::time::Instant::now(), dl));
+        let clock = deadline.map(|dl| (crate::time::Instant::now(), dl));
 
         let workers = self.threads - 1;
         let pool = self.shared_pool(workers);
@@ -898,7 +974,7 @@ impl NnueSearch {
             if out_of_time(deadline, reached, last_pass, prev_pass) {
                 break;
             }
-            let t0 = std::time::Instant::now();
+            let t0 = crate::time::Instant::now();
             let lazy = main_depth >= smp_min_depth() && main_depth <= smp_max_depth();
             let gen = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(main_depth));
             let mut slots = Vec::new();
@@ -1677,7 +1753,7 @@ mod deadline_tests {
         s.threads = 1;
         s.set_stop(Some(StopHandle::new()));
         let b = Board::new();
-        let t0 = std::time::Instant::now();
+        let t0 = crate::time::Instant::now();
         let dl = t0 + std::time::Duration::from_millis(120);
         let (pos, _v, reached) = s.best_move_deadline(&b, 40, Some(dl));
         let el = t0.elapsed();
@@ -1703,7 +1779,7 @@ mod deadline_tests {
         s.threads = 4;
         s.set_stop(Some(StopHandle::new()));
         let b = Board::new();
-        let dl = std::time::Instant::now() + std::time::Duration::from_millis(400);
+        let dl = crate::time::Instant::now() + std::time::Duration::from_millis(400);
         let (_pos, _v, reached) = s.best_move_deadline(&b, 40, Some(dl));
         assert!(
             reached < 40,
@@ -1744,7 +1820,7 @@ mod deadline_tests {
         s.threads = 4;
         s.set_stop(Some(StopHandle::new()));
         let b = Board::new();
-        let t0 = std::time::Instant::now();
+        let t0 = crate::time::Instant::now();
         let dl = t0 + std::time::Duration::from_millis(200);
         let (pos, _v, reached) = s.best_move_deadline(&b, 40, Some(dl));
         let el = t0.elapsed();

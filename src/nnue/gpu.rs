@@ -209,6 +209,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     let bucket = min(stage / (NST / PAB), PAB - 1u);
     let rb = ex * REC;
 
+    if (h < ACC) {
     var s = dense[D_FTB + h];
     var m = 0u;
     for (; m + 8u <= P.n_masks; m += 8u) {
@@ -226,6 +227,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         s += ft[inp[ib + m] * ACC + h];
     }
     raw[h] = s;
+    }
     if (h < PAD) {
         var z = dense[D_PAB + bucket * PAD + h];
         let base = bucket * P.nfb;
@@ -264,7 +266,11 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         xh = xin[h];
     }
     for (var i = 0u; i < L1; i++) {
-        let p = subgroupAdd(dense[D_L1W + (st * L1 + i) * L1IN + h] * xh);
+        var wv = 0.0;
+        if (h < SKIP) {
+            wv = dense[D_L1W + (st * L1 + i) * L1IN + h];
+        }
+        let p = subgroupAdd(wv * xh);
         if (sg_inv == 0u) {
             part[i * NSG_MAX + sg_id] = p;
         }
@@ -433,7 +439,7 @@ const K_ROW_GRAD: &str = r#"
 @group(0) @binding(5) var<storage, read_write> part: array<f32>;
 @group(0) @binding(6) var<uniform> P: Params;
 
-var<workgroup> red: array<f32, NSG_MAX>;
+var<workgroup> red: array<f32, 256>;
 
 @compute @workgroup_size(256)
 fn main(@builtin(local_invocation_id) lid: vec3<u32>,
@@ -458,7 +464,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         let slot = h % half;
         let lo_half = h < half;
         var s = 0.0;
-        if (W == ACC) {
+        if (PACKED) {
             var e = lo;
             for (; e + 4u <= hi; e += 4u) {
                 let x0 = exids[e];
@@ -505,18 +511,32 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     if (PER == 1u && (!live || pi != NO_PART)) {
         return;
     }
-    let gs = subgroupAdd(g * g);
-    if (sg_inv == 0u) {
-        red[sg_id] = gs;
-    }
-    workgroupBarrier();
-    if (h == 0u && live && pi == NO_PART) {
-        let mine = n_sg / PER;
-        var sum = 0.0;
-        for (var i = sub * mine; i < (sub + 1u) * mine; i++) {
-            sum += red[i];
+    if (TREE) {
+        red[lid.x] = g * g;
+        workgroupBarrier();
+        for (var v = W / 2u; v > 0u; v = v / 2u) {
+            if (h < v) {
+                red[lid.x] += red[lid.x + v];
+            }
+            workgroupBarrier();
         }
-        sq[row] = sum;
+        if (h == 0u && live && pi == NO_PART) {
+            sq[row] = red[lid.x];
+        }
+    } else {
+        let gs = subgroupAdd(g * g);
+        if (sg_inv == 0u) {
+            red[sg_id] = gs;
+        }
+        workgroupBarrier();
+        if (h == 0u && live && pi == NO_PART) {
+            let mine = n_sg / PER;
+            var sum = 0.0;
+            for (var i = sub * mine; i < (sub + 1u) * mine; i++) {
+                sum += red[i];
+            }
+            sq[row] = sum;
+        }
     }
 }
 "#;
@@ -591,12 +611,14 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
     let hi = min(lo + CHUNK, P.n_ex);
     let slot = h % HH;
     let lo_half = h < HH;
-    var s = 0.0;
-    for (var e = lo; e < hi; e++) {
-        let v = unpack2x16float(bitcast<u32>(rec[e * REC + R_DRAW + slot]));
-        s += select(v.y, v.x, lo_half);
+    if (h < ACC) {
+        var s = 0.0;
+        for (var e = lo; e < hi; e++) {
+            let v = unpack2x16float(bitcast<u32>(rec[e * REC + R_DRAW + slot]));
+            s += select(v.y, v.x, lo_half);
+        }
+        part[c * PART + h] = s;
     }
-    part[c * PART + h] = s;
     if (h < PAD) {
         var sb: array<f32, PAB>;
         for (var b = 0u; b < PAB; b++) {
@@ -1406,8 +1428,8 @@ impl GpuTrainer {
     ) -> GpuTrainer {
         const {
             assert!(
-                SO_SKIP <= WG && ACC_DIMS == WG,
-                "kernels are written for a 256-lane accumulator"
+                SO_SKIP <= WG && WG.is_multiple_of(ACC_DIMS) && WG.is_multiple_of(PA_DIMS),
+                "a workgroup holds a whole number of rows of either table"
             );
             assert!(
                 SO_L2 * 4 == WG && SO_L1 * 2 * 8 == WG,
@@ -1476,14 +1498,15 @@ impl GpuTrainer {
             Kernel { pipeline, layout }
         };
         let k_fwd_bwd = make(K_FWD_BWD, "fwd_bwd");
-        let row_grad_src = |per: u32| {
+        let row_grad_src = |w: usize, packed: bool| {
             format!(
-                "const PER: u32 = {per}u;\nconst W: u32 = {}u;\n{K_ROW_GRAD}",
-                256 / per
+                "const PER: u32 = {}u;\nconst W: u32 = {w}u;\nconst PACKED: bool = {packed};\nconst TREE: bool = {};\n{K_ROW_GRAD}",
+                WG / w,
+                w < 64
             )
         };
-        let k_row_grad = make(&row_grad_src(1), "row_grad");
-        let k_row_grad_pair = make(&row_grad_src(2), "row_grad_pair");
+        let k_row_grad = make(&row_grad_src(ACC_DIMS, true), "row_grad");
+        let k_row_grad_pair = make(&row_grad_src(PA_DIMS, false), "row_grad_pair");
         let k_row_finish = make(K_ROW_FINISH, "row_finish");
         let k_bias_part = make(K_BIAS_PART, "bias_part");
         let k_dense_grad = make(K_DENSE_GRAD, "dense_grad");
@@ -2323,7 +2346,12 @@ impl GpuTrainer {
                 pass.dispatch_workgroups(x, y, 1);
             };
             run(0, &self.k_fwd_bwd, &bg.fwd, n);
-            run(1, &self.k_row_grad, &bg.row_ft, b.ft.n_segs());
+            run(
+                1,
+                &self.k_row_grad,
+                &bg.row_ft,
+                b.ft.n_segs().div_ceil(WG / ACC_DIMS),
+            );
             run(
                 2,
                 &self.k_row_grad_pair,

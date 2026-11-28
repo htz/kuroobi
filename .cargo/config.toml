@@ -1,3 +1,7 @@
 # The vector kernels are compiled in only with AVX2 and BMI2; every Intel Mac since 2013 has them.
 [target.x86_64-apple-darwin]
 rustflags = ["-C", "target-cpu=x86-64-v3"]
+
+# Kuroobi for web's vector kernel needs SIMD, which every current browser runs.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

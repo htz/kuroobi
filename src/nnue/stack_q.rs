@@ -24,6 +24,7 @@ const OUT_IN: usize = SO_OUT_IN;
 const OUT_PER_DISC: f32 = (1u32 << 20) as f32 / super::SO_SCORE;
 
 const _: () = assert!(SO_SKIP == H + PA_DIMS && SO_SKIP.is_multiple_of(16));
+#[cfg(not(feature = "nnue-web"))]
 const _: () = assert!(
     H == 128 && PA_DIMS == 128,
     "the kernels are written for 128 lanes"
@@ -68,19 +69,25 @@ unsafe fn prefetch_row_x86(ft: *const i16, pa: *const i16, r: u32) {
 }
 
 /// Inputs of one layer as 16-bit lanes, aligned for 32 B loads.
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    not(feature = "nnue-scalar")
+#[cfg(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(feature = "nnue-scalar")
+    ),
+    all(target_arch = "wasm32", target_feature = "simd128")
 ))]
 #[repr(align(32))]
 struct Lanes<const N: usize>([i16; N]);
 
-/// Weights packed for `_mm256_madd_epi16`: for input pair `p` and output `o`, `w[o][2p]` and `w[o][2p + 1]` sit at `(p * n_out + o) * 2`.
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    not(feature = "nnue-scalar")
+/// Weights packed for `_mm256_madd_epi16` and `i32x4_dot_i16x8`: for input pair `p` and output `o`, `w[o][2p]` and `w[o][2p + 1]` sit at `(p * n_out + o) * 2`.
+#[cfg(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "avx2",
+        not(feature = "nnue-scalar")
+    ),
+    all(target_arch = "wasm32", target_feature = "simd128")
 ))]
 fn pair_pack(packed: &[i8], n_out: usize, n_in: usize) -> Vec<i16> {
     let mut out = vec![0i16; n_out * n_in];
@@ -213,32 +220,47 @@ pub(super) struct StackQ {
     out_w: Vec<i16>,
     out_b: Vec<i32>,
     /// `l1_w` and `l2_w` per stage again, as [`pair_pack`] lays them out.
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "avx2",
-        not(feature = "nnue-scalar")
+    #[cfg(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "avx2",
+            not(feature = "nnue-scalar")
+        ),
+        all(target_arch = "wasm32", target_feature = "simd128")
     ))]
     l1_pairs: Vec<i16>,
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "avx2",
-        not(feature = "nnue-scalar")
+    #[cfg(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "avx2",
+            not(feature = "nnue-scalar")
+        ),
+        all(target_arch = "wasm32", target_feature = "simd128")
     ))]
     l2_pairs: Vec<i16>,
     /// Evaluations by board, shared by every thread; rebuilt with the weights.
     pub(super) cache: Vec<super::EvalSlot>,
 }
 
+/// A transformer or phase weight as the integer rows hold it.
+#[inline]
+pub(super) fn row(v: f32) -> i16 {
+    (v * ROW_ONE as f32).round().clamp(-32768.0, 32767.0) as i16
+}
+
 impl StackQ {
     pub(super) fn build(net: &Nnue) -> StackQ {
+        let rows = |t: &[f32]| -> Vec<i16> { t.iter().map(|&v| row(v)).collect() };
+        StackQ::build_from_rows(net, rows(&net.ft), rows(&net.pa))
+    }
+
+    /// `ft_b` and `pa_b` are Black's transformer and phase rows already in [`row`] units; the rest comes from `net`.
+    pub(super) fn build_from_rows(net: &Nnue, ft_b: Vec<i16>, pa_b: Vec<i16>) -> StackQ {
         let qi16 =
             |v: f32, scale: f32| -> i16 { (v * scale).round().clamp(-32768.0, 32767.0) as i16 };
 
-        let rows = |t: &[f32]| -> Vec<i16> { t.iter().map(|&v| qi16(v, ROW_ONE as f32)).collect() };
-        let ft_b = rows(&net.ft);
-        let ft_bias = rows(&net.ft_bias);
-        let pa_b = rows(&net.pa);
-        let pa_bias = rows(&net.pa_bias);
+        let ft_bias = net.ft_bias.iter().map(|&v| row(v)).collect();
+        let pa_bias = net.pa_bias.iter().map(|&v| row(v)).collect();
 
         let ft_w = net.indexer.swap_colors(&ft_b, &net.mask_off, ACC_DIMS);
         let pa_w = pa_b
@@ -290,10 +312,13 @@ impl StackQ {
             out_b[st] = b + 128 * sum;
         }
 
-        #[cfg(all(
-            target_arch = "x86_64",
-            target_feature = "avx2",
-            not(feature = "nnue-scalar")
+        #[cfg(any(
+            all(
+                target_arch = "x86_64",
+                target_feature = "avx2",
+                not(feature = "nnue-scalar")
+            ),
+            all(target_arch = "wasm32", target_feature = "simd128")
         ))]
         let (l1_pairs, l2_pairs) = {
             let (n1, n2) = (L1_CHUNKS * 4 * SO_L1, L2_CHUNKS * 4 * SO_L2);
@@ -319,16 +344,22 @@ impl StackQ {
             l2_b,
             out_w,
             out_b,
-            #[cfg(all(
-                target_arch = "x86_64",
-                target_feature = "avx2",
-                not(feature = "nnue-scalar")
+            #[cfg(any(
+                all(
+                    target_arch = "x86_64",
+                    target_feature = "avx2",
+                    not(feature = "nnue-scalar")
+                ),
+                all(target_arch = "wasm32", target_feature = "simd128")
             ))]
             l1_pairs,
-            #[cfg(all(
-                target_arch = "x86_64",
-                target_feature = "avx2",
-                not(feature = "nnue-scalar")
+            #[cfg(any(
+                all(
+                    target_arch = "x86_64",
+                    target_feature = "avx2",
+                    not(feature = "nnue-scalar")
+                ),
+                all(target_arch = "wasm32", target_feature = "simd128")
             ))]
             l2_pairs,
             cache: (0..1usize << super::EVAL_CACHE_BITS)
@@ -373,13 +404,18 @@ impl StackQ {
         ))]
         let sum =
             unsafe { self.eval_avx2(ft.as_ptr(), pa.as_ptr(), &rows, net.n_masks, st, stage, mob) };
+        #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+        let sum = unsafe {
+            self.eval_simd128(ft.as_ptr(), pa.as_ptr(), &rows, net.n_masks, st, stage, mob)
+        };
         #[cfg(not(any(
             all(target_arch = "aarch64", not(feature = "nnue-scalar")),
             all(
                 target_arch = "x86_64",
                 target_feature = "avx2",
                 not(feature = "nnue-scalar")
-            )
+            ),
+            all(target_arch = "wasm32", target_feature = "simd128")
         )))]
         let sum = self.eval_scalar(ft, pa, &rows, net.n_masks, st, stage, mob);
         sum as f32 / OUT_PER_DISC
@@ -427,7 +463,8 @@ impl StackQ {
                 target_arch = "x86_64",
                 target_feature = "avx2",
                 not(feature = "nnue-scalar")
-            )
+            ),
+            all(target_arch = "wasm32", target_feature = "simd128")
         ),
         allow(dead_code)
     )]
@@ -666,6 +703,150 @@ impl StackQ {
         let h = _mm_add_epi32(h, _mm_shuffle_epi32::<0b01_00_11_10>(h));
         let h = _mm_add_epi32(h, _mm_shuffle_epi32::<0b10_11_00_01>(h));
         _mm_cvtsi128_si32(h) + self.out_b[st]
+    }
+
+    /// [`StackQ::eval_scalar`] in wasm SIMD: the same integers, eight lanes at a time, as the AVX2 kernel lays them out.
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    unsafe fn eval_simd128(
+        &self,
+        ft: *const i16,
+        pa: *const i16,
+        rows: &[u32; MAX_MASKS],
+        n: usize,
+        st: usize,
+        stage: usize,
+        mob: usize,
+    ) -> i32 {
+        use std::arch::wasm32::*;
+
+        /// `V` vectors of eight lanes from `n` rows onto `bias`, wrapping like the 16-bit lanes of the scalar sum.
+        #[inline(always)]
+        unsafe fn sum<const V: usize>(
+            table: *const i16,
+            stride: usize,
+            bias: *const i16,
+            rows: &[u32; MAX_MASKS],
+            n: usize,
+        ) -> [v128; V] {
+            let mut acc = [i16x8_splat(0); V];
+            for (r, a) in acc.iter_mut().enumerate() {
+                *a = v128_load(bias.add(r * 8) as *const v128);
+            }
+            for m in 0..n {
+                let row = table.add(*rows.get_unchecked(m) as usize * stride);
+                for (r, a) in acc.iter_mut().enumerate() {
+                    *a = i16x8_add(*a, v128_load(row.add(r * 8) as *const v128));
+                }
+            }
+            acc
+        }
+
+        let clamp = i16x8_splat(ROW_CLAMP);
+        let (zero, top, shift) = (i16x8_splat(0), i16x8_splat(255), i16x8_splat(128));
+        // `((a << 5) * b) >> 15` widened to 32 bits (there is no high-half multiply), clamped to a byte and shifted by 128.
+        let byte = |a: v128, b: v128| {
+            let a = i16x8_shl(a, 5);
+            let p = i16x8_narrow_i32x4(
+                i32x4_shr(i32x4_extmul_low_i16x8(a, b), 15),
+                i32x4_shr(i32x4_extmul_high_i16x8(a, b), 15),
+            );
+            i16x8_sub(i16x8_min(i16x8_max(p, zero), top), shift)
+        };
+
+        let mut x = Lanes::<L1_IN>([0; L1_IN]);
+        let xp = x.0.as_mut_ptr() as *mut v128;
+        let lo = sum::<{ H / 8 }>(ft, ACC_DIMS, self.ft_bias.as_ptr(), rows, n);
+        let hi = sum::<{ H / 8 }>(ft.add(H), ACC_DIMS, self.ft_bias.as_ptr().add(H), rows, n);
+        for r in 0..H / 8 {
+            let a = i16x8_min(i16x8_max(lo[r], zero), clamp);
+            v128_store(xp.add(r), byte(a, i16x8_min(hi[r], clamp)));
+        }
+        let pz = sum::<{ PA_DIMS / 8 }>(
+            pa,
+            PA_DIMS,
+            self.pa_bias.as_ptr().add(pa_bucket(stage) * PA_DIMS),
+            rows,
+            n,
+        );
+        for (r, &z) in pz.iter().enumerate() {
+            let v = i16x8_min(z, clamp);
+            v128_store(xp.add(H / 8 + r), byte(i16x8_max(v, zero), v));
+        }
+        x.0[SO_SKIP] = mob_byte(mob) as i16;
+
+        // `L1`: one input pair against four outputs per dot product.
+        let w1 = self.l1_pairs.as_ptr().add(st * L1_IN * SO_L1) as *const v128;
+        let b1 = self.l1_b.as_ptr().add(st * SO_L1) as *const v128;
+        let mut acc1 = [i32x4_splat(0); SO_L1 / 4];
+        for (g, a) in acc1.iter_mut().enumerate() {
+            *a = v128_load(b1.add(g));
+        }
+        let xi = x.0.as_ptr() as *const i32;
+        for p in 0..L1_IN / 2 {
+            let xv = i32x4_splat(xi.add(p).read());
+            for (g, a) in acc1.iter_mut().enumerate() {
+                *a = i32x4_add(
+                    *a,
+                    i32x4_dot_i16x8(v128_load(w1.add(p * SO_L1 / 4 + g)), xv),
+                );
+            }
+        }
+        let mut s1 = [0i32; SO_L1];
+        for (g, a) in acc1.iter().enumerate() {
+            v128_store(s1.as_mut_ptr().add(g * 4) as *mut v128, *a);
+        }
+        let mut a1 = Lanes::<L2_IN>([0; L2_IN]);
+        for (o, &s) in s1.iter().enumerate() {
+            let s = s.clamp(-32768, 32767);
+            let sq = ((s * s) >> 15).min(32767) >> 5;
+            a1.0[o] = (sq.min(255) - 128) as i16;
+            a1.0[SO_L1 + o] = ((s >> 6).clamp(0, 255) - 128) as i16;
+        }
+
+        // `L2`: sixteen registers of four outputs each.
+        let w2 = self.l2_pairs.as_ptr().add(st * L2_IN * SO_L2) as *const v128;
+        let b2 = self.l2_b.as_ptr().add(st * SO_L2) as *const v128;
+        let mut acc2 = [i32x4_splat(0); SO_L2 / 4];
+        for (j, a) in acc2.iter_mut().enumerate() {
+            *a = v128_load(b2.add(j));
+        }
+        let ai = a1.0.as_ptr() as *const i32;
+        for p in 0..L2_IN / 2 {
+            let xv = i32x4_splat(ai.add(p).read());
+            for (j, a) in acc2.iter_mut().enumerate() {
+                *a = i32x4_add(
+                    *a,
+                    i32x4_dot_i16x8(v128_load(w2.add(p * SO_L2 / 4 + j)), xv),
+                );
+            }
+        }
+        let mut s2 = [0i32; SO_L2];
+        for (j, a) in acc2.iter().enumerate() {
+            v128_store(s2.as_mut_ptr().add(j * 4) as *mut v128, *a);
+        }
+        let mut xo = Lanes::<OUT_IN>([0; OUT_IN]);
+        for (o, &s) in s2.iter().enumerate() {
+            let v = s.clamp(0, 255 << 6);
+            xo.0[o] = ((((v * v) >> 15) >> 5).min(255) - 128) as i16;
+        }
+        xo.0[SO_L2..].copy_from_slice(&x.0[..SO_SKIP]);
+
+        let ow = self.out_w.as_ptr().add(st * OUT_IN) as *const v128;
+        let xq = xo.0.as_ptr() as *const v128;
+        let mut o = i32x4_splat(0);
+        for g in 0..OUT_IN / 8 {
+            o = i32x4_add(
+                o,
+                i32x4_dot_i16x8(v128_load(ow.add(g)), v128_load(xq.add(g))),
+            );
+        }
+        i32x4_extract_lane::<0>(o)
+            + i32x4_extract_lane::<1>(o)
+            + i32x4_extract_lane::<2>(o)
+            + i32x4_extract_lane::<3>(o)
+            + self.out_b[st]
     }
 
     #[cfg(all(target_arch = "aarch64", not(feature = "nnue-scalar")))]

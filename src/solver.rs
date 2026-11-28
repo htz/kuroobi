@@ -7,8 +7,8 @@
 use crate::bitboard;
 use crate::board::Board;
 use crate::color::Color;
-use crate::linear::Linear;
 use crate::midgame::StopHandle;
+use crate::order::OrderEval as Linear;
 use crate::pattern_index::{PatternIndexer, PatternIndices};
 use crate::position::Position;
 use crate::prefetch::l1 as prefetch;
@@ -1309,7 +1309,7 @@ impl Solver {
 
         self.hash_table.set_shared(self.threads > 1);
 
-        let t_clear = std::time::Instant::now();
+        let t_clear = crate::time::Instant::now();
         let budget_arc = self.ensure_budget(self.threads - 1);
         let mut root = self.scratch.take().unwrap_or_else(|| Scratch::new(L4_BITS));
         if std::mem::take(&mut self.wipe) {
@@ -1338,7 +1338,10 @@ impl Solver {
             }
             let _watch = StopWatch(&watching);
             // Helpers carry no stop handle; they see a stop through the root's abort flag.
-            if let Some(stop) = stop_ref {
+            // Without threads the root worker's own stop handle is the only way out.
+            if let Some(stop) =
+                stop_ref.filter(|_| cfg!(not(all(target_family = "wasm", target_os = "unknown"))))
+            {
                 let (abort, watching) = (&root_abort, &watching);
                 scope.spawn(move || {
                     while watching.load(std::sync::atomic::Ordering::Relaxed) {

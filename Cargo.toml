@@ -40,6 +40,11 @@ tunable = []
 # Force the scalar NNUE accumulator path even on aarch64 (to measure the
 # NEON speedup). Off by default; NEON is used automatically on aarch64.
 nnue-scalar = []
+# The solver orders moves with the NNUE instead of the linear evaluator, so one model is all a build ships.
+nnue-order = []
+# Kuroobi for web's smaller network. The NEON and AVX2 read-outs are written
+# for the full width, so it runs the scalar one.
+nnue-web = ["nnue-scalar"]
 
 [[bench]]
 name = "core"
