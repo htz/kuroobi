@@ -934,18 +934,26 @@ impl Bot {
 
     pub fn run(&mut self, stop: Arc<AtomicBool>) -> Result<(), String> {
         let (tx, wire) = mpsc::channel::<Result<Wire, String>>();
-        {
-            let stop = stop.clone();
-            let api = Api::new(&self.o.base, self.o.token.clone());
+        let opened = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let (base, token) = (self.o.base.clone(), self.o.token.clone());
+        let open_stream = || {
+            let (stop, opened, tx) = (stop.clone(), opened.clone(), tx.clone());
+            let live = Arc::new(AtomicBool::new(true));
+            let api = Api::new(&base, token.clone());
+            let mine = live.clone();
             std::thread::spawn(move || {
                 let events = tx.clone();
-                if let Err(e) = api.stream(&stop, |w| {
-                    let _ = events.send(Ok(w));
+                if let Err(e) = api.stream(&stop, &mine, &opened, |w| {
+                    if mine.load(Ordering::Relaxed) {
+                        let _ = events.send(Ok(w));
+                    }
                 }) {
                     let _ = tx.send(Err(e));
                 }
             });
-        }
+            live
+        };
+        let mut live = open_stream();
         let mut last: Option<Instant> = None;
         let mut busy = false;
         let (roster_tx, roster_rx) = mpsc::channel::<Result<Value, String>>();
@@ -980,6 +988,12 @@ impl Bot {
                     }
                 }
                 next = wire.try_recv().ok();
+            }
+            if self.world.resync {
+                // Opening a stream closes the one the token has, which may be waiting for a line.
+                self.world.resync = false;
+                live.store(false, Ordering::Relaxed);
+                live = open_stream();
             }
             self.collect();
             if !self.world.synced {
@@ -1059,6 +1073,14 @@ impl Bot {
                 true
             }
             Some("match") => self.world.merge(&ev["match"]),
+            Some("move") => self.world.play(&ev).unwrap_or_else(|| {
+                log(&format!(
+                    "match {} leg {}: moves from {} not followed; reconnecting",
+                    ev["match_id"], ev["leg"], ev["index"]
+                ));
+                self.world.resync = true;
+                false
+            }),
             _ => false,
         }
     }
@@ -1150,6 +1172,8 @@ struct World {
     synced: bool,
     /// The stream is connected.
     up: bool,
+    /// A `move` event could not be followed: a new stream is wanted for a fresh state.
+    resync: bool,
 }
 
 impl World {
@@ -1177,6 +1201,58 @@ impl World {
         }
         self.matches.insert(id, m);
         true
+    }
+
+    /// Plays a `move` event's moves on the leg it names, which then takes the event's turn,
+    /// revision and clocks. `None` when they cannot be followed from the moves held.
+    fn play(&mut self, ev: &Value) -> Option<bool> {
+        let id = ev["match_id"].as_i64()?;
+        let index = ev["index"].as_u64()? as usize;
+        let moves = ev["moves"].as_array()?;
+        let leg = self
+            .matches
+            .get_mut(&id)?
+            .get_mut("state")?
+            .get_mut("legs")?
+            .get_mut(ev["leg"].as_u64()? as usize)?;
+        let held = leg["history"].as_array().map_or(0, Vec::len);
+        if index > held {
+            return None;
+        }
+        if index + moves.len() <= held {
+            return Some(false);
+        }
+        let l: Leg = serde_json::from_value(leg.clone()).ok()?;
+        let mut b = board_of(&l)?;
+        let mut color = l.turn;
+        let mut played = Vec::new();
+        for m in &moves[held - index..] {
+            let mv = match m.as_str()? {
+                "pass" => {
+                    b.pass();
+                    -1
+                }
+                sq => {
+                    let p = Position::from_kifu(sq).ok()?;
+                    b.make_move(p).ok()?;
+                    index_of(p)
+                }
+            };
+            played.push(json!({"color": color, "move": mv}));
+            color = 3 - color;
+        }
+        let cells = cells_of_board(&b);
+        let count = |c| cells.iter().filter(|&&x| x == c).count();
+        leg["discs"] = json!([count(1), count(2)]);
+        leg["board"] = json!(cells);
+        if !leg["history"].is_array() {
+            leg["history"] = json!([]);
+        }
+        leg["history"].as_array_mut()?.extend(played);
+        for k in ["turn", "revision", "clocks_ms", "turn_started_ms"] {
+            leg[k] = ev[k].clone();
+        }
+        Some(true)
     }
 
     /// The whole state as one object: us, the other bots and our matches.
@@ -1770,16 +1846,16 @@ impl Bot {
                 continue;
             }
             let human = (m.id < 0).then(|| (m.round_no, m.room_created_at.clone()));
-            if leg.legal_moves.is_empty() {
+            let Some(board) = board_of(leg) else {
+                log(&format!("match {} leg {i}: unreadable board", m.id));
+                continue;
+            };
+            if board.movable() == 0 {
                 if human.is_none() {
                     self.send_move(m.id, i, leg.revision, -1, None, None);
                 }
                 continue;
             }
-            let Some(board) = board_of(leg) else {
-                log(&format!("match {} leg {i}: unreadable board", m.id));
-                continue;
-            };
             let waited =
                 (server_now - leg.turn_started_ms) as f64 / 1000.0 + recv.elapsed().as_secs_f64();
             let left = leg
@@ -2180,6 +2256,48 @@ mod tests {
         assert!((budget(30.0, 4.0, 1.5, 20) - (30.0 - 4.0 - 1.65 * 9.0)).abs() < 1e-9);
         assert_eq!(budget(10.0, 4.0, 0.8, 1), 6.0);
         assert_eq!(budget(5.0, 4.0, 0.8, 12), 0.05);
+    }
+
+    #[test]
+    fn move_events_play_on_the_leg_and_a_gap_asks_for_a_fresh_state() {
+        let mut board = vec![0u8; 64];
+        (board[27], board[28], board[35], board[36]) = (2, 1, 1, 2);
+        let leg = json!({"board": board, "turn": 1, "revision": 0, "status": "active",
+                         "history": [], "clocks_ms": [60000, 60000]});
+        let mut w = World::default();
+        w.merge(
+            &json!({"id": 9, "bot_a": 1, "bot_b": 2, "status": "running",
+                        "state": {"legs": [leg]}}),
+        );
+        let ev = |index: usize, moves: &[&str], turn: u8, revision: i64| {
+            json!({"type": "move", "match_id": 9, "leg": 0, "index": index, "moves": moves,
+                   "turn": turn, "revision": revision, "clocks_ms": [59000, 60000],
+                   "turn_started_ms": 7})
+        };
+        assert_eq!(w.play(&ev(0, &["f5"], 2, 1)), Some(true));
+        assert_eq!(w.play(&ev(0, &["f5"], 2, 1)), Some(false), "already held");
+        assert_eq!(
+            w.play(&ev(0, &["f5", "f6"], 1, 2)),
+            Some(true),
+            "the known one is skipped"
+        );
+        assert_eq!(w.play(&ev(3, &["e6"], 2, 3)), None, "one missed");
+        let l: Leg = serde_json::from_value(w.matches[&9]["state"]["legs"][0].clone()).unwrap();
+        let b = board_of(&l).unwrap();
+        let mut want = Board::new();
+        for sq in ["f5", "f6"] {
+            want.make_move(Position::from_kifu(sq).unwrap()).unwrap();
+        }
+        assert_eq!(format!("{b}"), format!("{want}"));
+        assert_eq!(
+            l.history
+                .iter()
+                .map(|p| (p.color, p.mv))
+                .collect::<Vec<_>>(),
+            [(1, 37), (2, 45)]
+        );
+        assert_eq!((l.revision, l.turn, l.discs.clone()), (2, 1, vec![3, 3]));
+        assert_eq!(l.clocks_ms, [59000.0, 60000.0]);
     }
 
     #[test]

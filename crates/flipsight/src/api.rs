@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::io::BufRead;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -113,7 +113,7 @@ impl Api {
             .timeout_connect(Duration::from_secs(10))
             .timeout_read(Duration::from_secs(10))
             .build();
-        let url = format!("{}/flipsight_api/bot-stream", self.base);
+        let url = format!("{}{STREAM_PATH}", self.base);
         match agent.get(&url).set("Authorization", &self.auth()).call() {
             Ok(r) => {
                 for line in std::io::BufReader::new(r.into_reader()).lines().take(8) {
@@ -139,29 +139,40 @@ impl Api {
         }
     }
 
-    /// Reads the event stream until `stop`, reconnecting from 1 s up to 30 s apart.
-    /// Returns early only when the token is refused.
-    pub fn stream(&self, stop: &Arc<AtomicBool>, mut on: impl FnMut(Wire)) -> Result<(), String> {
+    /// Reads the event stream until `stop`, or until `live` is cleared because a newer stream
+    /// replaces this one, reconnecting from 1 s up to 30 s apart. `opened` holds the connections
+    /// made by every stream of the token. Returns early only when the token is refused.
+    pub fn stream(
+        &self,
+        stop: &Arc<AtomicBool>,
+        live: &Arc<AtomicBool>,
+        opened: &Arc<Mutex<VecDeque<Instant>>>,
+        mut on: impl FnMut(Wire),
+    ) -> Result<(), String> {
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(10))
             .timeout_read(STREAM_QUIET)
             .build();
-        let url = format!("{}/flipsight_api/bot-stream", self.base);
+        let url = format!("{}{STREAM_PATH}", self.base);
         let mut delay = 1;
-        let mut opened: VecDeque<Instant> = VecDeque::new();
-        while !stop.load(Ordering::Relaxed) {
-            while opened
-                .front()
-                .is_some_and(|t| t.elapsed() >= CONNECT_WINDOW)
-            {
-                opened.pop_front();
-            }
-            if opened.len() >= MAX_CONNECTS {
-                std::thread::sleep(Duration::from_secs(1));
-                continue;
-            }
+        let ended = || stop.load(Ordering::Relaxed) || !live.load(Ordering::Relaxed);
+        while !ended() {
             let began = Instant::now();
-            opened.push_back(began);
+            {
+                let mut opened = opened.lock().unwrap();
+                while opened
+                    .front()
+                    .is_some_and(|t| t.elapsed() >= CONNECT_WINDOW)
+                {
+                    opened.pop_front();
+                }
+                if opened.len() >= MAX_CONNECTS {
+                    drop(opened);
+                    std::thread::sleep(Duration::from_secs(1));
+                    continue;
+                }
+                opened.push_back(began);
+            }
             let why = match agent.get(&url).set("Authorization", &self.auth()).call() {
                 Ok(r) => {
                     let mut why = "closed".to_string();
@@ -173,7 +184,7 @@ impl Api {
                                 break;
                             }
                         };
-                        if stop.load(Ordering::Relaxed) {
+                        if ended() {
                             return Ok(());
                         }
                         let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
@@ -192,7 +203,7 @@ impl Api {
                 Err(ureq::Error::Status(code, _)) => format!("HTTP {code}"),
                 Err(e) => e.kind().to_string(),
             };
-            if stop.load(Ordering::Relaxed) {
+            if ended() {
                 return Ok(());
             }
             on(Wire::Down(why));
@@ -211,6 +222,9 @@ pub enum Wire {
     Event(Value),
     Down(String),
 }
+
+/// `moves=1`: bots registered before it keep getting whole matches until they ask for it once.
+const STREAM_PATH: &str = "/flipsight_api/bot-stream?state=1&moves=1";
 
 /// The server pings every 10 s; no line for 15 s means the stream is stuck.
 const STREAM_QUIET: Duration = Duration::from_secs(15);
@@ -261,7 +275,6 @@ pub struct Leg {
     pub turn_started_ms: i64,
     pub revision: i64,
     pub status: String,
-    pub legal_moves: Vec<i64>,
     pub discs: Vec<i64>,
     pub result_discs: Option<Vec<i64>>,
     /// This leg's moves after the opening; -1 is a pass.

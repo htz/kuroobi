@@ -6,10 +6,12 @@
 
 It offers the bot one standard match (accepted) and one anti match (declined); the opponent
 answers every move with a random legal one after 0.2 s and sends an eval with it. The state
-goes out on the stream only (bot API v2): agent_poll answers 410.
+goes out on the stream only (bot API v2, move events): a whole match when it starts or ends,
+otherwise each move as a `move` event; legal moves are never sent. agent_poll answers 410.
 
     FAKE_DROP=<seconds>   closes every stream after that long, to try reconnecting.
     FAKE_DELAY=<seconds>  the opponent's thinking time (0.2).
+    FAKE_SKIP=<n>         leaves out every n-th move event, to try catching up on a fresh state.
 """
 import json, os, random, sys, threading, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -20,13 +22,18 @@ rnd = random.Random(1)
 now = lambda: int(time.time() * 1000)
 DROP = float(os.environ.get("FAKE_DROP", 0))
 DELAY = float(os.environ.get("FAKE_DELAY", 0.2))
+SKIP = int(os.environ.get("FAKE_SKIP", 0))
 # Fresh ids every run: the bot does not write a match it has already written.
 FIRST = int(time.time()) % 1000000 * 10
-events, polls = [], [0]
+events, polls, sent_moves, streams = [], [0], [0], [0]
 
 
 def public(m):
-    return {k: v for k, v in m.items() if not k.startswith("_")}
+    out = {k: v for k, v in m.items() if not k.startswith("_")}
+    if out.get("state"):
+        out["state"] = dict(out["state"], legs=[{k: v for k, v in l.items() if k != "legal_moves"}
+                                                for l in out["state"]["legs"]])
+    return out
 
 
 def emit(m):
@@ -125,6 +132,20 @@ def play(m, li, mv, ev=None):
     leg["revision"] += 1
     refresh(leg)
     finish(m)
+    if m["status"] == "running" and leg["status"] == "active":
+        sent_moves[0] += 1
+        if SKIP and sent_moves[0] % SKIP == 0:
+            print("SKIPPED move event", m["id"], li, len(leg["history"]) - 1, flush=True)
+            return
+        events.append(json.dumps({"type": "move", "view": "agent", "match_id": m["id"], "leg": li,
+                                  "index": len(leg["history"]) - 1,
+                                  "moves": [coord(leg["history"][-1]["move"])], "turn": leg["turn"],
+                                  "revision": leg["revision"], "clocks_ms": leg["clocks_ms"],
+                                  "turn_started_ms": leg["turn_started_ms"]}))
+
+
+def coord(mv):
+    return "pass" if mv < 0 else "abcdefgh"[mv % 8] + str(mv // 8 + 1)
 
 
 def finish(m):
@@ -149,7 +170,10 @@ def finish(m):
         m["record"] = {"format": 1, "kind": "bot", "id": m["id"], "updated_ms": now(), "legs": [],
                        "opponent": {"kind": "bot", "bot_id": OPP, "name": "random", "rating_before": 1500.0}}
         print("FINISHED", m["id"], tot, flush=True)
-    emit(m)
+        emit(m)
+    elif any(l["status"] != "active" for l in s["legs"]) and m.get("_ended", 0) != sum(l["status"] != "active" for l in s["legs"]):
+        m["_ended"] = sum(l["status"] != "active" for l in s["legs"])
+        emit(m)
 
 
 def opponent_loop():
@@ -200,14 +224,21 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         print("STREAM", flush=True)
         with lock:
+            streams[0] += 1
+            mine = streams[0]
             at = len(events)
             live = [public(m) for m in matches.values() if m["status"] in ("pending", "running")]
-        self.line({"type": "hello", "bot_id": ME, "state_follows": True, "api": 2})
+        self.line({"type": "hello", "bot_id": ME, "state_follows": True, "api": 2,
+                   "moves": "moves=1" in self.path})
         self.line({"type": "state", "view": "agent", "ok": True, "scope": "active",
                    "bot": {"id": ME, "name": "local", "max_games": 2}, "matches": live})
         began = last = time.time()
         while not DROP or time.time() - began < DROP:
             time.sleep(0.02)
+            if streams[0] != mine:
+                # One stream per token: a newer one closes this.
+                self.line({"type": "closing", "reason": "replaced"})
+                return
             for e in events[at:]:
                 self.line(e)
                 at += 1
@@ -263,7 +294,8 @@ class H(BaseHTTPRequestHandler):
                     print("ILLEGAL", req, flush=True)
                     return self.reply(409, {"ok": False, "error": "illegal_move"})
                 play(m, req["leg"], mv, req.get("eval"))
-                return self.reply(200, {"ok": True, "match": {"id": m["id"], "status": m["status"]}})
+                return self.reply(200, {"ok": True, "match_id": m["id"], "status": m["status"], "leg": req["leg"],
+                                        "revision": leg["revision"], "turn": leg["turn"]})
         self.reply(400, {"ok": False, "error": "unknown action"})
 
 
