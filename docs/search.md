@@ -78,7 +78,7 @@ machine reaches less depth in the same budget.
 
 `NnueSearch` searches with continuous NNUE values (f32 discs) and a null
 window of 0.01 disc. `Engine::choose_within` runs it to the level's depth
-(or a deadline), analysis runs it per move on one thread, and the solver
+(or a deadline), analysis runs it per move from a cleared table, and the solver
 runs it as a shallow probe.
 
 ### Iterations and when to stop

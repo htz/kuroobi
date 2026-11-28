@@ -33,6 +33,13 @@ const BACKUP_SHARE: f32 = 0.05;
 /// From here on the search reads the game out, so the book is not used. Learned entries hold
 /// game results, not solves: at 20 empties or fewer, 103 of 1844 entries' best move lost 854 discs.
 const BOOK_MIN_EMPTIES: u8 = 28;
+/// ProbCut confidences (sigmas) for the 1st..4th empties above a level's solve, solved selectively instead
+/// of searched: gendata's schedule (at depth 16 on 21-24 empties, mean error against exact solves 1.31 -> 0.69
+/// discs at no more time). Levels at depth 14-22 measured the same way found the empties just above their solve
+/// faster and closer this way too.
+const SELECTIVE_T: [f32; 4] = [1.1, 0.8, 0.6, 0.4];
+/// Below this depth the search beats the selective solve's fixed few milliseconds at every empties.
+const SELECTIVE_MIN_DEPTH: u32 = 14;
 
 /// The book's random pick narrows in a straight line from the full tolerance at the start to
 /// none at this many empties (move 30): variety belongs to the opening, not the midgame.
@@ -208,6 +215,38 @@ impl EngineAssets {
             linear: std::sync::Arc::new(Linear(nnue.clone())),
             nnue,
         }
+    }
+}
+
+/// The ProbCut confidence a level solves `empties` at selectively; `None` where it solves exactly or searches.
+fn selective_t(c: &EngineConfig, empties: u8) -> Option<f32> {
+    if c.depth < SELECTIVE_MIN_DEPTH || empties <= c.solve_empties {
+        return None;
+    }
+    SELECTIVE_T
+        .get(usize::from(empties - c.solve_empties - 1))
+        .copied()
+}
+
+/// The first depth of the candidates' deepening, from `from_depth` up: each move's search ends at the parity the game's
+/// search (clock.rs) ends at, so the values do not swing between odd and even depths from pass to pass.
+pub fn first_hint_depth(board: &Board, from_depth: u32) -> u32 {
+    let discs = 64 - u32::from(board.empty_count());
+    let depth = from_depth.max(1);
+    if (depth + discs).is_multiple_of(2) {
+        depth + 1
+    } else {
+        depth
+    }
+}
+
+/// The next depth of the candidates' deepening, two plies on as the game's search goes, and the solve (`full`, the
+/// empties after a move) once that is within five more.
+pub fn next_hint_depth(depth: u32, full: u32) -> u32 {
+    if depth + 2 < full.saturating_sub(5) {
+        depth + 2
+    } else {
+        full.max(depth + 1)
     }
 }
 
@@ -609,7 +648,23 @@ impl Engine {
                 ..Default::default()
             };
         }
-        if board.empty_count() <= c.solve_empties {
+        if let Some(t) = selective_t(c, board.empty_count()) {
+            let (r, cut, backup) =
+                self.solve_within(board, deadline, Progress::SOLVE, |solver, linear| {
+                    solver.solve_selective(board, t, linear)
+                });
+            if let Some(backup) = backup {
+                return backup;
+            }
+            MoveEval {
+                pos: r.best_move,
+                value: stone_scale(r.value as f32),
+                depth: board.empty_count() as u32,
+                cut,
+                mpc_t: Some(t),
+                ..Default::default()
+            }
+        } else if board.empty_count() <= c.solve_empties {
             let (r, cut, backup) =
                 self.solve_within(board, deadline, Progress::SOLVE, |solver, linear| {
                     solver.solve_with_eval(EndSolverMode::Perfect, board, Some(linear))
@@ -772,6 +827,16 @@ impl Engine {
                 ..Default::default()
             };
         }
+        if let Some(t) = selective_t(&self.config, board.empty_count()) {
+            let r = self.solver.solve_selective(board, t, &self.linear);
+            return MoveEval {
+                pos: r.best_move,
+                value: stone_scale(r.value as f32),
+                depth: board.empty_count() as u32,
+                mpc_t: Some(t),
+                ..Default::default()
+            };
+        }
         if board.empty_count() <= self.config.solve_empties {
             let r = self
                 .solver
@@ -801,15 +866,13 @@ impl Engine {
     ) {
         let base_nodes = self.nodes();
         self.stop.reset();
-        let saved_threads = self.search.threads;
-        self.search.threads = 1;
-        let mut depth = from_depth.max(1);
+        let full = u32::from(board.empty_count()).saturating_sub(1);
+        let mut depth = first_hint_depth(board, from_depth);
         loop {
             let mut out: Vec<(Position, MoveEval)> = Vec::new();
             let mut all_exact = true;
             for pos in board.movable_iter() {
                 if self.stop.is_stopped() {
-                    self.search.threads = saved_threads;
                     self.search.clear();
                     return;
                 }
@@ -853,9 +916,8 @@ impl Engine {
             if !go_on || all_exact || depth >= 60 {
                 break;
             }
-            depth += 1;
+            depth = next_hint_depth(depth, full);
         }
-        self.search.threads = saved_threads;
         self.search.clear();
     }
 }
@@ -863,6 +925,38 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_candidates_deepen_two_plies_at_the_game_searchs_parity_then_solve() {
+        // The opening: 4 discs, so each move's search ends one ply short of an even root depth, as clock.rs's 6.
+        let b = Board::new();
+        assert_eq!(first_hint_depth(&b, 1), 1);
+        assert_eq!(first_hint_depth(&b, 2), 3);
+        let full = u32::from(b.empty_count()) - 1;
+        let mut d = first_hint_depth(&b, 1);
+        let mut seen = vec![d];
+        while d < full {
+            d = next_hint_depth(d, full);
+            seen.push(d);
+        }
+        assert_eq!(seen.iter().filter(|&&d| d < full).count(), 27);
+        assert!(seen.windows(2).all(|w| w[1] == w[0] + 2 || w[1] == full));
+        assert_eq!(seen[seen.len() - 2], 53);
+    }
+
+    #[test]
+    fn a_level_solves_selectively_just_above_its_solve() {
+        let c = |depth, solve_empties| EngineConfig {
+            depth,
+            solve_empties,
+            ..EngineConfig::default()
+        };
+        assert_eq!(selective_t(&c(16, 20), 20), None);
+        assert_eq!(selective_t(&c(16, 20), 21), Some(1.1));
+        assert_eq!(selective_t(&c(16, 20), 24), Some(0.4));
+        assert_eq!(selective_t(&c(16, 20), 25), None);
+        assert_eq!(selective_t(&c(12, 16), 17), None);
+    }
 
     #[test]
     fn book_variety_narrows_to_none_at_move_30() {
