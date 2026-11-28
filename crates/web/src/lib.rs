@@ -200,6 +200,18 @@ pub extern "C" fn last_exact() -> u32 {
     with_ai(0, |ai| u32::from(ai.last.exact))
 }
 
+/// The ProbCut confidence (in sigmas) of the last search when it was a selective endgame solve, else 0.
+#[no_mangle]
+pub extern "C" fn last_selective() -> f32 {
+    with_ai(0.0, |ai| {
+        let solved_to_end = ai.last.depth >= u32::from(ai.board.empty_count());
+        match ai.last.mpc_t {
+            Some(t) if !ai.last.exact && solved_to_end => t,
+            _ => 0.0,
+        }
+    })
+}
+
 /// The `i`th move of the last [`analyze`] as a square, -1 past the end.
 #[no_mangle]
 pub extern "C" fn analysis_move(i: u32) -> i32 {

@@ -1,0 +1,49 @@
+---
+import { Font } from 'astro:assets';
+import touchIcon from '../../../crates/gui/icons/128x128@2x.png';
+import tabIcon from '../../../crates/gui/icons/32x32.png';
+import SiteFooter from '../components/SiteFooter.astro';
+import SiteHeader, { type Section } from '../components/SiteHeader.astro';
+import { href, LANGS, splitPath, t } from '../i18n';
+import '../styles/site.css';
+
+interface Props {
+  /** The page's own name; the site's name follows it. Left out on the top page. */
+  title?: string;
+  description?: string;
+  active: Section;
+  /** The path the language menu and alternates point at, when not this page's own (the 404 page). */
+  path?: string;
+}
+const { title, description, active } = Astro.props;
+const { lang, path: own } = splitPath(Astro.url.pathname);
+const path = Astro.props.path ?? own;
+const site = t(lang, 'site.title');
+---
+
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title ? `${title} · ${site}` : site}</title>
+    <link rel="icon" href={tabIcon.src} type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href={touchIcon.src} />
+    <meta name="description" content={description ?? t(lang, 'site.description')} />
+    {LANGS.map((l) => <link rel="alternate" hreflang={l} href={href(l, path)} />)}
+    <link rel="alternate" hreflang="x-default" href={href('ja', path)} />
+    <script is:inline>
+      try {
+        const v = localStorage.getItem('kuroobi-theme');
+        if (v === 'light' || v === 'dark') document.documentElement.setAttribute('data-theme', v);
+      } catch (e) {}
+    </script>
+    <Font cssVariable="--font-jp" preload />
+    <Font cssVariable="--font-mono" />
+  </head>
+  <body>
+    <SiteHeader lang={lang} active={active} path={path} />
+    <slot />
+    <SiteFooter lang={lang} />
+  </body>
+</html>

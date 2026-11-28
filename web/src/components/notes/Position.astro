@@ -1,0 +1,25 @@
+---
+// For articles: `<Position kifu="f5d6c3" caption="…" />` draws the position after the record, with a link to study it.
+import { href, splitPath, t } from '../../i18n';
+import { replay } from '../../lib/othello';
+import { Board, BoardDefs } from '../Board';
+
+interface Props {
+  kifu: string;
+  caption?: string;
+}
+const { kifu, caption } = Astro.props;
+const { lang } = splitPath(Astro.url.pathname);
+const { pos, moves } = replay(kifu.toLowerCase());
+---
+
+<figure class="np">
+  <BoardDefs />
+  <div class="np-board">
+    <Board lang={lang} cells={pos.cells} last={moves.at(-1)} coords disabled />
+  </div>
+  <figcaption>
+    {caption && <span>{caption}</span>}
+    <a href={href(lang, '/play/study/') + '?kifu=' + kifu.toLowerCase()} class="w-more">{t(lang, 'notes.openInStudy')}</a>
+  </figcaption>
+</figure>

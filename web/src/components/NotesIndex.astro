@@ -1,0 +1,50 @@
+---
+import { TAGS } from '../content.config';
+import { href, t, type Lang } from '../i18n';
+import Base from '../layouts/Base.astro';
+import { dateText, notesIn, slugOf } from '../lib/notes';
+
+interface Props {
+  lang: Lang;
+  /** Only the articles with this tag; all of them when left out. */
+  tag?: (typeof TAGS)[number];
+}
+const { lang, tag } = Astro.props;
+const notes = (await notesIn(lang)).filter((n) => !tag || n.data.tags.includes(tag));
+const chips = [
+  { label: t(lang, 'notes.all'), href: href(lang, '/notes/'), on: !tag },
+  ...TAGS.map((id) => ({ label: t(lang, 'tags.' + id), href: href(lang, `/notes/tags/${id}/`), on: tag === id })),
+];
+---
+
+<Base title={tag ? `${t(lang, 'tags.' + tag)} · ${t(lang, 'notes.title')}` : t(lang, 'notes.title')} description={t(lang, 'notes.lead')} active="notes">
+  <main class="w-wrap nx">
+    <div class="nx-head">
+      <h1>{t(lang, 'notes.title')}</h1>
+      <p class="w-keep">{t(lang, 'notes.lead')}</p>
+    </div>
+    <nav aria-label={t(lang, 'notes.tagsNav')} class="nx-tags">
+      {chips.map((c) => <a href={c.href} class="w-plain w-btn" aria-current={c.on ? 'page' : undefined}>{c.label}</a>)}
+    </nav>
+    {
+      notes.length ? (
+        <ol class="nx-list">
+          {notes.map((n) => (
+            <li>
+              <a href={href(lang, `/notes/${slugOf(n)}/`)} class="w-plain">
+                <time datetime={n.data.date.toISOString().slice(0, 10)}>{dateText(n.data.date, lang)}</time>
+                <span class="nx-body">
+                  <span class="nx-title">{n.data.title}</span>
+                  <span class="nx-sum">{n.data.summary}</span>
+                </span>
+                <span class="tag">{t(lang, 'tags.' + n.data.tags[0])}</span>
+              </a>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p class="nx-empty">{t(lang, 'notes.empty')}</p>
+      )
+    }
+  </main>
+</Base>

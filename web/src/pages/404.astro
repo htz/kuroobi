@@ -1,0 +1,21 @@
+---
+import { href, t } from '../i18n';
+import Base from '../layouts/Base.astro';
+
+// One page answers every missing path in either language, so it says it in both and its language menu leads to each top page.
+---
+
+<Base title={`${t('ja', 'notFound.title')} / ${t('en', 'notFound.title')}`} active="top" path="/">
+  <main class="w-wrap nf">
+    <div lang="ja" class="nf-block">
+      <h1 class="nf-title">{t('ja', 'notFound.title')}</h1>
+      <p class="w-keep">{t('ja', 'notFound.body')}</p>
+      <a href={href('ja', '/')} class="w-more">{t('ja', 'site.home')}</a>
+    </div>
+    <div lang="en" class="nf-block">
+      <p class="nf-title">{t('en', 'notFound.title')}</p>
+      <p>{t('en', 'notFound.body')}</p>
+      <a href={href('en', '/')} class="w-more">{t('en', 'site.home')}</a>
+    </div>
+  </main>
+</Base>

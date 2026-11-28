@@ -1,0 +1,155 @@
+---
+import { render } from 'astro:content';
+import { href, t, type Lang } from '../i18n';
+import Base from '../layouts/Base.astro';
+import { dateText, notesIn, readingMinutes, slugOf, type Note } from '../lib/notes';
+import Position from './notes/Position.astro';
+
+interface Props {
+  lang: Lang;
+  note: Note;
+}
+const { lang, note } = Astro.props;
+const { Content, headings } = await render(note);
+const toc = headings.filter((h) => h.depth === 2);
+const all = await notesIn(lang);
+const i = all.findIndex((n) => n.id === note.id);
+// The list runs newest first, so the previous article is the next one down.
+const prev = all[i + 1];
+const next = all[i - 1];
+const tag = note.data.tags[0];
+---
+
+<Base title={note.data.title} description={note.data.summary} active="notes">
+  <main class="w-wrap na">
+    <header class="na-head">
+      <nav aria-label={t(lang, 'notes.breadcrumb')} class="na-crumbs">
+        <a href={href(lang, '/notes/')} class="w-nav">{t(lang, 'notes.title')}</a>
+        <span aria-hidden="true">/</span>
+        <a href={href(lang, `/notes/tags/${tag}/`)} class="w-nav">{t(lang, 'tags.' + tag)}</a>
+      </nav>
+      <h1>{note.data.title}</h1>
+      <div class="na-meta">
+        <time datetime={note.data.date.toISOString().slice(0, 10)}>{dateText(note.data.date, lang)}</time>
+        <span>{t(lang, 'notes.minutes', { n: readingMinutes(note, lang) })}</span>
+        {note.data.tags.map((id) => <span class="tag">{t(lang, 'tags.' + id)}</span>)}
+      </div>
+    </header>
+
+    <div class="na-cols">
+      <article class="na-body" data-copy={t(lang, 'notes.copy')} data-copied={t(lang, 'notes.copied')} data-new-window={t(lang, 'site.newWindow')}>
+        <Content components={{ Position }} />
+        {
+          (prev || next) && (
+            <nav aria-label={t(lang, 'notes.around')} class="na-around">
+              {prev ? (
+                <a href={href(lang, `/notes/${slugOf(prev)}/`)} class="w-plain w-card">
+                  <span>{t(lang, 'notes.prev')}</span>
+                  <b>{prev.data.title}</b>
+                </a>
+              ) : <span />}
+              {next && (
+                <a href={href(lang, `/notes/${slugOf(next)}/`)} class="w-plain w-card na-next">
+                  <span>{t(lang, 'notes.next')}</span>
+                  <b>{next.data.title}</b>
+                </a>
+              )}
+            </nav>
+          )
+        }
+      </article>
+
+      {
+        toc.length > 0 && (
+          <aside aria-label={t(lang, 'notes.toc')} class="na-toc">
+            <span class="na-toc-head">{t(lang, 'notes.toc')}</span>
+            <ol>
+              {toc.map((h) => (
+                <li>
+                  <a href={'#' + h.slug} class="w-nav" data-toc={h.slug} aria-current={h === toc[0] ? 'true' : undefined}>{h.text}</a>
+                </li>
+              ))}
+            </ol>
+          </aside>
+        )
+      }
+    </div>
+  </main>
+</Base>
+
+<script>
+  const EXT_ICON = '<svg class="w-ext-icon" aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path></svg>';
+  // Code blocks and tables get the frame the design draws around them; markdown has no markup for either.
+  const article = document.querySelector<HTMLElement>('.na-body');
+  const check = '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>';
+  let toast: HTMLElement | null = null;
+  const done = (text: string) => {
+    toast?.remove();
+    const t = document.createElement('div');
+    t.className = 'w-toast';
+    t.setAttribute('role', 'status');
+    t.innerHTML = `<span class="w-toast-icon">${check}</span>`;
+    t.append(text);
+    document.body.append(t);
+    toast = t;
+    setTimeout(() => t.remove(), 2000);
+  };
+  if (article) {
+    for (const pre of article.querySelectorAll<HTMLElement>('pre')) {
+      const figure = document.createElement('figure');
+      figure.className = 'na-code';
+      const bar = document.createElement('div');
+      bar.className = 'na-code-bar';
+      const lang = document.createElement('span');
+      lang.className = 'na-code-lang';
+      lang.textContent = pre.dataset.language && pre.dataset.language !== 'plaintext' ? pre.dataset.language : '';
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'w-btn na-code-copy';
+      b.textContent = article.dataset.copy!;
+      b.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(pre.innerText);
+          done(article.dataset.copied!);
+        } catch {
+          // Without clipboard access the code is still there to select.
+        }
+      });
+      bar.append(lang, b);
+      pre.replaceWith(figure);
+      figure.append(bar, pre);
+    }
+    for (const table of article.querySelectorAll('table')) {
+      const wrap = document.createElement('div');
+      wrap.className = 'na-table';
+      table.replaceWith(wrap);
+      wrap.append(table);
+    }
+    // A link out of the site opens in a new window and says so, as ExtIcon.astro marks the site's own.
+    for (const a of article.querySelectorAll<HTMLAnchorElement>('a[href^="http"]')) {
+      if (a.host === location.host) continue;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.classList.add('w-ext');
+      a.insertAdjacentHTML('beforeend', EXT_ICON + `<span class="w-sr"> (${article.dataset.newWindow})</span>`);
+    }
+  }
+  // The table of contents marks the section being read; the first until another comes into view.
+  const links = [...document.querySelectorAll<HTMLAnchorElement>('[data-toc]')];
+  const seen = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        for (const a of links) {
+          if (a.dataset.toc === e.target.id) a.setAttribute('aria-current', 'true');
+          else a.removeAttribute('aria-current');
+        }
+      }
+    },
+    { rootMargin: '0px 0px -70% 0px' },
+  );
+  for (const a of links) {
+    const h = document.getElementById(a.dataset.toc!);
+    if (h) seen.observe(h);
+  }
+</script>

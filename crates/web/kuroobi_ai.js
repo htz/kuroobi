@@ -9,6 +9,18 @@ const imports = {
   },
 };
 
+/**
+ * A selective solve's ProbCut confidence `t` (sigmas) as the share of a normal distribution within ±t, in whole
+ * percent (Abramowitz-Stegun 7.1.26, as the app's `confidence_pct`); 0 when there was none.
+ */
+function confidence(t) {
+  if (!(t > 0)) return 0;
+  const x = t / Math.SQRT2;
+  const k = 1 / (1 + 0.3275911 * x);
+  const poly = k * (0.254829592 + k * (-0.284496736 + k * (1.421413741 + k * (-1.453152027 + k * 1.061405429))));
+  return Math.round((1 - poly * Math.exp(-x * x)) * 100);
+}
+
 export class KuroobiAI {
   /**
    * @param {string | URL | ArrayBuffer | Uint8Array} wasmUrl where kuroobi_ai.wasm is, or its bytes
@@ -50,6 +62,7 @@ export class KuroobiAI {
       score: this.x.last_score(),
       depth: this.x.last_depth(),
       exact: this.x.last_exact() !== 0,
+      selective: confidence(this.x.last_selective()),
       nodes: this.x.last_nodes(),
     };
   }
@@ -62,6 +75,7 @@ export class KuroobiAI {
       score: this.x.last_score(),
       depth: this.x.last_depth(),
       exact: this.x.last_exact() !== 0,
+      selective: confidence(this.x.last_selective()),
       nodes: this.x.last_nodes(),
     };
   }
@@ -69,7 +83,12 @@ export class KuroobiAI {
   /** The position's value for the mover: solved from `solveEmpties` squares left, else a `depth`-deep search. */
   evaluate(depth, solveEmpties) {
     const score = this.x.evaluate(depth >>> 0, solveEmpties >>> 0);
-    return { score, exact: this.x.last_exact() !== 0, depth: this.x.last_depth() };
+    return {
+      score,
+      exact: this.x.last_exact() !== 0,
+      depth: this.x.last_depth(),
+      selective: confidence(this.x.last_selective()),
+    };
   }
 
   /** Every legal move valued at `depth`, best first. */

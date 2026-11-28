@@ -1,0 +1,175 @@
+---
+import { Image } from 'astro:assets';
+import appShot from '../assets/app-play.png';
+import { href, t, type Lang } from '../i18n';
+import { dateText, notesIn, slugOf } from '../lib/notes';
+import { legal, replay } from '../lib/othello';
+import { Board, BoardDefs } from './Board';
+import Logo from './Logo.astro';
+import PlayApp from './PlayApp';
+
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+const { pos, moves } = replay('f5d6c3d3c4f4f6f3e6e7d7c6c5b5b6b4');
+const notes = (await notesIn(lang)).slice(0, 4);
+const features =[1, 2, 3].map((i) => ({ h: t(lang, `home.f${i}h`), p: t(lang, `home.f${i}p`) }));
+---
+
+<main>
+  <BoardDefs />
+  <section class="w-wrap hero">
+    <div class="hero-text">
+      <span class="w-eyebrow">{t(lang, 'home.eyebrow')}</span>
+      <h1 class="hero-logo"><Logo label="KUROOBI" /></h1>
+      <p class="hero-lead w-keep">{t(lang, 'home.lead')}</p>
+      <div><a href={href(lang, '/play/')} class="w-btn w-btn-primary w-primary">{t(lang, 'home.ctaPlay')}</a></div>
+    </div>
+    <div class="hero-board">
+      <Board
+        lang={lang}
+        cells={pos.cells}
+        legal={legal(pos.cells, pos.turn)}
+        turn={pos.turn === 1 ? 'b' : 'w'}
+        last={moves.at(-1)}
+        coords={false}
+        disabled
+      />
+    </div>
+  </section>
+
+  <section id="web" aria-labelledby="web-h" class="band">
+    <div class="w-wrap split">
+      <div class="stack">
+        <span class="w-eyebrow">Kuroobi for web</span>
+        <h2 id="web-h" class="h2 w-keep">{t(lang, 'home.webH')}</h2>
+        <p class="sub w-keep">{t(lang, 'home.webP')}</p>
+      </div>
+      <div class="w-card web-card">
+        <div class="web-shot" aria-hidden="true" inert>
+          <PlayApp lang={lang} mode="play" preview="f5d6c3d3c4f4f6f3e6e7d7c6c5b5b6" />
+        </div>
+        <a href={href(lang, '/play/')} class="web-link" aria-label={t(lang, 'home.webCta')}></a>
+      </div>
+    </div>
+  </section>
+
+  <section id="how" aria-labelledby="how-h" class="band how">
+    <div class="w-wrap how-in">
+      <div class="stack how-head">
+        <span class="w-eyebrow">{t(lang, 'home.howLabel')}</span>
+        <h2 id="how-h" class="h2 w-keep">{t(lang, 'home.howH')}</h2>
+      </div>
+      <div class="features">
+        {
+          features.map((f) => (
+            <div class="feature">
+              <h3 class="w-keep">{f.h}</h3>
+              <p class="w-keep">{f.p}</p>
+            </div>
+          ))
+        }
+      </div>
+      <div><a href={href(lang, '/notes/')} class="w-more">{t(lang, 'home.howMore')}</a></div>
+    </div>
+  </section>
+
+  <section id="app" aria-labelledby="app-h" class="band">
+    <div class="w-wrap split">
+      <div class="stack">
+        <div class="app-label">
+          <span class="w-eyebrow">{t(lang, 'home.appLabel')}</span>
+          <span class="soon">COMING SOON</span>
+        </div>
+        <h2 id="app-h" class="h2 w-keep">{t(lang, 'home.appH')}</h2>
+        <p class="sub w-keep">{t(lang, 'home.appP')}</p>
+      </div>
+      <Image src={appShot} alt={t(lang, 'home.appAlt')} widths={[640, 1240]} sizes="(max-width: 860px) 100vw, 560px" class="app-shot" />
+    </div>
+  </section>
+
+  {
+    notes.length > 0 && (
+      <section aria-labelledby="notes-h" class="band">
+        <div class="w-wrap notes">
+          <div class="notes-head">
+            <h2 id="notes-h" class="h2 w-keep">{t(lang, 'home.notesH')}</h2>
+            <a href={href(lang, '/notes/')} class="w-more">{t(lang, 'home.notesAll')}</a>
+          </div>
+          <div class="notes-grid">
+            {notes.map((n) => (
+              <a href={href(lang, `/notes/${slugOf(n)}/`)} class="w-plain w-card note">
+                <span class="tag">{t(lang, 'tags.' + n.data.tags[0])}</span>
+                <span class="note-title">{n.data.title}</span>
+                <span class="note-sum">{n.data.summary}</span>
+                <time datetime={n.data.date.toISOString().slice(0, 10)}>{dateText(n.data.date, lang)}</time>
+              </a>
+            ))}
+          </div>
+        </div>
+      </section>
+    )
+  }
+</main>
+
+<style>
+  .hero {
+    padding-top: clamp(48px, 8vw, 104px); padding-bottom: var(--s-section);
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(440px, 100%), 1fr));
+    align-items: center; gap: clamp(40px, 6vw, 80px);
+  }
+  .hero-text { display: flex; flex-direction: column; gap: 28px; min-width: 0; }
+  .hero-logo { margin: 0; width: min(400px, 100%); color: var(--text); }
+  .hero-lead { margin: 0; max-width: 34em; font-size: var(--t-lead); line-height: 1.9; text-wrap: pretty; }
+  .hero-board { justify-self: center; width: 100%; max-width: 500px; aspect-ratio: 1 / 1; }
+
+  .band { border-top: 1px solid var(--border); }
+  .split {
+    padding-top: var(--s-section); padding-bottom: var(--s-section);
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
+    align-items: center; gap: clamp(40px, 6vw, 72px);
+  }
+  .stack { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  .h2 { margin: 0; font-size: var(--t-h1); line-height: var(--lh-head); font-weight: 700; text-wrap: balance; }
+  .sub { margin: 0; line-height: 1.9; color: var(--sub); text-wrap: pretty; }
+  .web-card {
+    display: block; position: relative; width: 100%; aspect-ratio: 1280 / 800; overflow: hidden;
+    border: 1px solid var(--border); border-radius: var(--r-card); background: var(--bg); box-shadow: var(--sh-2);
+  }
+  /* The screen laid out at twice the card's width, then halved, so it reads as the screen and not a squeezed copy. */
+  .web-shot {
+    position: absolute; left: 0; top: 0; width: 200%; box-sizing: border-box; padding: 24px 40px;
+    transform: scale(.5); transform-origin: 0 0; pointer-events: none;
+  }
+  .web-link { position: absolute; inset: 0; border-radius: inherit; }
+
+  .how { background: var(--panel); border-bottom: 1px solid var(--border); }
+  .how-in { padding-top: var(--s-section); padding-bottom: var(--s-section); display: flex; flex-direction: column; gap: 48px; }
+  .how-head { gap: 16px; max-width: 40em; }
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 40px; }
+  .feature { display: flex; flex-direction: column; gap: 12px; padding-top: 20px; border-top: 2px solid var(--text); }
+  .feature h3 { margin: 0; font-size: var(--t-h3); line-height: 1.5; font-weight: 700; }
+  .feature p { margin: 0; font-size: var(--t-small); line-height: 1.9; color: var(--sub); }
+
+  .notes { padding-top: var(--s-section); padding-bottom: var(--s-section); display: flex; flex-direction: column; gap: 32px; }
+  .notes-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 16px; }
+  .notes-head .w-more { margin-left: auto; }
+  .notes-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 20px; }
+  .note { display: flex; flex-direction: column; gap: 12px; padding: 24px; border: 1px solid var(--border); border-radius: var(--r-card); background: var(--panel); }
+  .note-title { font-size: var(--t-h3); line-height: 1.5; font-weight: 700; text-wrap: pretty; }
+  .note-sum { flex: 1; font-size: var(--t-small); line-height: 1.8; color: var(--sub); }
+  .note time { font-size: var(--t-meta); color: var(--sub); font-variant-numeric: tabular-nums; }
+
+  #app { border-bottom: 0; }
+  .how + #app { border-top: 0; }
+  .app-label { display: flex; align-items: center; gap: 12px; }
+  .soon {
+    padding: 3px 12px; border-radius: var(--r-pill); border: 1px solid var(--border);
+    font-size: var(--t-meta); font-weight: 700; letter-spacing: .08em; color: var(--sub);
+  }
+  .app-shot {
+    display: block; width: 100%; height: auto; aspect-ratio: 2064 / 1600; object-fit: cover;
+    border-radius: var(--r-card); border: 1px solid var(--border); background: var(--panel);
+  }
+</style>

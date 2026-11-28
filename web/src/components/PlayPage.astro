@@ -1,0 +1,38 @@
+---
+import { href, t, type Lang } from '../i18n';
+import Base from '../layouts/Base.astro';
+import { notesIn, slugOf } from '../lib/notes';
+import PlayApp from './PlayApp';
+
+interface Props {
+  lang: Lang;
+  mode: 'play' | 'study';
+}
+const { lang, mode } = Astro.props;
+const related = (await notesIn(lang)).filter((n) => n.data.tags.includes('web'));
+---
+
+<Base title={t(lang, mode === 'play' ? 'play.title' : 'play.studyTitle')} description={t(lang, 'play.description')} active="web">
+  <main class="w-wrap play">
+    <PlayApp client:load lang={lang} mode={mode} />
+  </main>
+  {
+    related.length > 0 && (
+      <section aria-labelledby="rel-h" class="rel">
+        <div class="w-wrap rel-in">
+          <h2 id="rel-h">{t(lang, 'play.related')}</h2>
+          {related.map((n) => <a href={href(lang, `/notes/${slugOf(n)}/`)} class="w-more">{n.data.title}</a>)}
+          <a href={href(lang, '/') + '#app'} class="w-more rel-app">{t(lang, 'play.appSoon')}</a>
+        </div>
+      </section>
+    )
+  }
+</Base>
+
+<style>
+  .play { padding-top: 24px; padding-bottom: 56px; }
+  .rel { border-top: 1px solid var(--border); }
+  .rel-in { padding-top: 28px; padding-bottom: 44px; display: flex; flex-wrap: wrap; align-items: center; gap: 0 32px; }
+  .rel h2 { margin: 0; font-size: var(--t-small); font-weight: 700; color: var(--sub); }
+  .rel-app { margin-left: auto; }
+</style>

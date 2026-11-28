@@ -1,0 +1,43 @@
+---
+import { href, t, type Lang } from '../i18n';
+import ExtIcon from './ExtIcon.astro';
+import Logo from './Logo.astro';
+
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+const home = href(lang, '/');
+---
+
+<footer class="ft" lang={lang}>
+  <div class="w-wrap ft-in">
+    <div class="ft-top">
+      <div class="ft-brand">
+        <a href={home} aria-label={t(lang, 'site.home')} class="w-plain ft-logo"><Logo /></a>
+        <span class="ft-sub">{t(lang, 'footer.tagline')}</span>
+      </div>
+      <nav aria-label={t(lang, 'footer.nav')} class="ft-nav">
+        <div class="ft-col">
+          <span class="ft-head">KUROOBI</span>
+          <a href={home + '#app'} class="w-nav">{t(lang, 'site.app')}</a>
+          <a href={home + '#how'} class="w-nav">{t(lang, 'footer.features')}</a>
+          <a href="https://github.com/htz/kuroobi" class="w-nav w-ext" target="_blank" rel="noopener">GitHub<ExtIcon lang={lang} /></a>
+        </div>
+        <div class="ft-col">
+          <span class="ft-head">Kuroobi for web</span>
+          <a href={href(lang, '/play/')} class="w-nav">{t(lang, 'footer.play')}</a>
+          <a href={href(lang, '/play/study/')} class="w-nav">{t(lang, 'footer.study')}</a>
+        </div>
+        <div class="ft-col">
+          <span class="ft-head">{t(lang, 'site.notes')}</span>
+          <a href={href(lang, '/notes/')} class="w-nav">{t(lang, 'footer.allNotes')}</a>
+        </div>
+      </nav>
+    </div>
+    <div class="ft-bottom">
+      <span>© 2026 htz</span>
+      <span class="ft-tm">{t(lang, 'footer.trademark')}</span>
+    </div>
+  </div>
+</footer>
