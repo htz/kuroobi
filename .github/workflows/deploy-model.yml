@@ -1,0 +1,69 @@
+name: Deploy model
+
+# The web model whenever web/model/nnue.bin changes on main: uploaded under its hash, then
+# engine/model.json is pointed at it. The site itself is not rebuilt.
+on:
+  push:
+    branches: [main, web-model]
+    paths:
+      - 'web/model/**'
+      - '.github/workflows/deploy-model.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-model
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          lfs: true
+
+      - name: Install brotli
+        run: sudo apt-get install -y --no-install-recommends brotli
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy
+        env:
+          bucket: ${{ vars.KUROOBI_WEB_BUCKET }}
+          distribution: ${{ vars.KUROOBI_WEB_DISTRIBUTION_ID }}
+        shell: sh -eu {0}
+        run: |
+          model=web/model/nnue.bin
+          [ -s "$model" ] || { echo "no $model" >&2; exit 1; }
+          hash=$(if command -v sha256sum > /dev/null; then sha256sum "$model"; else shasum -a 256 "$model"; fi | cut -c1-12)
+          name=nnue-$hash.bin
+          bytes=$(wc -c < "$model" | tr -d ' ')
+
+          stage=$(mktemp -d)
+          trap 'rm -rf "$stage"' EXIT
+          # CloudFront compresses only up to 10 MB, so the model goes up brotli-compressed; the index carries the real size
+          # because a compressed response's length is not it.
+          if ! aws s3api head-object --bucket "$bucket" --key "engine/$name" > /dev/null 2>&1; then
+            brotli -q 11 -c "$model" > "$stage/model"
+            aws s3 cp "$stage/model" "s3://$bucket/engine/$name" --content-encoding br \
+              --content-type application/octet-stream --cache-control 'public, max-age=31536000, immutable'
+          fi
+
+          before=$(aws s3 cp "s3://$bucket/engine/model.json" - 2>/dev/null | sed -n 's/.*"url":"\/engine\/\([^"]*\)".*/\1/p' || true)
+          printf '{"url":"/engine/%s","bytes":%s}\n' "$name" "$bytes" > "$stage/model.json"
+          aws s3 cp "$stage/model.json" "s3://$bucket/engine/model.json" \
+            --content-type application/json --cache-control 'no-cache'
+          aws cloudfront create-invalidation --distribution-id "$distribution" --paths /engine/model.json --query Invalidation.Id --output text
+
+          # A page that read the index just before keeps the model it was told of; anything older goes.
+          aws s3api list-objects-v2 --bucket "$bucket" --prefix engine/nnue- --query 'Contents[].Key' --output text | tr '\t' '\n' |
+            while read -r key; do
+              case "$key" in "engine/$name" | "engine/$before" | None | '') ;; *) aws s3 rm "s3://$bucket/$key" ;; esac
+            done

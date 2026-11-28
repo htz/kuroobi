@@ -1,0 +1,96 @@
+name: Deploy site
+
+# The site (pages, scripts and the engine's wasm) whenever what it is built from changes on main.
+# The model is deployed on its own (deploy-model.yml), so a site change never re-uploads it.
+on:
+  push:
+    branches: [main, web-model]
+    paths:
+      - 'web/**'
+      - '!web/model/**'
+      - 'crates/web/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/gui/src-ui/tokens.css'
+      - 'crates/gui/icons/**'
+      - '.github/workflows/deploy-site.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-site
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown, wasm32-wasip1-threads
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: web
+        run: npm run check
+
+      - name: Install brotli
+        run: sudo apt-get install -y --no-install-recommends brotli
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Build and deploy
+        working-directory: web
+        env:
+          bucket: ${{ vars.KUROOBI_WEB_BUCKET }}
+          distribution: ${{ vars.KUROOBI_WEB_DISTRIBUTION_ID }}
+        shell: sh -eu {0}
+        run: |
+          sh scripts/engine.sh --wasm
+          # The build fetches the fonts from Google, which now and then fails one file; a retry gets it.
+          for try in 1 2 3; do
+            npm run build && break
+            [ "$try" = 3 ] && exit 1
+            sleep 15
+          done
+          dist=$PWD/dist
+          long='public, max-age=31536000, immutable'
+
+          # CloudFront compresses only up to 10 MB and the wasm is served as is, so it goes up brotli-compressed.
+          # Every version stays: a page still open asks for its own.
+          stage=$(mktemp -d)
+          trap 'rm -rf "$stage"' EXIT
+          for f in "$dist"/engine/kuroobi_ai-*.wasm; do  # the single-threaded and the threaded (kuroobi_ai-mt-*) build
+            brotli -q 11 -c "$f" > "$stage/wasm"
+            aws s3 cp "$stage/wasm" "s3://$bucket/engine/$(basename "$f")" \
+              --content-encoding br --content-type application/wasm --cache-control "$long"
+          done
+
+          # New assets go up before the pages that name them, and old ones go only after.
+          aws s3 sync "$dist/_astro" "s3://$bucket/_astro" --cache-control "$long"
+          aws s3 sync "$dist" "s3://$bucket" --delete --exclude 'engine/*' --exclude '_astro/*' \
+            --cache-control 'public, max-age=0, must-revalidate'
+          aws s3 sync "$dist/_astro" "s3://$bucket/_astro" --delete --cache-control "$long"
+          aws cloudfront create-invalidation --distribution-id "$distribution" --paths '/*' --query Invalidation.Id --output text
