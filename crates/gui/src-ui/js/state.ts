@@ -29,6 +29,7 @@ export interface MoveInfo {
   exact: boolean;
   learned: boolean;
   secs: number;
+  selective?: number;
 }
 
 export const LEVELS = [

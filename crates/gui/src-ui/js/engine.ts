@@ -86,6 +86,7 @@ export function useEngineTurn(g: Game) {
             exact: r.exact,
             learned: r.learned,
             secs: r.secs,
+            selective: r.selective ?? undefined,
           },
         }));
         applyView(next);
@@ -156,7 +157,7 @@ export function useGraph(g: Game, ggsMatch: boolean, ask: Ask) {
       const p = await api.evalAt(n, depth);
       if (seq !== seqRef.current) return false;
       if (Number.isFinite(p.value)) {
-        vals[n] = { value: p.value, exact: p.exact, book: p.from_book };
+        vals[n] = { value: p.value, exact: p.exact, book: p.from_book, selective: p.selective ?? undefined };
       }
       setValues([...vals]);
       return true;

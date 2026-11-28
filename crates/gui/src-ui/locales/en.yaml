@@ -331,6 +331,8 @@ data:
     book_learned: "Learned"
     search: "Search"
     solve: "Solve"
+    selective: "Selective"
+    selective_at: "Sel. {p}%"
   trend:
     split: "Split at move {n}"
     title: "Eval"

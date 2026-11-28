@@ -324,6 +324,8 @@ data:
     book_learned: "定石·学"
     search: "探索"
     solve: "読切"
+    selective: "確率"
+    selective_at: "確率 {p}%"
   trend:
     split: "分岐 {n} 手目"
     title: "評価値"

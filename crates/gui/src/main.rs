@@ -301,6 +301,8 @@ struct ThinkView {
     learned: bool,
     secs: f32,
     nodes: u64,
+    /// A selective endgame solve's confidence in %.
+    selective: Option<u32>,
 }
 
 #[derive(Serialize, Clone)]
@@ -317,6 +319,15 @@ struct EvalPoint {
     value: f32,
     exact: bool,
     from_book: bool,
+    selective: Option<u32>,
+}
+
+/// The confidence (%) of `mv` when it solved `board` to the end selectively; `None` for a solve or a search.
+fn selective_pct(mv: &kuroobi::engine::MoveEval, board: &Board) -> Option<u32> {
+    let to_end = mv.depth >= u32::from(board.empty_count());
+    (!mv.exact && to_end)
+        .then_some(mv.mpc_t?)
+        .map(play::confidence_pct)
 }
 
 fn board_at_line(game: &mut Reversi, n: usize) -> Result<Board, String> {
@@ -1021,6 +1032,7 @@ async fn think(app: State<'_, App>) -> Result<ThinkView, String> {
         learned: mv.learned,
         secs,
         nodes,
+        selective: selective_pct(&mv, &board),
     })
 }
 
@@ -1093,7 +1105,7 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
     let act = app.activity.clone();
     let stop = app.stop.clone();
     let stop_in = stop.clone();
-    let (value, exact, from_book) = tauri::async_runtime::spawn_blocking(move || {
+    let (value, exact, from_book, selective) = tauri::async_runtime::spawn_blocking(move || {
         let _g = ActivityGuard::begin(&act, "analyzing");
         let mut guard = eng.lock().unwrap();
         // As in analyze_live: clear the stop flag only after the engine is free of the last search.
@@ -1103,10 +1115,10 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
         let e = guard.as_mut().unwrap();
         let from_book = e.book_base_value(&board);
         if let Some(v) = from_book {
-            return (v, false, true);
+            return (v, false, true, None);
         }
         let mv = e.eval_position(&board, depth);
-        (mv.value, mv.exact, false)
+        (mv.value, mv.exact, false, selective_pct(&mv, &board))
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -1124,6 +1136,7 @@ async fn eval_at(app: State<'_, App>, n: usize, depth: u32) -> Result<EvalPoint,
         value,
         exact,
         from_book,
+        selective,
     })
 }
 

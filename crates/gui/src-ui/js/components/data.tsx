@@ -9,16 +9,25 @@ export type Move = {
   n: number; move: string; color: StoneColor;
   score?: number; loss?: number; secs?: number;
   src?: string;
+  /** With `src` 'selective': the selective solve's confidence in %. */
+  selective?: number;
   pass?: boolean;
 };
 
-export type MoveSrc = 'book' | 'book_learned' | 'search' | 'solve';
+export type MoveSrc = 'book' | 'book_learned' | 'search' | 'solve' | 'selective';
 
 const SRC_KEY: Record<string, string> = {
   book: 'data.src.book',
   book_learned: 'data.src.book_learned',
   search: 'data.src.search',
   solve: 'data.src.solve',
+  selective: 'data.src.selective',
+};
+
+/** `+1.5`, `-2`, and a value that rounds to zero without a sign. */
+const signedFixed = (v: number, decimals: number) => {
+  const body = v.toFixed(decimals);
+  return Number(body) === 0 ? body.replace('-', '') : (v > 0 ? '+' : '') + body;
 };
 
 export const srcLabel = (src: string): string => (SRC_KEY[src] ? t(SRC_KEY[src]) : src);
@@ -73,14 +82,14 @@ export function KifuTable({ moves, current, onSelect, decimals }: {
               </span>
               <span style={{ display: 'flex', justifyContent: 'flex-end', gap: 5 }}>
                 {m.loss ? <span style={{ fontSize: 'var(--fs-7)', color: 'var(--bad)' }}>▼{m.loss}</span> : null}
-                <span>{m.score === undefined ? '' : (m.score > 0 ? '+' : '') + m.score.toFixed(decimals)}</span>
+                <span>{m.score === undefined ? '' : signedFixed(m.score, decimals)}</span>
               </span>
               {timed && <span style={{ color: 'var(--sub)', fontSize: 'var(--fs-6)' }}>{m.secs?.toFixed(1) ?? ''}</span>}
               <span style={{
                 fontSize: 'var(--fs-6)',
                 color: m.src && srcIsBook(m.src) ? 'var(--gold)'
-                  : m.src === 'solve' ? 'var(--text)' : 'var(--sub)',
-              }}>{m.src ? srcLabel(m.src) : ''}</span>
+                  : m.src === 'solve' || m.src === 'selective' ? 'var(--text)' : 'var(--sub)',
+              }}>{m.src === 'selective' ? t('data.src.selective_at', { p: m.selective ?? 0 }) : m.src ? srcLabel(m.src) : ''}</span>
             </TableRow>
           );
         })}
@@ -100,9 +109,10 @@ export function StoneDot({ color, size = 9 }: { color: StoneColor; size?: number
   }} />;
 }
 
-export type GraphPoint = { value: number; exact?: boolean; book?: boolean };
+/** `selective`: a selective endgame solve's confidence in %, drawn as a ring between a solve and a search. */
+export type GraphPoint = { value: number; exact?: boolean; book?: boolean; selective?: number };
 
-export function EvalGraph({ points, plies, cursor, blunder, busy, extra, onJump, moveName, open }: {
+export function EvalGraph({ points, plies, cursor, blunder, busy, extra, onJump, moveName, open, decimals = 1 }: {
   points: (GraphPoint | undefined)[];
   plies?: number;
   cursor?: number;
@@ -112,6 +122,7 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, extra, onJump,
   onJump: (n: number) => void;
   moveName: (n: number) => string | undefined;
   open?: boolean;
+  decimals?: number;
 }) {
   const [hover, setHover] = React.useState<number | null>(null);
   const [box, setBox] = React.useState({ w: 0, h: 0 });
@@ -196,18 +207,19 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, extra, onJump,
         <span>{title}</span>
         <Legend tone="gold">{t('data.src.book')}</Legend>
         <Legend tone="text">{t('data.src.solve')}</Legend>
+        <Legend tone="ring">{t('data.src.selective')}</Legend>
         <Legend tone="accent">{t('data.src.search')}</Legend>
         <span style={{ minWidth: 132, color: 'var(--text)', whiteSpace: 'nowrap' }}>
           {/* Every move under the pointer reads out, one without a value as a dash. */}
           {hover !== null && drawn && <>
             {shownMove ? t('data.ply_move', { n: hover, move: shownMove }) : t('data.ply', { n: hover })}
             {' '}<b style={{ fontWeight: 600 }}>
-              {shown ? (shown.value > 0 ? '+' : '') + shown.value.toFixed(1) : '—'}
+              {shown ? signedFixed(shown.value, decimals) : '—'}
             </b>
             {shown && (
               <span style={{ color: shown.book ? 'var(--gold)' : 'var(--sub)' }}>
-                {' '}{t(shown.book ? 'data.src.book' : shown.exact ? 'data.src.solve'
-                  : 'data.src.search')}
+                {' '}{shown.book ? t('data.src.book') : shown.exact ? t('data.src.solve')
+                  : shown.selective ? t('data.src.selective_at', { p: shown.selective }) : t('data.src.search')}
               </span>
             )}
           </>}
@@ -265,10 +277,13 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, extra, onJump,
           )}
 
           {points.map((p, n) => p && (
-            <circle key={n} cx={x(n)} cy={y(clamp(p.value))}
-                    r={n === hover ? 5 : p.exact || p.book ? 4 : 3}
-                    fill={p.book ? 'var(--gold)' : p.exact ? 'var(--text)' : 'var(--accent)'}
-                    stroke="var(--bg)" strokeWidth={1} />
+            p.selective && !p.exact && !p.book
+              ? <circle key={n} cx={x(n)} cy={y(clamp(p.value))} r={n === hover ? 4.5 : 3.5}
+                        fill="var(--bg)" stroke="var(--text)" strokeWidth={1.5} />
+              : <circle key={n} cx={x(n)} cy={y(clamp(p.value))}
+                        r={n === hover ? 5 : p.exact || p.book ? 4 : 3}
+                        fill={p.book ? 'var(--gold)' : p.exact ? 'var(--text)' : 'var(--accent)'}
+                        stroke="var(--bg)" strokeWidth={1} />
           ))}
           {hover !== null && drawn && (
             <line x1={x(hover)} y1={T} x2={x(hover)} y2={H - B}
@@ -291,10 +306,14 @@ export function EvalGraph({ points, plies, cursor, blunder, busy, extra, onJump,
   );
 }
 
-function Legend({ tone, children }: { tone: 'gold' | 'text' | 'accent'; children: React.ReactNode }) {
+function Legend({ tone, children }: { tone: 'gold' | 'text' | 'accent' | 'ring'; children: React.ReactNode }) {
   return (
     <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-      <span style={{ flex: 'none', width: 7, height: 7, borderRadius: '50%', background: `var(--${tone})` }} />
+      <span style={{
+        flex: 'none', width: 7, height: 7, borderRadius: '50%', boxSizing: 'border-box',
+        background: tone === 'ring' ? 'transparent' : `var(--${tone})`,
+        border: tone === 'ring' ? '1.5px solid var(--text)' : 'none',
+      }} />
       {children}
     </span>
   );

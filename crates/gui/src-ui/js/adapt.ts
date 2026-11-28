@@ -26,6 +26,7 @@ export function movesOf(
     const gp = values?.[n];
     const value = shown[i];
     const exact = rec ? rec.exact : gp?.exact ?? false;
+    const selective = rec ? rec.selective : gp?.selective;
     const book = rec ? rec.source === 'book' : gp?.book ?? false;
     const prev = i === 0 ? values?.[0]?.value ?? 0 : shown[i - 1];
     return {
@@ -38,7 +39,8 @@ export function movesOf(
       secs: rec?.secs,
       src: value === undefined ? undefined
         : book ? ((rec?.learned ? 'book_learned' : 'book') satisfies MoveSrc)
-        : ((exact ? 'solve' : 'search') satisfies MoveSrc),
+        : ((exact ? 'solve' : selective ? 'selective' : 'search') satisfies MoveSrc),
+      selective,
     };
   });
 }

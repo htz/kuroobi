@@ -19,6 +19,8 @@ export interface ThinkView {
   learned: boolean;
   secs: number;
   nodes: number;
+  /** A selective endgame solve's confidence in %. */
+  selective: number | null;
 }
 
 export interface SearchStat {
@@ -38,6 +40,7 @@ export interface EvalPoint {
   value: number;
   exact: boolean;
   from_book: boolean;
+  selective: number | null;
 }
 
 export interface LogLine {
