@@ -28,6 +28,8 @@ export type Reply =
 
 /** The wasm is the site's own, named by its hash at build time (scripts/engine.sh puts it there). */
 export const WASM_URL = `/engine/kuroobi_ai-${__WASM_HASH__}.wasm`;
+/** The threaded build, for a cross-origin isolated page. */
+export const WASM_MT_URL = `/engine/kuroobi_ai-mt-${__WASM_MT_HASH__}.wasm`;
 /**
  * The model is deployed apart from the site: this small file, never cached, names the current one
  * (a path carrying its hash, so a browser fetches the model again only when it changed) and its size.

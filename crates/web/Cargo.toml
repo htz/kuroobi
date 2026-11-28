@@ -7,7 +7,8 @@ description = "Kuroobi for web's engine: the functions the page calls, built for
 
 # Not in the workspace's default-members: features unify across what one cargo run builds,
 # so building this beside the app would hand the app the small web network.
-# Build it alone: cargo build -p web --release --target wasm32-unknown-unknown
+# Build it alone: cargo build -p web --release --target wasm32-unknown-unknown (single-threaded) or
+# --target wasm32-wasip1-threads (threaded: kuroobi_ai.js lends it workers through wasi_threads.js)
 
 [lib]
 name = "kuroobi_ai"

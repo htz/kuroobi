@@ -5,3 +5,8 @@ rustflags = ["-C", "target-cpu=x86-64-v3"]
 # Kuroobi for web's vector kernel needs SIMD, which every current browser runs.
 [target.wasm32-unknown-unknown]
 rustflags = ["-C", "target-feature=+simd128"]
+
+# The threaded build shares one memory among its workers, and a shared memory is reserved up to its maximum:
+# 512 MB holds the engine (about 250 MB) and its threads' stacks, where the default 1 GB is more than a phone gives.
+[target.wasm32-wasip1-threads]
+rustflags = ["-C", "target-feature=+simd128", "-C", "link-arg=--max-memory=536870912"]

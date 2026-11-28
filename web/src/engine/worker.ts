@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { KuroobiAI } from '../../../crates/web/kuroobi_ai.js';
 import { bits } from '../lib/othello';
-import { MODEL_INDEX, WASM_URL, type ModelIndex, type Reply, type Request } from './protocol';
+import { MODEL_INDEX, WASM_MT_URL, WASM_URL, type ModelIndex, type Reply, type Request } from './protocol';
 
 declare const self: DedicatedWorkerGlobalScope;
 const post = (r: Reply) => self.postMessage(r);
@@ -38,7 +38,27 @@ async function model(): Promise<Uint8Array> {
   return bytes;
 }
 
-const ready: Promise<KuroobiAI> = model().then((m) => KuroobiAI.load(WASM_URL, m));
+/**
+ * Search threads: all but two of the cores, at most 8, as FlipSight's engine takes them. Safari reports 4 cores
+ * whatever the device has, and an iPhone or a Mac has at least 6.
+ */
+function threads(): number {
+  const cores = navigator.hardwareConcurrency || 1;
+  const ua = navigator.userAgent;
+  if (cores === 4 && /AppleWebKit/.test(ua) && !/Chrome\/|Chromium\/|Edg\/|Firefox\//.test(ua)) return 6;
+  return cores > 9 ? 8 : Math.max(1, cores - 2);
+}
+
+/** The threaded engine where the page can share memory with workers, else the single-threaded one. */
+function load(m: Uint8Array): Promise<KuroobiAI> {
+  if (!self.crossOriginIsolated || threads() < 2) return KuroobiAI.load(WASM_URL, m);
+  return KuroobiAI.load(WASM_MT_URL, m, {
+    threads: threads(),
+    spawnWorker: () => new Worker(new URL('../../../crates/web/kuroobi_ai_thread.js', import.meta.url), { type: 'module' }),
+  });
+}
+
+const ready: Promise<KuroobiAI> = model().then(load);
 ready.then(
   () => post({ kind: 'ready' }),
   (e: unknown) => post({ kind: 'failed', message: String(e) }),

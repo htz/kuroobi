@@ -15,7 +15,12 @@ export interface Valued {
 }
 
 export class KuroobiAI {
-  static load(wasmUrl: string | URL | ArrayBuffer | Uint8Array, modelBytes: ArrayBuffer | Uint8Array): Promise<KuroobiAI>;
+  /** `spawnWorker` (starting kuroobi_ai_thread.js) takes the wasm32-wasip1-threads build on shared memory, searching on `threads` threads. */
+  static load(
+    wasmUrl: string | URL | ArrayBuffer | Uint8Array,
+    modelBytes: ArrayBuffer | Uint8Array,
+    options?: { threads?: number; spawnWorker?: () => Worker },
+  ): Promise<KuroobiAI>;
   newGame(): void;
   setPosition(black: bigint, white: bigint, blackToMove: boolean): void;
   choose(clockMs: number): Choice;

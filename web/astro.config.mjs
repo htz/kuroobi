@@ -5,12 +5,19 @@ import mdx from '@astrojs/mdx';
 import react from '@astrojs/react';
 import { defineConfig, fontProviders } from 'astro/config';
 
-/** The hash of the wasm scripts/engine.sh put in public/engine/; the model is deployed apart (deploy-model.yml). */
+/** The hashes of the two wasm scripts/engine.sh put in public/engine/; the model is deployed apart (deploy-model.yml). */
 function engineFiles() {
-  const path = new URL('./public/engine/kuroobi_ai.wasm', import.meta.url);
-  const wasm = existsSync(path) ? readFileSync(path) : Buffer.alloc(0);
-  return { __WASM_HASH__: JSON.stringify(createHash('sha256').update(wasm).digest('hex').slice(0, 12)) };
+  /** @param {string} name */
+  const hash = (name) => {
+    const path = new URL('./public/engine/' + name, import.meta.url);
+    const wasm = existsSync(path) ? readFileSync(path) : Buffer.alloc(0);
+    return JSON.stringify(createHash('sha256').update(wasm).digest('hex').slice(0, 12));
+  };
+  return { __WASM_HASH__: hash('kuroobi_ai.wasm'), __WASM_MT_HASH__: hash('kuroobi_ai_mt.wasm') };
 }
+
+/** The threaded engine shares memory among workers, which a browser allows only on a cross-origin isolated page. */
+const ISOLATED = { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' };
 
 export default defineConfig({
   integrations: [react(), mdx()],
@@ -40,5 +47,5 @@ export default defineConfig({
     },
   ],
   // The colours, board and stones are the app's own tokens.css, read from crates/gui.
-  vite: { server: { fs: { allow: ['..'] } }, define: engineFiles() },
+  vite: { server: { fs: { allow: ['..'] }, headers: ISOLATED }, preview: { headers: ISOLATED }, define: engineFiles() },
 });

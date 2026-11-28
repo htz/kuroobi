@@ -2,8 +2,9 @@
 //!
 //! Numbers only cross the boundary: the page copies the model into memory from [`alloc`],
 //! names squares 0..=63 as the engine does, and reads results back one getter at a time.
-//! One engine lives per instance, since a browser runs it on one thread. It is the app's
-//! [`Engine`], with no book: a level, a clock and the study's values are read exactly as there.
+//! One engine lives per instance, on the thread that loaded the model; built for
+//! wasm32-wasip1-threads it searches on `threads` threads the page lends it as workers. It is the
+//! app's [`Engine`], with no book: a level, a clock and the study's values are read exactly as there.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -62,18 +63,19 @@ pub unsafe extern "C" fn dealloc(ptr: *mut u8, len: usize) {
     drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
 }
 
-/// Reads a web model (`nnue_to_web`'s output) and makes the engine ready; 0 when it worked.
+/// Reads a web model (`nnue_to_web`'s output) and makes the engine ready to search on `threads`
+/// threads (1 without wasm threads); 0 when it worked.
 ///
 /// # Safety
 /// `ptr` must point at `len` readable bytes.
 #[no_mangle]
-pub unsafe extern "C" fn load_model(ptr: *const u8, len: usize) -> i32 {
+pub unsafe extern "C" fn load_model(ptr: *const u8, len: usize, threads: u32) -> i32 {
     let mut bytes = std::slice::from_raw_parts(ptr, len);
     let Ok(nn) = Nnue::read_web(NNUE_PATTERNS, &mut bytes) else {
         return 1;
     };
     let config = EngineConfig {
-        threads: 1,
+        threads: threads.max(1) as usize,
         midgame_hash_bits: MIDGAME_TABLE_BITS,
         solver_hash_bits: SOLVER_TABLE_BITS,
         use_book: false,
@@ -233,6 +235,6 @@ mod tests {
         AI.with(|slot| *slot.borrow_mut() = None);
         assert_eq!(choose(1000), -1);
         assert_eq!(analyze(4), 0);
-        assert_eq!(unsafe { load_model([0u8; 4].as_ptr(), 4) }, 1);
+        assert_eq!(unsafe { load_model([0u8; 4].as_ptr(), 4, 1) }, 1);
     }
 }
