@@ -318,6 +318,9 @@ a.hd-icon { color: var(--sub); }
 .pa-o-legend { margin-top: -4px; }
 
 .pa-strong { font-weight: 700; }
+.pa-value { font-size: var(--t-small); }
+/* The FFO page's problem board, with what it is under it. */
+.pa-figure { margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .pa-mono { font-family: var(--ff-code); font-variant-numeric: tabular-nums; color: var(--sub); font-size: var(--t-meta); }
 .pa-meta { font-size: var(--t-meta); color: var(--sub); }
 /* Grids, not flex: the canvas draws each button inside a wrapper, so the column, not the button, takes the width. */

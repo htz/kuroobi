@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Kuroobi for web · 計測</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="site.css">
+<script src="ds/kuroobiweb/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div lang="{{lang}}" style="position: relative; min-height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); font-family: var(--ff-web)">
+<x-import component-from-global-scope="KuroobiWeb.BoardDefs"></x-import>
+<dc-import name="SiteHeader" active="web" lang="{{lang}}" hint-size="100%,64px"></dc-import>
+
+<main style="flex: 1; width: 100%; max-width: var(--c-max); margin: 0 auto; box-sizing: border-box; padding: 24px var(--gutter) 56px">
+<div class="pa">
+
+<div class="pa-bar">
+<h1 class="pa-title">Kuroobi for web</h1>
+<x-import component-from-global-scope="KuroobiWeb.Segmented" label="{{t.modes}}" items="{{modes}}"></x-import>
+</div>
+
+<sc-if value="{{loading}}" hint-placeholder-val="{{false}}">
+<div role="status" class="pa-loading">
+<span class="pa-strong">{{t.loading}}</span>
+<span class="pa-loading-bar"><x-import component-from-global-scope="KuroobiWeb.Progress" value="{{loadRatio}}" label="{{t.loadingAria}}"></x-import></span>
+<span class="pa-mono">12.3 / 43.7 MB</span>
+</div>
+</sc-if>
+
+<div class="pa-cols">
+<div class="pa-left">
+<div class="pa-o-kifu">
+<x-import component-from-global-scope="KuroobiWeb.Panel" id="bench-results" title="{{t.results}}">
+<x-import component-from-global-scope="KuroobiWeb.BenchTable" lang="{{lang}}" rows="{{rows}}" current="{{selected}}" on-select="{{noop}}"></x-import>
+</x-import>
+</div>
+</div>
+<div class="pa-right">
+<div class="pa-o-main">
+<x-import component-from-global-scope="KuroobiWeb.Panel" id="bench-run" title="{{t.panel}}" note="{{threadsNote}}">
+<x-import component-from-global-scope="KuroobiWeb.Field" label="{{t.set}}">
+<x-import component-from-global-scope="KuroobiWeb.Select" label="{{t.set}}" value="{{setValue}}" options="{{sets}}" disabled="{{running}}"></x-import>
+</x-import>
+<x-import component-from-global-scope="KuroobiWeb.Button" icon="file" disabled="{{running}}">{{t.loadObf}}</x-import>
+<sc-if value="{{running}}" hint-placeholder-val="{{false}}">
+<div role="status" class="pa-analysis">
+<div class="pa-analysis-row">
+<x-import component-from-global-scope="KuroobiWeb.Busy">{{t.running}}</x-import>
+<span class="pa-mono">{{progressText}}</span>
+<x-import component-from-global-scope="KuroobiWeb.Button" style="{{pushRight}}">{{t.stop}}</x-import>
+</div>
+<x-import component-from-global-scope="KuroobiWeb.Progress" value="{{progress}}" label="{{t.panel}}"></x-import>
+</div>
+</sc-if>
+<sc-if value="{{still}}" hint-placeholder-val="{{true}}">
+<x-import component-from-global-scope="KuroobiWeb.Button" kind="primary" disabled="{{notReady}}">{{t.run}}</x-import>
+</sc-if>
+</x-import>
+</div>
+<div class="pa-o-board">
+<figure class="pa-figure">
+<div class="pa-board {{dimClass}}">
+<x-import component-from-global-scope="KuroobiWeb.Board" lang="{{lang}}" cells="{{pos.cells}}" legal="{{pos.legal}}" evals="{{evals}}" turn="{{pos.turn}}" coords="{{yes}}" disabled="{{yes}}"></x-import>
+</div>
+<figcaption class="pa-meta">{{caption}}</figcaption>
+</figure>
+</div>
+</div>
+</div>
+</div>
+</main>
+
+<dc-import name="SiteFooter" lang="{{lang}}" hint-size="100%,380px"></dc-import>
+<sc-if value="{{toastOn}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiWeb.Toast">{{toastText}}</x-import>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"lang":{"editor":"enum","options":["ja","en"],"default":"ja"},"state":{"editor":"enum","options":["idle","running","done","loading"],"default":"idle"},"file":{"editor":"boolean","default":false},"toast":{"editor":"enum","options":["","bad","big"],"default":""},"set":{"editor":"enum","options":["1","20"],"default":"1"},"$preview":{"width":1280,"height":1400}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const lang = this.props.lang ?? 'ja';
+    const T = {
+      ja: {
+        modes: 'モード', play: '対局', study: '検討', bench: '計測', black: '黒', white: '白',
+        loading: '評価関数を読み込んでいます', loadingAria: '評価関数の読み込み',
+        loadObf: 'obf を読み込み', loadBad: 'obf として読めませんでした', tooBig: '10 MB を超えるファイルは読めません',
+        results: '結果', panel: 'ベンチマーク', set: '問題', threads: (n) => n + ' スレッド', run: '計測を始める', running: '計測中', stop: '止める',
+        caption: (no, e, side) => 'FFO #' + no + ' · ' + e + ' マス空き · ' + side + '番',
+        fileCaption: (name, no, e, side) => name + ' #' + no + ' · ' + e + ' マス空き · ' + side + '番',
+      },
+      en: {
+        modes: 'Mode', play: 'Play', study: 'Study', bench: 'Benchmark', black: 'Black', white: 'White',
+        loading: 'Loading the evaluation', loadingAria: 'Loading the evaluation',
+        loadObf: 'Load an obf', loadBad: 'Could not read this as an obf', tooBig: 'Files over 10 MB cannot be read',
+        results: 'Results', panel: 'Benchmark', set: 'Problems', threads: (n) => n + ' threads', run: 'Start the benchmark', running: 'Measuring', stop: 'Stop',
+        caption: (no, e, side) => 'FFO #' + no + ' · ' + e + ' empty · ' + side + ' to move',
+        fileCaption: (name, no, e, side) => name + ' #' + no + ' · ' + e + ' empty · ' + side + ' to move',
+      },
+    };
+    const t = T[lang] || T.ja;
+    const state = this.props.state ?? 'idle';
+    const loading = state === 'loading';
+    const running = state === 'running';
+    // FFO #1-19 as problems/fforum-1-19.obf has them: the board (a1, b1 ... h8) and the side to move, and the answer
+    // FFO #20-39 likewise; #39 has nine best moves, the answer column names two and counts the rest
+    const BOARDS20 = ["XXXOXXXXOXXXXXXXOOXXXXXXOOOXXXXXOOOXXOO-OOOOO---OOOOOOO-OOOOOOO- X; H5:+6; G6:-2; F6:-4; H6:-10;", "OOOOOOOOXOOXXX--XXOOXOO-XOXOOO--XOOOOX--XOOXOO--XOOOOO--XXXX---- O; G5:+0; G2:-2; G4:-4; G6:-6;", "--OOOO--X-OOOOO-XXOOXOXXXOXOXXXXXXXOXXXX-XXOXOXX--OXXX-X----X--- O; G8:+2; A6:+0; F8:-4; A7:-4; H2:-4; B2:-6; D8:-8; B7:-14; G7:-26;", "--O-------OOX---OOOXXXO-OOOOXOXXXXXOOXOXXXXXXOOXX-XXXXOX--XXXX-- X; A2:+4; D1:-20; H3:-20; B1:-30; G2:-30; E1:-30; F2:-34; G8:-34; B2:-36; H2:-38;", "--O--O-----OOOX--X-XOXOO--XXXOOOXXXXOOOOXXXOXXOOXXXXXX--XOXX-O-- O; C3:+0; B4:-4; C2:-8; E8:-12; G7:-14; H2:-16; G1:-24;", "----X------XXXO--OOOXXXXXOOOOXXO-XXOOXXOOOXOXXXXOOOXX---X-XXXX-- O; G1:+0; A5:+0; F1:-4; D1:-6; F7:-8; C2:-10; G7:-10; H2:-12; H7:-16;", "-OOOOO----OXXO---OOOOXXO-OOOXOXX-OOXOOXX-XOXXOXX--O-XXXX--O----O X; D8:+0; A6:-2; A4:-6; B7:-6; A5:-12; G1:-16; A2:-16; A3:-18; H2:-18; B8:-20; G2:-20; B2:-26;", "--XO-O----OOOO--OOXOXXO-OOOOXXOOOOOXXOX-OXOXXXXX--XXXX----X-O-X- X; B7:-2; E1:-4; B1:-6; H2:-10; H5:-10; B2:-12; A2:-14; H3:-28; G1:-28; G2:-28;", "--O-------OOO--X-XOOOOXXXXXXOXOX-XXOXOOXXXOXOOXX-OOOOO-X---OOO-- X; F1:+0; B2:+0; E1:+0; B1:-4; F2:-6; G7:-6; D1:-12; C8:-20; G8:-22; B8:-28;", "-OXXXX----OXXO--XXOOXOOOXXXOOXOOXXOOXOOOXXXXOO-XX-XXO----------- X; G2:+10; A1:+4; G6:-10; H2:-12; F8:-12; E8:-12; G7:-24; G1:-24; B2:-30; F7:-34;", "-XXX----X-XOO---XXOXOO--XOXOXO--XOOXOXXXXOOXXOX---OOOOO--XXXXX-- X; G3:+0; G2:-12; E1:-16; F2:-18; F1:-22; G4:-22; H6:-24; B7:-24; G8:-28;", "-OOOOO----OOOO--OXXOOO---XXXOO--XXXXXXO-XXXOOO-OX-OOOO---OOOOO-- X; G6:-2; G3:-4; G4:-8; G7:-14; H5:-14; G2:-16; G1:-30; G8:-32;", "--XX----O-XXOX--OOXOO---OXOXOOO-OOXXOOOXOOXXXOOX--XXXXOX--X--X-X X; G3:-4; B7:-6; E1:-8; H4:-10; F3:-10; H3:-10; B2:-14; A7:-22;", "-XXXXXXX--XOOO----OXOOXX-OOXXOXX-OOOOOXX-X-XOOXX---O-X-X--OOOO-- X; E7:-8; A3:-8; A6:-12; B2:-12; G7:-12; G2:-12; A4:-14; C6:-20; A5:-22; B3:-28;", "-------------O-O-OOOOOOOOOOOOXOOOXXOOOXO-XXXOXOO--XXXOXO--OXXXXO X; C2:-2; D2:-6; E2:-6; A3:-10; A2:-10; F1:-12; G2:-14; G1:-16; B2:-20; B8:-26;", "--XXX-----XXXX-OOOXXOOOOOOOOOOXO-OOXXXXO-OOOXXXO---XOXX---X----- O; C7:+0; D8:-8; H8:-8; B2:-12; G1:-14; E8:-20; B1:-20; F8:-24; F1:-32; H7:-32; G8:-38;", "---X-O----XXXO-XXXXXXXXXXOOXXOOXXOXOOOXXXXOOOO-XX--OOOO--------- O; B7:+0; B1:-2; E1:-4; C1:-6; G6:-8; G2:-10; A2:-22; B2:-24;", "--OOOO--O-OOOO--OXXXOOO-OXXOXO--OOXXOXX-OOXXXX--O-XXX-----XX-O-- X; G2:-20; G4:-22; B7:-22; H3:-22; G1:-30; H2:-42; B1:-48;", "--OOOO----OOOO---XOXXOOXOOXOOOOX-OOOOOXXXOOXXXXX--X-X----------- X; B2:+4; A5:+0; H2:-4; A3:-10; A7:-18; G2:-20; B7:-22; G1:-24; B1:-26;", "O-OOOO--XOXXOX--XOOOXXX-XOOOXX--XOOXOX--XOXXX---X-XX------------ O; A8:+64; B1:+64; G1:+64; G5:+64; G6:+64; C8:+64; H3:+64; E8:+64; H4:+64; F7:+62; D8:+62; E7:+62; H2:+62; B8:+62; G2:+60; G4:+60; F6:+32;"];
+    const BOARDS = ["--XXXXX--OOOXX-O-OOOXXOX-OXOXOXXOXXXOXXX--XOXOXX-XXXOOO--OOOOO-- X; G8:+18; H1:+12; H7:+6; A2:+6; A3:+4; B1:-4; A4:-22; G2:-24;", "-XXXXXX---XOOOO--XOXXOOX-OOOOOOOOOOOXXOOOOOXXOOX--XXOO----XXXXX- X; A4:+10; B2:+0; A3:-6; G7:-8; A7:-12; H7:-14; B7:-14; H2:-24;", "----OX----OOXX---OOOXX-XOOXXOOOOOXXOXXOOOXXXOOOOOXXXXOXO--OOOOOX X; D1:+2; G3:+0; B8:-2; B1:-4; C1:-4; A2:-4; A3:-6; B2:-12;", "-XXXXXX-X-XXXOO-XOXXXOOXXXOXOOOX-OXOOXXX--OOOXXX--OOXX----XOXXO- X; H8:+0; A5:+0; B6:-4; B7:-4; A6:-8; B2:-12; H2:-26;", "-OOOOO----OXXO-XXXOXOXX-XXOXOXXOXXOOXOOOXXXXOO-OX-XOOO---XXXXX-- X; G8:+32; G2:+12; B2:-20; G6:-26; G1:-32; G7:-34;", "--OXXX--OOOXXX--OOOXOXO-OOXOOOX-OOXXXXXXXOOXXOX--OOOOX---XXXXXX- X; A1:+14; H3:+14; A8:+12; H2:+8; G2:+8; H4:+4; G7:+4; A7:-22; B1:-24;", "--OXXO--XOXXXX--XOOOXXXXXOOXXXXXXOOOOXXX-XXXXXXX--XXOOO----XXOO- X; A6:+8; G1:+0; A1:-2; H8:-6; H7:-14; B1:-30;", "---X-X--X-XXXX--XXXXOXXXXXXOOOOOXXOXXXO-XOXXXXO-XOOXXX--XOOXXO-- O; E1:+8; H2:+4; G2:+4; B2:+4; G7:+4; B1:+2; G1:-6; C1:-8;", "--XOXX--O-OOXXXX-OOOXXXX-XOXXXOXXXOXOOOXOXXOXOXX--OXOO----OOOO-- O; G7:-8; A4:-8; B1:-16; A7:-16; B7:-26; A3:-30; G1:-38; H7:-40;", "-XXXX-----OXXX--XOXOXOXXOXOXXOXXOXXOXOOOXXXOXOOX--OXXO---OOOOO-- O; B2:+10; B7:+4; F1:+0; A7:-4; A2:-6; G2:-12; H2:-16; H7:-20;", "---O-XOX----XXOX---XXOOXO-XXOXOXXXXOOXOX-XOOXXXXXOOOXX-XOOOOOOO- O; B3:+30; C2:+26; A6:+24; G7:+20; C3:+18; D2:+16; B4:+10; E1:+6;", "--O--O--X-OOOOX-XXOOOXOOXXOXOXOOXXOXXOOOXXXXOOOO--OXXX---XXXXX-- O; B7:-8; A7:-10; G7:-14; G8:-14; H2:-16; G1:-16; H1:-20;", "--XXXXX--OOOXX---OOOXXXX-OXOXOXXOXXXOXXX--XOXOXX--OXOOO--OOOOO-- X; B7:+14; A4:+0; A3:-8; B1:-18; G8:-20; H7:-20; A2:-24;", "--XXXXX---OOOX---XOOXXXX-OOOOOOOOOOXXXOOOOOXXOOX--XXOO----XXXXX- X; A3:+18; A4:+12; B1:+8; G7:-4; H7:-14; A7:-24; B7:-24; B2:-28;", "----O------OOX---OOOXX-XOOOXOOOOOXXOXXOOOXXXOOOOOXXXOOXO--OOOOOX X; G3:+4; B8:+4; F1:+0; C1:+0; C2:-2; D1:-4; B2:-8; A3:-8;", "-XXXXXX-X-XXXOO-XOXXXOOXXOOXXXOX-OOOXXXX--OOXXXX---OOO----XOX-O- X; F8:+24; C7:+20; A5:+6; H1:+6; B6:+0; B7:-2; A6:-6; H2:-26;", "-OOOOO----OXXO-XXXOOOXX-XXOXOXXOXXOOXOOOXXXXOO-OX-XOO----XXXX--- X; F8:+8; G2:+6; G6:-24; G1:-32; F7:-32; G7:-34; B2:-38;", "-XXX------OOOX--XOOOOOXXOXOXOOXXOXXOOOOOXXXOXOOX--OXXO---OOOOO-- X; G2:-2; B7:-6; F1:-8; E1:-10; H7:-12; G8:-14; G7:-14; A2:-18; B2:-18;", "--OXXO--XOXXXX--XOOOOXXXXOOOXXXXX-OOOXXX--OOOOXX--XXOOO----XXOO- X; B6:+8; H8:+4; B7:+0; G1:-6; B5:-16; H7:-16; B1:-24;"];
+    // What the web engine on 8 threads (Chrome, Mac) did with each, from empty tables: move, value, ms, nodes
+    const GOT = [['g8', 18, 10, 38600], ['a4', 10, 8, 21500], ['d1', 2, 8, 67800], ['h8', 0, 8, 22300], ['g8', 32, 10, 11300], ['h3', 14, 8, 63100],
+      ['a6', 8, 8, 19200], ['e1', 8, 14, 176600], ['a4', -8, 6, 33100], ['b2', 10, 15, 73800], ['b3', 30, 8, 60700], ['b7', -8, 7, 76400],
+      ['b7', 14, 8, 66900], ['a3', 18, 8, 63600], ['b8', 4, 13, 133600], ['f8', 24, 12, 154300], ['f8', 8, 6, 17700], ['g2', -2, 14, 198100], ['b6', 8, 15, 194100]];
+    // Running: eight solved, the ninth on the board; done: all solved, the fourth pressed
+    const solved = state === 'done' ? 19 : running ? 8 : 0;
+    // FFO #20-39 opens on #39, its nine best moves on the board
+    const selected = this.props.set === '20' && !(this.props.file ?? false) ? 19 : state === 'done' ? 3 : running ? 8 : 0;
+    const D = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+    const flips = (c, sq, me) => {
+      if (c[sq]) return [];
+      const f0 = Math.floor(sq / 8), r0 = sq % 8, op = 3 - me, out = [];
+      for (const [df, dr] of D) {
+        const run = [];
+        let f = f0 + df, r = r0 + dr;
+        while (f >= 0 && f < 8 && r >= 0 && r < 8 && c[f * 8 + r] === op) { run.push(f * 8 + r); f += df; r += dr; }
+        if (run.length && f >= 0 && f < 8 && r >= 0 && r < 8 && c[f * 8 + r] === me) out.push(...run);
+      }
+      return out;
+    };
+    const problem = (text) => {
+      const c = Array(64).fill(0);
+      for (let i = 0; i < 64; i++) c[(i & 7) * 8 + (i >> 3)] = text[i] === 'X' ? 1 : text[i] === 'O' ? 2 : 0;
+      const me = text[65] === 'X' ? 1 : 2;
+      // Every move's exact value as the obf lists it after the board (sq = col*8 + row), best first
+      const values = text.slice(66).split(';').map((v) => v.trim()).filter((v) => /^[A-H][1-8]:/.test(v))
+        .map((v) => ({ sq: 'ABCDEFGH'.indexOf(v[0]) * 8 + (+v[1] - 1), score: Number(v.slice(3)) }));
+      return { c, me, values, empties: c.filter((x) => !x).length };
+    };
+    // Load an obf opens the system's picker on every file, unfiltered: iOS knows no type for .obf and would grey it out.
+    // An obf of one's own, chosen with Load an obf: positions only, no answers (problems/band22.obf, as a file named so),
+    // its name added to the sets and chosen; nothing measured yet
+    const file = (this.props.file ?? false) && !running && state !== 'done';
+    const FILE = ["-X-OO-----XOOO---OXXOOOO-XXXOXOO-XXOOOXO--XXOXOO--XXXOOO----O--O X", "-XXX-O----OOOO-O--XOOXOO-XXXOOXO-XXXXOOO--XOXOOO--XXX-----XXXX-- X", "----O-----OOOO-O-OXXXXOOOOOOOOXO-OOXOOOOOOOXXOXO--XXXX------XX-- X", "-X-OOOO---XXXOO-OOXXOOXOOXOOOXX-OOOOOOX-OOOOOOXX--O-------O----- X", "---OOX----OOOX--XOOXOOXXXOOOOOX-XOXXOXXXXOOOX-OOX-OXX------X---- X", "-----O---OOOOO-OXXOXXOOO-XOOOXOOXXXOOXOO-XXXOOOO---XOO-O----O--- X", "-OOOOOO---OOOO--XXOOO---XXXOXXO-OXOOOOOO-OXXXXO---XXXO-----X-O-- X", "-OOOOO----OXOO-X--XOOOXOOOOOOOOO--XOXXOO--XXXXOO--XXOO----X--O-- X", "----------O-OOXO--OOXXXO--XXOOOO--XXOOXO-OOOOOOO--OOOXXO--OOOOXO X", "-XXXXX----XOXOXX-OOXOXXXOOOOXOOXOOOXOOOXOOXXXXXX---------------- X", "----XO--X-XXOO--XXOOXOOOXXOXXOO--OOXXOOOO-OOXOXX---OOX-----OOO-- X", "-XXXXX----XOOX-X-XOOOOXX-OOXOXOX-OOOOOOX-XXOOOOX---OO--X--O----- X"];
+    const set20 = !file && this.props.set === '20';
+    const first = set20 ? 20 : 1;
+    const ps = (file ? FILE : set20 ? BOARDS20 : BOARDS).map(problem);
+    const sqName = (sq) => 'abcdefgh'[Math.floor(sq / 8)] + (sq % 8 + 1);
+    const rows = ps.map((p, i) => ({
+      no: (file ? 1 : first) + i, empties: p.empties, running: running && i === solved,
+      answer: p.values.length ? { moves: p.values.filter((v) => v.score === p.values[0].score).map((v) => sqName(v.sq)), score: p.values[0].score } : undefined,
+      got: i < solved ? { move: GOT[i][0], score: GOT[i][1], right: true, ms: GOT[i][2], nodes: GOT[i][3] } : undefined,
+    }));
+    const p = ps[selected];
+    return {
+      lang, t, loading, running,
+      // A file that is not an obf, or one over 10 MB, is said so for 2 seconds; the sets stay as they were
+      toastOn: (this.props.toast ?? '') !== '',
+      toastText: this.props.toast === 'big' ? t.tooBig : t.loadBad,
+      still: !running,
+      notReady: loading,
+      yes: true,
+      noop: () => {},
+      pushRight: { marginLeft: 'auto' },
+      dimClass: loading ? 'pa-dim' : '',
+      loadRatio: 12.3 / 43.7,
+      threadsNote: loading ? '' : t.threads(8),
+      sets: [...[[0, 1, 19], [1, 20, 39], [2, 40, 59], [3, 60, 79]].map(([v, a, b]) => [String(v), 'FFO #' + a + '–' + b]), ...(file ? [['file', 'band22.obf']] : [])],
+      setValue: file ? 'file' : set20 ? '1' : '0',
+      progressText: solved + ' / 19',
+      progress: solved / 19,
+      rows,
+      selected,
+      // The obf's values on the board, the best bold; no mark, as nothing says how they were found
+      evals: Object.fromEntries(p.values.map((v) => [v.sq, { score: v.score, best: v.score === p.values[0].score }])),
+      pos: { cells: p.c, turn: p.me === 1 ? 'b' : 'w', legal: Array.from({ length: 64 }, (_, i) => i).filter((i) => flips(p.c, i, p.me).length) },
+      caption: file ? t.fileCaption('band22.obf', selected + 1, p.empties, p.me === 1 ? t.black : t.white) : t.caption(first + selected, p.empties, p.me === 1 ? t.black : t.white),
+      modes: [
+        { label: t.play, href: 'Play.dc.html', on: false },
+        { label: t.study, href: 'Study.dc.html', on: false },
+        { label: t.bench, href: 'Bench.dc.html', on: true },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -557,7 +557,7 @@ export type Move = {
 };
 
 /** 1,234 · 12.3k · 4.5M: a count kept to a few figures. */
-const compact = (n: number): string =>
+export const compact = (n: number): string =>
   n < 1e4 ? Math.round(n).toLocaleString('en') : n < 1e6 ? (n / 1e3).toFixed(1) + 'k' : (n / 1e6).toFixed(1) + 'M';
 
 /**
@@ -666,6 +666,99 @@ export function KifuTable({ lang, moves, current, onSelect, columns = 'eval', op
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/** Best moves named in the answer column before the rest are only counted. */
+const ANSWER_MOVES = 2;
+
+/**
+ * One problem of a run: its answer when the obf gives one, and once solved what KUROOBI found and what it took;
+ * `right` is left out where there is no answer to hold it to.
+ */
+export type BenchRow = {
+  no: number; empties: number; answer?: { moves: string[]; score: number };
+  got?: { move: string; score: number; right?: boolean; ms: number; nodes: number };
+  running?: boolean;
+};
+
+/**
+ * The problems of a run (FFO's or an obf of one's own), one row each: number, empties, time, nodes and NPS (first, so a phone shows them without
+ * scrolling), then the answer and KUROOBI's move and value (in `bad` when it is not the answer); the totals at the foot
+ * once a problem is solved. A row pressed shows its board.
+ */
+export function BenchTable({ lang, rows, current, onSelect }: {
+  lang: Lang; rows: BenchRow[]; current?: number; onSelect?: (i: number) => void;
+}) {
+  const B = (key: string, vars?: Record<string, string | number>) => t(lang, 'bench.' + key, vars);
+  const sec = (ms: number) => t(lang, 'kifu.seconds', { s: (ms / 1000).toFixed(3) });
+  const nps = (nodes: number, ms: number) => compact(ms > 0 ? nodes / (ms / 1000) : 0);
+  const grid: React.CSSProperties = {
+    display: 'grid', gridTemplateColumns: '1.8em 2.5em 5.5em 4.5em 4.5em minmax(10em, 1fr) minmax(6em, 1fr)',
+    alignItems: 'center', gap: 8, padding: '0 8px', minWidth: 540, boxSizing: 'border-box',
+  };
+  const right: React.CSSProperties = { textAlign: 'right' };
+  // The measured figures end flush right; the moves that follow start a column of their own.
+  const answerGap: React.CSSProperties = { paddingLeft: 12 };
+  const clip: React.CSSProperties = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+  // A problem can have many best moves (FFO #39 has nine): two are named, the rest counted; all of them count as right.
+  const answer = (a: { moves: string[]; score: number }) => (
+    <>
+      {a.moves.slice(0, ANSWER_MOVES).join('/')}
+      {a.moves.length > ANSWER_MOVES && <span style={{ color: 'var(--sub)', fontSize: 'var(--t-meta)' }}> {B('more', { n: a.moves.length - ANSWER_MOVES })}</span>}
+      {' '}{wholeEval(a.score)}
+    </>
+  );
+  const solved = rows.filter((r) => r.got);
+  const ms = solved.reduce((a, r) => a + r.got!.ms, 0);
+  const nodes = solved.reduce((a, r) => a + r.got!.nodes, 0);
+  const checked = solved.filter((r) => r.got!.right !== undefined);
+  const cell: React.CSSProperties = { font: `var(--t-small) ${CODE}`, fontVariantNumeric: 'tabular-nums' };
+  return (
+    <div style={{ overflowX: 'auto', overscrollBehaviorX: 'contain' }}>
+      <div role="table" aria-label={B('results')}>
+        <div role="row" style={{ ...grid, minHeight: 32, borderBottom: '1px solid var(--border)', font: `var(--t-meta) ${FONT}`, color: 'var(--sub)' }}>
+          {(['no', 'empties', 'time', 'nodes', 'nps', 'answer', 'got'] as const).map((k, i) => (
+            <span role="columnheader" key={k} style={i < 5 ? right : i === 5 ? answerGap : undefined}>{B(k)}</span>
+          ))}
+        </div>
+        {!rows.length && <div style={{ padding: '10px 8px', font: `var(--t-small) ${FONT}`, color: 'var(--sub)' }}>{B('empty')}</div>}
+        {rows.map((r, i) => {
+          const on = i === current;
+          const g = r.got;
+          return (
+            <button type="button" role="row" key={r.no} onClick={onSelect ? () => onSelect(i) : undefined} disabled={!onSelect}
+              aria-current={on || undefined} className={onSelect ? 'k-row' : undefined}
+              style={{
+                ...grid, width: '100%', minHeight: 40, border: 0, borderBottom: '1px solid var(--border-weak)',
+                background: on ? 'var(--card)' : 'transparent', boxShadow: on ? 'inset 2px 0 0 var(--accent)' : 'none',
+                color: 'var(--text)', textAlign: 'left', cursor: onSelect ? 'pointer' : 'default', ...cell,
+              }}>
+              <span role="cell" style={{ ...right, color: 'var(--sub)', fontSize: 'var(--t-meta)' }}>{r.no}</span>
+              <span role="cell" style={right}>{r.empties}</span>
+              <span role="cell" style={right}>{g ? sec(g.ms) : ''}</span>
+              <span role="cell" style={right}>{g ? compact(g.nodes) : ''}</span>
+              <span role="cell" style={right}>{g ? nps(g.nodes, g.ms) : ''}</span>
+              <span role="cell" style={{ ...answerGap, ...clip }} title={r.answer?.moves.join(' ')}>{r.answer ? answer(r.answer) : ''}</span>
+              <span role="cell" style={{ ...clip, color: g && g.right === false ? 'var(--bad)' : undefined }}>
+                {g ? <>{g.move} {wholeEval(g.score)}{g.right === false && <span className="w-sr"> ({B('wrong')})</span>}</>
+                  : r.running ? <span role="status" style={{ display: 'inline-flex' }}><Busy><span className="w-sr">{B('running')}</span></Busy></span> : ''}
+              </span>
+            </button>
+          );
+        })}
+        {solved.length > 0 && (
+          <div role="row" style={{ ...grid, minHeight: 40, borderTop: '1px solid var(--border)', ...cell, fontWeight: 700 }}>
+            <span role="cell" style={{ gridColumn: 'span 2', font: `700 var(--t-small) ${FONT}` }}>{B('total')}</span>
+            <span role="cell" style={right}>{sec(ms)}</span>
+            <span role="cell" style={right}>{compact(nodes)}</span>
+            <span role="cell" style={right}>{nps(nodes, ms)}</span>
+            <span role="cell" />
+            <span role="cell">{checked.length ? `${checked.filter((r) => r.got!.right).length} / ${checked.length}` : ''}</span>
+          </div>
+        )}
       </div>
     </div>
   );

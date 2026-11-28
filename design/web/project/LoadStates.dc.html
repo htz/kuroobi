@@ -28,6 +28,7 @@ body{margin:0}
 </div>
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1500}}'>
+// Choose a file opens the system's picker on every file, unfiltered: iOS knows no type for .ggf or .kifu and would grey them out.
 class Component extends DCLogic {
   renderVals() {
     return {

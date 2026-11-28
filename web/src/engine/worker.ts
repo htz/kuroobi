@@ -49,18 +49,20 @@ function threads(): number {
   return cores > 9 ? 8 : Math.max(1, cores - 2);
 }
 
+const THREADS = self.crossOriginIsolated ? threads() : 1;
+
 /** The threaded engine where the page can share memory with workers, else the single-threaded one. */
 function load(m: Uint8Array): Promise<KuroobiAI> {
-  if (!self.crossOriginIsolated || threads() < 2) return KuroobiAI.load(WASM_URL, m);
+  if (THREADS < 2) return KuroobiAI.load(WASM_URL, m);
   return KuroobiAI.load(WASM_MT_URL, m, {
-    threads: threads(),
+    threads: THREADS,
     spawnWorker: () => new Worker(new URL('../../../crates/web/kuroobi_ai_thread.js', import.meta.url), { type: 'module' }),
   });
 }
 
 const ready: Promise<KuroobiAI> = model().then(load);
 ready.then(
-  () => post({ kind: 'ready' }),
+  () => post({ kind: 'ready', threads: THREADS }),
   (e: unknown) => post({ kind: 'failed', message: String(e) }),
 );
 

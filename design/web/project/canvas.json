@@ -1,686 +1,857 @@
 {
- "v": 3,
- "createdOnFiles": {
-  "v": 1,
-  "at": "2026-11-26T01:10:00Z"
- },
- "title": "KUROOBI Web",
- "launch": {
-  "view": "canvas",
-  "page": "skeleton"
- },
- "pages": [
-  {
-   "id": "skeleton",
-   "name": "骨子"
-  },
-  {
-   "id": "site",
-   "name": "サイト"
-  },
-  {
-   "id": "web",
-   "name": "Kuroobi for web"
-  },
-  {
-   "id": "parts",
-   "name": "部品"
-  }
- ],
- "boards": {
-  "Sitemap.dc.html": {
-   "x": 0,
-   "y": 0,
-   "w": 1280,
-   "h": 832,
-   "title": "サイトの構成と URL",
-   "page": "skeleton"
-  },
-  "Main.dc.html": {
-   "x": 0,
-   "y": 0,
-   "w": 1280,
-   "h": 3600,
-   "title": "トップ  /",
-   "page": "site",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "MainPhone.dc.html": {
-   "x": 1360,
-   "y": 0,
-   "w": 390,
-   "h": 5600,
-   "title": "トップ · スマートフォン",
-   "page": "site",
-   "is_interactive": true
-  },
-  "MainEn.dc.html": {
-   "x": 0,
-   "y": 3720,
-   "w": 1280,
-   "h": 3600,
-   "title": "Top  /en/",
-   "page": "site",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "Notes.dc.html": {
-   "x": 1830,
-   "y": 0,
-   "w": 1280,
-   "h": 1500,
-   "title": "技術情報  /notes/",
-   "page": "site",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "Article.dc.html": {
-   "x": 3190,
-   "y": 0,
-   "w": 1280,
-   "h": 3200,
-   "title": "記事  /notes/[slug]/",
-   "page": "site",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "Play.dc.html": {
-   "x": 0,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局  /play/",
-   "page": "web",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "PlayLoading.dc.html": {
-   "x": 1360,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · 初回の読み込み",
-   "page": "web",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "Study.dc.html": {
-   "x": 0,
-   "y": 1300,
-   "w": 1280,
-   "h": 1460,
-   "title": "検討  /play/study/",
-   "page": "web",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "PlayPhone.dc.html": {
-   "x": 1360,
-   "y": 1300,
-   "w": 390,
-   "h": 2000,
-   "title": "対局 · スマートフォン",
-   "page": "web",
-   "is_interactive": true
-  },
-  "SiteHeader.dc.html": {
-   "x": 0,
-   "y": 0,
-   "w": 1280,
-   "h": 64,
-   "title": "サイトの見出し",
-   "page": "parts",
-   "is_interactive": true
-  },
-  "SiteFooter.dc.html": {
-   "x": 0,
-   "y": 184,
-   "w": 1280,
-   "h": 380,
-   "title": "サイトの足元",
-   "page": "parts"
-  },
-  "PlayEvals.dc.html": {
-   "x": 2720,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · 評価値を表示",
-   "page": "web",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "StudyAnalyzing.dc.html": {
-   "x": 1830,
-   "y": 1300,
-   "w": 1280,
-   "h": 1460,
-   "title": "検討 · 分析中",
-   "page": "web",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "PlayShare.dc.html": {
-   "x": 4080,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · シェア",
-   "page": "web",
-   "is_interactive": true
-  },
-  "StudyLoad.dc.html": {
-   "x": 3190,
-   "y": 1300,
-   "w": 1280,
-   "h": 1460,
-   "title": "検討 · 棋譜を読み込み",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayStart.dc.html": {
-   "x": 5440,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · 始める前",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayOver.dc.html": {
-   "x": 6800,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · 負けたとき",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayFailed.dc.html": {
-   "x": 8160,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · 評価関数を読み込めない",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayCustom.dc.html": {
-   "x": 9520,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · 強さをカスタム",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayCopied.dc.html": {
-   "x": 10880,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · コピーの知らせ",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayEn.dc.html": {
-   "x": 12240,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "Play  /en/play/",
-   "page": "web",
-   "is_interactive": true
-  },
-  "StudyFresh.dc.html": {
-   "x": 4550,
-   "y": 1300,
-   "w": 1280,
-   "h": 1460,
-   "title": "検討 · 開いた直後",
-   "page": "web",
-   "is_interactive": true
-  },
-  "StudyOver.dc.html": {
-   "x": 5910,
-   "y": 1300,
-   "w": 1280,
-   "h": 1460,
-   "title": "検討 · 終局",
-   "page": "web",
-   "is_interactive": true
-  },
-  "StudyLoading.dc.html": {
-   "x": 7270,
-   "y": 1300,
-   "w": 1280,
-   "h": 1460,
-   "title": "検討 · 初回の読み込み",
-   "page": "web",
-   "is_interactive": true
-  },
-  "StudyEn.dc.html": {
-   "x": 8630,
-   "y": 1300,
-   "w": 1280,
-   "h": 1460,
-   "title": "Study  /en/play/study/",
-   "page": "web",
-   "is_interactive": true
-  },
-  "StudyPhone.dc.html": {
-   "x": 9990,
-   "y": 1300,
-   "w": 390,
-   "h": 2600,
-   "title": "検討 · スマートフォン",
-   "page": "web",
-   "is_interactive": true
-  },
-  "LoadStates.dc.html": {
-   "x": 10460,
-   "y": 1300,
-   "w": 1280,
-   "h": 1500,
-   "title": "棋譜を読み込み · 状態",
-   "page": "web",
-   "is_interactive": true
-  },
-  "MainEmpty.dc.html": {
-   "x": 1830,
-   "y": 1600,
-   "w": 1280,
-   "h": 3000,
-   "title": "トップ · 記事が無いとき",
-   "page": "site",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "NotesTag.dc.html": {
-   "x": 4550,
-   "y": 0,
-   "w": 1280,
-   "h": 1100,
-   "title": "技術情報 · タグ  /notes/tags/[tag]/",
-   "page": "site",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "NotesEmpty.dc.html": {
-   "x": 5910,
-   "y": 0,
-   "w": 1280,
-   "h": 900,
-   "title": "技術情報 · 記事が無いとき",
-   "page": "site",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "NotesEn.dc.html": {
-   "x": 7270,
-   "y": 0,
-   "w": 1280,
-   "h": 1500,
-   "title": "Notes  /en/notes/",
-   "page": "site",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "ArticleFirst.dc.html": {
-   "x": 8630,
-   "y": 0,
-   "w": 1280,
-   "h": 3200,
-   "title": "記事 · 最初の記事",
-   "page": "site",
-   "is_interactive": true
-  },
-  "ArticleCopied.dc.html": {
-   "x": 9990,
-   "y": 0,
-   "w": 1280,
-   "h": 1100,
-   "title": "記事 · コードをコピーした",
-   "page": "site",
-   "is_interactive": true
-  },
-  "ArticleEn.dc.html": {
-   "x": 11350,
-   "y": 0,
-   "w": 1280,
-   "h": 3200,
-   "title": "Article  /en/notes/[slug]/",
-   "page": "site",
-   "is_interactive": true
-  },
-  "NotesPhone.dc.html": {
-   "x": 12710,
-   "y": 0,
-   "w": 390,
-   "h": 2600,
-   "title": "技術情報 · スマートフォン",
-   "page": "site",
-   "is_interactive": true
-  },
-  "ArticlePhone.dc.html": {
-   "x": 13180,
-   "y": 0,
-   "w": 390,
-   "h": 5200,
-   "title": "記事 · スマートフォン",
-   "page": "site",
-   "is_interactive": true
-  },
-  "NotFound.dc.html": {
-   "x": 13650,
-   "y": 0,
-   "w": 1280,
-   "h": 900,
-   "title": "ページが見つかりません  /404",
-   "page": "site",
-   "is_interactive": true
-  },
-  "PlayReading.dc.html": {
-   "x": 13600,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · KUROOBI の手を開いたとき",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayWon.dc.html": {
-   "x": 14960,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · 勝ったとき",
-   "page": "web",
-   "is_interactive": true
-  },
-  "BoardMotion.dc.html": {
-   "x": 0,
-   "y": 604,
-   "w": 640,
-   "h": 640,
-   "title": "盤 · 石が返る動き",
-   "page": "parts",
-   "is_interactive": true
-  },
-  "PlayPhoneSetup.dc.html": {
-   "x": 1360,
-   "y": 3400,
-   "w": 390,
-   "h": 2000,
-   "title": "対局 · スマートフォン · 始める前",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayPhoneSetupEn.dc.html": {
-   "x": 1830,
-   "y": 3400,
-   "w": 390,
-   "h": 2000,
-   "title": "Play · phone · before a game",
-   "page": "web",
-   "is_interactive": true
-  },
-  "StudyPhoneEn.dc.html": {
-   "x": 11780,
-   "y": 1300,
-   "w": 390,
-   "h": 2600,
-   "title": "Study · phone",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayNext.dc.html": {
-   "x": 16320,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · 終局から次の対局",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayPhoneOver.dc.html": {
-   "x": 16320,
-   "y": 1300,
-   "w": 390,
-   "h": 1400,
-   "title": "対局 · スマートフォン · 終局",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayPhoneNext.dc.html": {
-   "x": 16790,
-   "y": 1300,
-   "w": 390,
-   "h": 1400,
-   "title": "対局 · スマートフォン · 次の対局",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayPhoneView.dc.html": {
-   "x": 17260,
-   "y": 1300,
-   "w": 390,
-   "h": 1400,
-   "title": "対局 · スマートフォン · 表示メニュー",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayPhoneEn.dc.html": {
-   "x": 16320,
-   "y": 2800,
-   "w": 390,
-   "h": 1400,
-   "title": "Play · phone · KUROOBI thinking",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayPhoneReading.dc.html": {
-   "x": 16790,
-   "y": 2800,
-   "w": 390,
-   "h": 1400,
-   "title": "対局 · スマートフォン · KUROOBI の手を開いたとき",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayDraw.dc.html": {
-   "x": 17730,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · 引き分け",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayPhoneDraw.dc.html": {
-   "x": 19090,
-   "y": 0,
-   "w": 390,
-   "h": 1400,
-   "title": "対局 · スマートフォン · 引き分け",
-   "page": "web",
-   "is_interactive": true
-  },
-  "StudyDraw.dc.html": {
-   "x": 17730,
-   "y": 1300,
-   "w": 1280,
-   "h": 1460,
-   "title": "検討 · 引き分けの棋譜",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayIdle.dc.html": {
-   "x": 19560,
-   "y": 0,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · 準備を閉じたとき",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayPhoneIdle.dc.html": {
-   "x": 20920,
-   "y": 0,
-   "w": 390,
-   "h": 1400,
-   "title": "対局 · スマートフォン · 準備を閉じたとき",
-   "page": "web",
-   "is_interactive": true
-  },
-  "StudyEndgame.dc.html": {
-   "x": 21390,
-   "y": 0,
-   "w": 1280,
-   "h": 1460,
-   "title": "検討 · 確率読みの区間",
-   "page": "web",
-   "is_interactive": true
-  },
-  "StudyPhoneEndgame.dc.html": {
-   "x": 22750,
-   "y": 0,
-   "w": 390,
-   "h": 2200,
-   "title": "検討 · スマートフォン · 確率読みの区間",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayEndgame.dc.html": {
-   "x": 21390,
-   "y": 1580,
-   "w": 1280,
-   "h": 1180,
-   "title": "対局 · KUROOBI の確率読みを開いたとき",
-   "page": "web",
-   "is_interactive": true
-  },
-  "PlayPhoneEndgame.dc.html": {
-   "x": 22750,
-   "y": 2300,
-   "w": 390,
-   "h": 1600,
-   "title": "対局 · スマートフォン · KUROOBI の確率読みを開いたとき",
-   "page": "web",
-   "is_interactive": true
-  },
-  "StudyScrub.dc.html": {
-   "x": 23200,
-   "y": 0,
-   "w": 1280,
-   "h": 1460,
-   "title": "検討 · グラフを指す",
-   "page": "web",
-   "is_interactive": true
-  },
-  "StudyPhoneScrub.dc.html": {
-   "x": 24540,
-   "y": 0,
-   "w": 390,
-   "h": 2200,
-   "title": "検討 · スマートフォン · グラフをなぞる",
-   "page": "web",
-   "is_interactive": true
-  },
-  "StudyBook.dc.html": {
-   "x": 25000,
-   "y": 0,
-   "w": 1280,
-   "h": 1460,
-   "title": "検討 · 定石の評価値 (定石を使うようになったとき)",
-   "page": "web",
-   "expand": "fill",
-   "is_interactive": true
-  },
-  "StudyPhoneBook.dc.html": {
-   "x": 26340,
-   "y": 0,
-   "w": 390,
-   "h": 2600,
-   "title": "検討 · スマートフォン · 定石の評価値 (定石を使うようになったとき)",
-   "page": "web",
-   "is_interactive": true
-  }
- },
- "order": [
-  "Main.dc.html",
-  "Sitemap.dc.html",
-  "MainPhone.dc.html",
-  "MainEn.dc.html",
-  "MainEmpty.dc.html",
-  "Notes.dc.html",
-  "NotesTag.dc.html",
-  "NotesEmpty.dc.html",
-  "NotesEn.dc.html",
-  "Article.dc.html",
-  "ArticlePhone.dc.html",
-  "NotesPhone.dc.html",
-  "ArticleEn.dc.html",
-  "ArticleCopied.dc.html",
-  "ArticleFirst.dc.html",
-  "Play.dc.html",
-  "PlayLoading.dc.html",
-  "PlayEvals.dc.html",
-  "PlayReading.dc.html",
-  "PlayShare.dc.html",
-  "Study.dc.html",
-  "StudyAnalyzing.dc.html",
-  "StudyLoad.dc.html",
-  "PlayStart.dc.html",
-  "PlayWon.dc.html",
-  "PlayOver.dc.html",
-  "PlayFailed.dc.html",
-  "PlayCustom.dc.html",
-  "PlayCopied.dc.html",
-  "PlayEn.dc.html",
-  "StudyFresh.dc.html",
-  "StudyOver.dc.html",
-  "StudyLoading.dc.html",
-  "StudyEn.dc.html",
-  "StudyPhone.dc.html",
-  "LoadStates.dc.html",
-  "PlayPhone.dc.html",
-  "StudyPhoneEn.dc.html",
-  "PlayPhoneSetupEn.dc.html",
-  "PlayPhoneSetup.dc.html",
-  "PlayNext.dc.html",
-  "PlayPhoneOver.dc.html",
-  "PlayPhoneNext.dc.html",
-  "PlayPhoneView.dc.html",
-  "PlayPhoneEn.dc.html",
-  "PlayPhoneReading.dc.html",
-  "PlayDraw.dc.html",
-  "PlayPhoneDraw.dc.html",
-  "StudyDraw.dc.html",
-  "PlayIdle.dc.html",
-  "PlayPhoneIdle.dc.html",
-  "StudyEndgame.dc.html",
-  "StudyPhoneEndgame.dc.html",
-  "StudyScrub.dc.html",
-  "StudyPhoneScrub.dc.html",
-  "StudyBook.dc.html",
-  "StudyPhoneBook.dc.html",
-  "PlayEndgame.dc.html",
-  "PlayPhoneEndgame.dc.html",
-  "NotFound.dc.html",
-  "SiteHeader.dc.html",
-  "SiteFooter.dc.html",
-  "BoardMotion.dc.html"
- ],
- "notes": {},
- "designSystems": [
-  {
-   "title": "Kuroobi Design System",
-   "namespace": "kuroobiui",
-   "artifact": "https://claude.ai/artifact/FdrQv84GfBVmkyaQL7UEbX",
-   "version": "1795655170-d4a1",
-   "copiedAt": "2026-11-26T01:10:00Z"
-  }
- ]
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "Article.dc.html": {
+      "expand": "fill",
+      "h": 3200,
+      "is_interactive": true,
+      "page": "site",
+      "title": "記事  /notes/[slug]/",
+      "w": 1280,
+      "x": 3190,
+      "y": 0
+    },
+    "ArticleCopied.dc.html": {
+      "h": 1100,
+      "is_interactive": true,
+      "page": "site",
+      "title": "記事 · コードをコピーした",
+      "w": 1280,
+      "x": 9990,
+      "y": 0
+    },
+    "ArticleEn.dc.html": {
+      "h": 3200,
+      "is_interactive": true,
+      "page": "site",
+      "title": "Article  /en/notes/[slug]/",
+      "w": 1280,
+      "x": 11350,
+      "y": 0
+    },
+    "ArticleFirst.dc.html": {
+      "h": 3200,
+      "is_interactive": true,
+      "page": "site",
+      "title": "記事 · 最初の記事",
+      "w": 1280,
+      "x": 8630,
+      "y": 0
+    },
+    "ArticlePhone.dc.html": {
+      "h": 5200,
+      "is_interactive": true,
+      "page": "site",
+      "title": "記事 · スマートフォン",
+      "w": 390,
+      "x": 13180,
+      "y": 0
+    },
+    "Bench.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "計測  /play/bench/",
+      "w": 1280,
+      "x": 0,
+      "y": 5600
+    },
+    "BenchDone.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "計測 · 終わったとき",
+      "w": 1280,
+      "x": 4080,
+      "y": 5600
+    },
+    "BenchEn.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "Benchmark  /en/play/bench/",
+      "w": 1280,
+      "x": 6380,
+      "y": 5600
+    },
+    "BenchLoading.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "計測 · 初回の読み込み",
+      "w": 1280,
+      "x": 1360,
+      "y": 5600
+    },
+    "BenchPhone.dc.html": {
+      "h": 2200,
+      "is_interactive": true,
+      "page": "web",
+      "title": "計測 · スマートフォン · 計測中",
+      "w": 390,
+      "x": 5440,
+      "y": 5600
+    },
+    "BenchPhoneDone.dc.html": {
+      "h": 2200,
+      "is_interactive": true,
+      "page": "web",
+      "title": "計測 · スマートフォン · 終わったとき",
+      "w": 390,
+      "x": 5910,
+      "y": 5600
+    },
+    "BenchRunning.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "計測 · 計測中",
+      "w": 1280,
+      "x": 2720,
+      "y": 5600
+    },
+    "BoardMotion.dc.html": {
+      "h": 640,
+      "is_interactive": true,
+      "page": "parts",
+      "title": "盤 · 石が返る動き",
+      "w": 640,
+      "x": 0,
+      "y": 604
+    },
+    "LoadStates.dc.html": {
+      "h": 1500,
+      "is_interactive": true,
+      "page": "web",
+      "title": "棋譜を読み込み · 状態",
+      "w": 1280,
+      "x": 10460,
+      "y": 1300
+    },
+    "Main.dc.html": {
+      "expand": "fill",
+      "h": 3600,
+      "is_interactive": true,
+      "page": "site",
+      "title": "トップ  /",
+      "w": 1280,
+      "x": 0,
+      "y": 0
+    },
+    "MainEmpty.dc.html": {
+      "expand": "fill",
+      "h": 3000,
+      "is_interactive": true,
+      "page": "site",
+      "title": "トップ · 記事が無いとき",
+      "w": 1280,
+      "x": 1830,
+      "y": 1600
+    },
+    "MainEn.dc.html": {
+      "expand": "fill",
+      "h": 3600,
+      "is_interactive": true,
+      "page": "site",
+      "title": "Top  /en/",
+      "w": 1280,
+      "x": 0,
+      "y": 3720
+    },
+    "MainPhone.dc.html": {
+      "h": 5600,
+      "is_interactive": true,
+      "page": "site",
+      "title": "トップ · スマートフォン",
+      "w": 390,
+      "x": 1360,
+      "y": 0
+    },
+    "NotFound.dc.html": {
+      "h": 900,
+      "is_interactive": true,
+      "page": "site",
+      "title": "ページが見つかりません  /404",
+      "w": 1280,
+      "x": 13650,
+      "y": 0
+    },
+    "Notes.dc.html": {
+      "expand": "fill",
+      "h": 1500,
+      "is_interactive": true,
+      "page": "site",
+      "title": "技術情報  /notes/",
+      "w": 1280,
+      "x": 1830,
+      "y": 0
+    },
+    "NotesEmpty.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "page": "site",
+      "title": "技術情報 · 記事が無いとき",
+      "w": 1280,
+      "x": 5910,
+      "y": 0
+    },
+    "NotesEn.dc.html": {
+      "expand": "fill",
+      "h": 1500,
+      "is_interactive": true,
+      "page": "site",
+      "title": "Notes  /en/notes/",
+      "w": 1280,
+      "x": 7270,
+      "y": 0
+    },
+    "NotesPhone.dc.html": {
+      "h": 2600,
+      "is_interactive": true,
+      "page": "site",
+      "title": "技術情報 · スマートフォン",
+      "w": 390,
+      "x": 12710,
+      "y": 0
+    },
+    "NotesTag.dc.html": {
+      "expand": "fill",
+      "h": 1100,
+      "is_interactive": true,
+      "page": "site",
+      "title": "技術情報 · タグ  /notes/tags/[tag]/",
+      "w": 1280,
+      "x": 4550,
+      "y": 0
+    },
+    "Play.dc.html": {
+      "expand": "fill",
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局  /play/",
+      "w": 1280,
+      "x": 0,
+      "y": 0
+    },
+    "PlayChange.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · 対局の設定を変更",
+      "w": 1280,
+      "x": 27800,
+      "y": 1300
+    },
+    "PlayCopied.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · コピーの知らせ",
+      "w": 1280,
+      "x": 10880,
+      "y": 0
+    },
+    "PlayCustom.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · 強さをカスタム",
+      "w": 1280,
+      "x": 9520,
+      "y": 0
+    },
+    "PlayDraw.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · 引き分け",
+      "w": 1280,
+      "x": 17730,
+      "y": 0
+    },
+    "PlayEn.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "Play  /en/play/",
+      "w": 1280,
+      "x": 12240,
+      "y": 0
+    },
+    "PlayEndgame.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · KUROOBI の確率読みを開いたとき",
+      "w": 1280,
+      "x": 21390,
+      "y": 1580
+    },
+    "PlayEvals.dc.html": {
+      "expand": "fill",
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · 評価値を表示",
+      "w": 1280,
+      "x": 2720,
+      "y": 0
+    },
+    "PlayFailed.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · 評価関数を読み込めない",
+      "w": 1280,
+      "x": 8160,
+      "y": 0
+    },
+    "PlayFrom.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · 棋譜の局面から対局",
+      "w": 1280,
+      "x": 27800,
+      "y": 0
+    },
+    "PlayIdle.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · 準備を閉じたとき",
+      "w": 1280,
+      "x": 19560,
+      "y": 0
+    },
+    "PlayLoading.dc.html": {
+      "expand": "fill",
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · 初回の読み込み",
+      "w": 1280,
+      "x": 1360,
+      "y": 0
+    },
+    "PlayNext.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · 終局から次の対局",
+      "w": 1280,
+      "x": 16320,
+      "y": 0
+    },
+    "PlayOver.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · 負けたとき",
+      "w": 1280,
+      "x": 6800,
+      "y": 0
+    },
+    "PlayPhone.dc.html": {
+      "h": 2000,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · スマートフォン",
+      "w": 390,
+      "x": 1360,
+      "y": 1300
+    },
+    "PlayPhoneChange.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · スマートフォン · 対局の設定を変更",
+      "w": 390,
+      "x": 29160,
+      "y": 1500
+    },
+    "PlayPhoneDraw.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · スマートフォン · 引き分け",
+      "w": 390,
+      "x": 19090,
+      "y": 0
+    },
+    "PlayPhoneEn.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "Play · phone · KUROOBI thinking",
+      "w": 390,
+      "x": 16320,
+      "y": 2800
+    },
+    "PlayPhoneEndgame.dc.html": {
+      "h": 1600,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · スマートフォン · KUROOBI の確率読みを開いたとき",
+      "w": 390,
+      "x": 22750,
+      "y": 2300
+    },
+    "PlayPhoneFrom.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · スマートフォン · 棋譜の局面から対局",
+      "w": 390,
+      "x": 29160,
+      "y": 0
+    },
+    "PlayPhoneIdle.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · スマートフォン · 準備を閉じたとき",
+      "w": 390,
+      "x": 20920,
+      "y": 0
+    },
+    "PlayPhoneNext.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · スマートフォン · 次の対局",
+      "w": 390,
+      "x": 16790,
+      "y": 1300
+    },
+    "PlayPhoneOver.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · スマートフォン · 終局",
+      "w": 390,
+      "x": 16320,
+      "y": 1300
+    },
+    "PlayPhoneReading.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · スマートフォン · KUROOBI の手を開いたとき",
+      "w": 390,
+      "x": 16790,
+      "y": 2800
+    },
+    "PlayPhoneSetup.dc.html": {
+      "h": 2000,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · スマートフォン · 始める前",
+      "w": 390,
+      "x": 1360,
+      "y": 3400
+    },
+    "PlayPhoneSetupEn.dc.html": {
+      "h": 2000,
+      "is_interactive": true,
+      "page": "web",
+      "title": "Play · phone · before a game",
+      "w": 390,
+      "x": 1830,
+      "y": 3400
+    },
+    "PlayPhoneView.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · スマートフォン · 対局のメニュー",
+      "w": 390,
+      "x": 17260,
+      "y": 1300
+    },
+    "PlayReading.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · KUROOBI の手を開いたとき",
+      "w": 1280,
+      "x": 13600,
+      "y": 0
+    },
+    "PlayShare.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · シェア",
+      "w": 1280,
+      "x": 4080,
+      "y": 0
+    },
+    "PlayStart.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · 始める前",
+      "w": 1280,
+      "x": 5440,
+      "y": 0
+    },
+    "PlayWon.dc.html": {
+      "h": 1180,
+      "is_interactive": true,
+      "page": "web",
+      "title": "対局 · 勝ったとき",
+      "w": 1280,
+      "x": 14960,
+      "y": 0
+    },
+    "SiteFooter.dc.html": {
+      "h": 380,
+      "page": "parts",
+      "title": "サイトの足元",
+      "w": 1280,
+      "x": 0,
+      "y": 184
+    },
+    "SiteHeader.dc.html": {
+      "h": 64,
+      "is_interactive": true,
+      "page": "parts",
+      "title": "サイトの見出し",
+      "w": 1280,
+      "x": 0,
+      "y": 0
+    },
+    "Sitemap.dc.html": {
+      "h": 832,
+      "page": "skeleton",
+      "title": "サイトの構成と URL",
+      "w": 1280,
+      "x": 0,
+      "y": 0
+    },
+    "Study.dc.html": {
+      "expand": "fill",
+      "h": 1460,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討  /play/study/",
+      "w": 1280,
+      "x": 0,
+      "y": 1300
+    },
+    "StudyAnalyzing.dc.html": {
+      "expand": "fill",
+      "h": 1460,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討 · 分析中",
+      "w": 1280,
+      "x": 1830,
+      "y": 1300
+    },
+    "StudyBook.dc.html": {
+      "expand": "fill",
+      "h": 1460,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討 · 定石の評価値 (定石を使うようになったとき)",
+      "w": 1280,
+      "x": 25000,
+      "y": 0
+    },
+    "StudyDraw.dc.html": {
+      "h": 1460,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討 · 引き分けの棋譜",
+      "w": 1280,
+      "x": 17730,
+      "y": 1300
+    },
+    "StudyEn.dc.html": {
+      "h": 1460,
+      "is_interactive": true,
+      "page": "web",
+      "title": "Study  /en/play/study/",
+      "w": 1280,
+      "x": 8630,
+      "y": 1300
+    },
+    "StudyEndgame.dc.html": {
+      "h": 1460,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討 · 確率読みの区間",
+      "w": 1280,
+      "x": 21390,
+      "y": 0
+    },
+    "StudyFresh.dc.html": {
+      "h": 1460,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討 · 開いた直後",
+      "w": 1280,
+      "x": 4550,
+      "y": 1300
+    },
+    "StudyLoad.dc.html": {
+      "h": 1460,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討 · 棋譜を読み込み",
+      "w": 1280,
+      "x": 3190,
+      "y": 1300
+    },
+    "StudyLoading.dc.html": {
+      "h": 1460,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討 · 初回の読み込み",
+      "w": 1280,
+      "x": 7270,
+      "y": 1300
+    },
+    "StudyOver.dc.html": {
+      "h": 1460,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討 · 終局",
+      "w": 1280,
+      "x": 5910,
+      "y": 1300
+    },
+    "StudyPhone.dc.html": {
+      "h": 2600,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討 · スマートフォン",
+      "w": 390,
+      "x": 9990,
+      "y": 1300
+    },
+    "StudyPhoneBook.dc.html": {
+      "h": 2600,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討 · スマートフォン · 定石の評価値 (定石を使うようになったとき)",
+      "w": 390,
+      "x": 26340,
+      "y": 0
+    },
+    "StudyPhoneEn.dc.html": {
+      "h": 2600,
+      "is_interactive": true,
+      "page": "web",
+      "title": "Study · phone",
+      "w": 390,
+      "x": 11780,
+      "y": 1300
+    },
+    "StudyPhoneEndgame.dc.html": {
+      "h": 2200,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討 · スマートフォン · 確率読みの区間",
+      "w": 390,
+      "x": 22750,
+      "y": 0
+    },
+    "StudyPhoneScrub.dc.html": {
+      "h": 2200,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討 · スマートフォン · グラフをなぞる",
+      "w": 390,
+      "x": 24540,
+      "y": 0
+    },
+    "StudyScrub.dc.html": {
+      "h": 1460,
+      "is_interactive": true,
+      "page": "web",
+      "title": "検討 · グラフを指す",
+      "w": 1280,
+      "x": 23200,
+      "y": 0
+    },
+    "BenchFile.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "計測 · obf を読み込んだとき",
+      "w": 1280,
+      "x": 7760,
+      "y": 5600
+    },
+    "BenchPhoneFile.dc.html": {
+      "h": 2200,
+      "is_interactive": true,
+      "page": "web",
+      "title": "計測 · スマートフォン · obf を読み込んだとき",
+      "w": 390,
+      "x": 9120,
+      "y": 5600
+    },
+    "BenchBad.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "計測 · obf として読めないとき",
+      "w": 1280,
+      "x": 9590,
+      "y": 5600
+    },
+    "BenchBig.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "計測 · 10 MB を超えるファイル",
+      "w": 1280,
+      "x": 10950,
+      "y": 5600
+    },
+    "BenchMany.dc.html": {
+      "h": 1400,
+      "is_interactive": true,
+      "page": "web",
+      "title": "計測 · 最善手が多い問題 (FFO #39)",
+      "w": 1280,
+      "x": 12310,
+      "y": 5600
+    },
+    "BenchPhoneMany.dc.html": {
+      "h": 2200,
+      "is_interactive": true,
+      "page": "web",
+      "title": "計測 · スマートフォン · 最善手が多い問題",
+      "w": 390,
+      "x": 13670,
+      "y": 5600
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-11-26T01:10:00Z",
+    "v": 1
+  },
+  "designSystems": [
+    {
+      "artifact": "https://claude.ai/artifact/FdrQv84GfBVmkyaQL7UEbX",
+      "copiedAt": "2026-11-26T01:10:00Z",
+      "namespace": "kuroobiui",
+      "title": "Kuroobi Design System",
+      "version": "1795655170-d4a1"
+    }
+  ],
+  "launch": {
+    "page": "skeleton",
+    "view": "canvas"
+  },
+  "notes": {},
+  "order": [
+    "Main.dc.html",
+    "Sitemap.dc.html",
+    "MainPhone.dc.html",
+    "MainEn.dc.html",
+    "MainEmpty.dc.html",
+    "Notes.dc.html",
+    "NotesTag.dc.html",
+    "NotesEmpty.dc.html",
+    "NotesEn.dc.html",
+    "Article.dc.html",
+    "ArticlePhone.dc.html",
+    "NotesPhone.dc.html",
+    "ArticleEn.dc.html",
+    "ArticleCopied.dc.html",
+    "ArticleFirst.dc.html",
+    "Play.dc.html",
+    "PlayLoading.dc.html",
+    "PlayEvals.dc.html",
+    "PlayReading.dc.html",
+    "PlayShare.dc.html",
+    "Study.dc.html",
+    "StudyAnalyzing.dc.html",
+    "StudyLoad.dc.html",
+    "PlayStart.dc.html",
+    "PlayWon.dc.html",
+    "PlayOver.dc.html",
+    "PlayFailed.dc.html",
+    "PlayCustom.dc.html",
+    "PlayCopied.dc.html",
+    "PlayEn.dc.html",
+    "StudyFresh.dc.html",
+    "StudyOver.dc.html",
+    "StudyLoading.dc.html",
+    "StudyEn.dc.html",
+    "StudyPhone.dc.html",
+    "LoadStates.dc.html",
+    "PlayPhone.dc.html",
+    "StudyPhoneEn.dc.html",
+    "PlayPhoneSetupEn.dc.html",
+    "PlayPhoneSetup.dc.html",
+    "PlayNext.dc.html",
+    "PlayPhoneOver.dc.html",
+    "PlayPhoneNext.dc.html",
+    "PlayPhoneView.dc.html",
+    "PlayPhoneEn.dc.html",
+    "PlayPhoneReading.dc.html",
+    "PlayDraw.dc.html",
+    "PlayPhoneDraw.dc.html",
+    "StudyDraw.dc.html",
+    "PlayIdle.dc.html",
+    "PlayPhoneIdle.dc.html",
+    "StudyEndgame.dc.html",
+    "StudyPhoneEndgame.dc.html",
+    "StudyScrub.dc.html",
+    "StudyPhoneScrub.dc.html",
+    "StudyBook.dc.html",
+    "StudyPhoneBook.dc.html",
+    "PlayEndgame.dc.html",
+    "PlayPhoneEndgame.dc.html",
+    "NotFound.dc.html",
+    "SiteHeader.dc.html",
+    "SiteFooter.dc.html",
+    "BoardMotion.dc.html",
+    "PlayFrom.dc.html",
+    "PlayPhoneFrom.dc.html",
+    "PlayChange.dc.html",
+    "PlayPhoneChange.dc.html",
+    "Bench.dc.html",
+    "BenchLoading.dc.html",
+    "BenchRunning.dc.html",
+    "BenchDone.dc.html",
+    "BenchPhone.dc.html",
+    "BenchPhoneDone.dc.html",
+    "BenchEn.dc.html",
+    "BenchFile.dc.html",
+    "BenchPhoneFile.dc.html",
+    "BenchBad.dc.html",
+    "BenchBig.dc.html",
+    "BenchMany.dc.html",
+    "BenchPhoneMany.dc.html"
+  ],
+  "pages": [
+    {
+      "id": "skeleton",
+      "name": "骨子"
+    },
+    {
+      "id": "site",
+      "name": "サイト"
+    },
+    {
+      "id": "web",
+      "name": "Kuroobi for web"
+    },
+    {
+      "id": "parts",
+      "name": "部品"
+    }
+  ],
+  "title": "KUROOBI Web"
 }

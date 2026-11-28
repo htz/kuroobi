@@ -1,6 +1,6 @@
 import React from 'react';
-import { Engine } from '../engine/client';
 import type { Valued } from '../engine/protocol';
+import { useEngine } from '../engine/useEngine';
 import { href, t, type Lang } from '../i18n';
 import { isOver, legal, play, replay, squareName, START, type Position, type Side } from '../lib/othello';
 import { boardText, isStart, readRecord, type GameRecord } from '../lib/record';
@@ -8,7 +8,7 @@ import { Board, BoardDefs, EvalLegend, FLIP_MS, type EvalInfo } from './Board';
 import { EvalGraph, type GraphPoint } from './EvalGraph';
 import { LoadRecord } from './LoadRecord';
 import {
-  Busy, Button, BoardCover, CandidateList, KifuTable, LEVEL0, levelLabel, MenuButton, Panel, Progress, RadioCards, Scoreboard, Segmented, StepNav, Strength, Toast, Toggle,
+  Busy, Button, BoardCover, CandidateList, Field, KifuTable, LEVEL0, MenuButton, Panel, Progress, RadioCards, Scoreboard, Segmented, StepNav, Strength, Toast, Toggle,
   type Levels, type Move, type Reading, type ScoreSide,
 } from './ui';
 
@@ -22,6 +22,12 @@ const REPLY_MIN_MS = 800;
 const SETTLE_MS = FLIP_MS + 360;
 
 type Mode = 'play' | 'study';
+type Setup = { you: Side; level: Levels };
+/**
+ * What the cover over the board settles: a game from the opening (New game), one from a record's position (loaded in
+ * play, or Play from this position in study), or a change to the game in progress (its colour and strength).
+ */
+type Cover = { kind: 'new' } | { kind: 'from'; start: Position; moves: number[] } | { kind: 'change' };
 type Hints = { at: number; depth: number; moves: Valued[] };
 
 const OPENING: Position = { cells: START.slice(), turn: 1 };
@@ -32,29 +38,20 @@ function line(start: Position, moves: number[]): Position[] {
   return out;
 }
 
+/** Whether every move is legal in turn from `start`. */
+function playable(start: Position, moves: number[]): boolean {
+  let p: Position | null = start;
+  for (const m of moves) if (!(p = play(p, m))) return false;
+  return true;
+}
+
 const count = (p: Position) => ({ b: p.cells.filter((c) => c === 1).length, w: p.cells.filter((c) => c === 2).length });
 const empties = (p: Position) => p.cells.filter((c) => c === 0).length;
 
 const kifuOf = (moves: number[]) => moves.map(squareName).join('');
 
-/** The engine, made once in the browser; the server render never starts a worker. */
-function useEngine(enabled: boolean) {
-  const [engine, setEngine] = React.useState<Engine | null>(null);
-  const [progress, setProgress] = React.useState<{ loaded: number; total: number } | null>(null);
-  const [ready, setReady] = React.useState(false);
-  const [failed, setFailed] = React.useState<string | null>(null);
-  React.useEffect(() => {
-    if (!enabled) return;
-    const e = new Engine();
-    e.onProgress = (loaded, total) => setProgress({ loaded, total });
-    e.ready.then(() => setReady(true), (err: Error) => setFailed(err.message));
-    setEngine(e);
-  }, [enabled]);
-  return { engine, progress, ready, failed };
-}
-
 const SAVED_GAME = 'kuroobi-play-game';
-type SavedGame = { moves: number[]; game: { you: Side; level: Levels }; reads?: (Reading | null)[] };
+type SavedGame = { start?: string; moves: number[]; game: Setup; reads?: (Reading | null)[] };
 
 /** `preview` draws a game in progress for the top page, with no engine behind it. */
 export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mode; preview?: string }) {
@@ -65,7 +62,7 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
 
   const [moves, setMoves] = React.useState<number[]>(() => (preview ? replay(preview).moves : []));
   const [cursor, setCursor] = React.useState(0);
-  // Study can start from any board a record gives; a game always starts from the opening.
+  // A game or a study starts from the opening or from any board a record gives.
   const [start, setStart] = React.useState<Position>(OPENING);
   const positions = React.useMemo(() => line(start, moves), [start, moves]);
   const at = mode === 'play' ? moves.length : Math.min(cursor, moves.length);
@@ -73,12 +70,12 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
   const over = isOver(pos);
 
   // Play
-  const [setup, setSetup] = React.useState<{ you: Side; level: Levels }>({ you: 1, level: LEVEL0 });
+  const [setup, setSetup] = React.useState<Setup>({ you: 1, level: LEVEL0 });
   const [game, setGame] = React.useState(setup);
-  // A game begins with its button; until then its colour and strength can change, and after it they cannot.
   const [playing, setPlaying] = React.useState(!!preview);
-  /** The setup is over the board: at first, and after New game; Cancel always closes it on the board as it stands. */
-  const [choosing, setChoosing] = React.useState(!preview);
+  /** Over the board at first and after New game, Change settings or a record to play from; Cancel leaves the game as it was. */
+  const [cover, setCover] = React.useState<Cover | null>(preview ? null : { kind: 'new' });
+  const choosing = cover !== null;
   const [thinkingSince, setThinkingSince] = React.useState<number | null>(preview ? 0 : null);
   const thinking = thinkingSince !== null;
   // What KUROOBI read for each move it played, by ply; shown only when asked for.
@@ -113,30 +110,39 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
     setCursor(Number.isInteger(ply) && q.has('ply') ? Math.min(Math.max(ply, 0), ms.length) : ms.length);
   }, [mode]);
 
-  // A game in progress lives in the tab, so leaving for study (another page) and coming back finds it again.
+  // A game in progress lives in the tab, so leaving for study (another page) and coming back finds it again. A position
+  // sent from study (?start=&kifu=) comes up to play from, over that game if there is one.
   React.useEffect(() => {
     if (mode !== 'play' || preview) return;
+    let resumed = false;
     try {
       const saved = JSON.parse(sessionStorage.getItem(SAVED_GAME) ?? 'null') as SavedGame | null;
-      if (!saved || !Array.isArray(saved.moves) || !line(OPENING, saved.moves).every(Boolean)) return;
-      setSetup(saved.game);
-      setGame(saved.game);
-      setMoves(saved.moves);
-      setReads((saved.reads ?? []).map((r) => r ?? undefined));
-      setPlaying(true);
-      setChoosing(false);
+      const from = saved?.start ? readRecord(saved.start)?.start : OPENING;
+      if (saved && from && Array.isArray(saved.moves) && playable(from, saved.moves)) {
+        setSetup(saved.game);
+        setGame(saved.game);
+        setStart(from);
+        setMoves(saved.moves);
+        setReads((saved.reads ?? []).map((r) => r ?? undefined));
+        setPlaying(true);
+        resumed = true;
+      }
     } catch {
       // Without storage, or with something else in it, the page starts as new.
     }
+    const q = new URLSearchParams(location.search);
+    const sent = q.has('start') || q.has('kifu') ? readRecord(`${boardText((q.get('start') && readRecord(q.get('start')!)?.start) || OPENING)} ${q.get('kifu') ?? ''}`) : null;
+    if (sent && !isOver(line(sent.start, sent.moves).at(-1)!)) offerFrom(sent);
+    else if (resumed) setCover(null);
   }, [mode, preview]);
   React.useEffect(() => {
     if (mode !== 'play' || preview) return;
     try {
-      sessionStorage.setItem(SAVED_GAME, JSON.stringify(playing ? { moves, game, reads } : null));
+      sessionStorage.setItem(SAVED_GAME, JSON.stringify(playing ? { start: isStart(start) ? undefined : boardText(start), moves, game, reads } : null));
     } catch {
       // The game still plays; it just will not be there after leaving the page.
     }
-  }, [mode, preview, playing, moves, game, reads]);
+  }, [mode, preview, playing, start, moves, game, reads]);
 
   /** A reading still running holds the worker; whatever comes next must not wait behind it. */
   const dropHints = () => {
@@ -194,7 +200,14 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
     return () => clearTimeout(timer);
   }, [wantHints, engine, pos, at]);
 
-  /** Begins a game with the settings chosen. */
+  /** The cover for a game from the end of `r`, the side to move yours to begin with. */
+  function offerFrom(r: { start: Position; moves: number[] }) {
+    const end = line(r.start, r.moves).at(-1)!;
+    setSetup((s) => ({ ...s, you: end.turn }));
+    setCover({ kind: 'from', start: r.start, moves: r.moves });
+  }
+
+  /** Begins a game with the settings chosen, from the opening or from the record the cover holds. */
   const begin = () => {
     gen.current++;
     dropHints();
@@ -204,9 +217,33 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
     setThinkingSince(null);
     setSettling(false);
     setReads([]);
-    setMoves([]);
-    setChoosing(false);
+    setStart(cover?.kind === 'from' ? cover.start : OPENING);
+    setMoves(cover?.kind === 'from' ? cover.moves : []);
+    setCover(null);
     setPlaying(true);
+    if (location.search) history.replaceState(null, '', location.pathname);
+  };
+
+  const openChange = () => {
+    setSetup(game);
+    setCover({ kind: 'change' });
+  };
+  /** The game goes on from where it stands with the colour and strength chosen: KUROOBI reads again if it is its turn. */
+  const resume = () => {
+    setCover(null);
+    if (setup.you === game.you && setup.level.depth === game.level.depth && setup.level.solve === game.level.solve) return;
+    gen.current++;
+    dropHints();
+    if (thinking) {
+      engine?.restart();
+      setThinkingSince(null);
+    }
+    setGame(setup);
+  };
+  const cancelCover = () => {
+    if (cover?.kind === 'change') setSetup(game);
+    setCover(null);
+    if (cover?.kind === 'from' && location.search) history.replaceState(null, '', location.pathname);
   };
 
   const undo = () => {
@@ -297,12 +334,25 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
     const qs = q.toString();
     return href(lang, '/play/study/') + (qs ? '?' + qs : '');
   };
+  const playUrl = (from: Position, ms: number[]) => {
+    const q = new URLSearchParams();
+    if (!isStart(from)) q.set('start', boardText(from));
+    if (ms.length) q.set('kifu', kifuOf(ms));
+    const qs = q.toString();
+    return href(lang, '/play/') + (qs ? '?' + qs : '');
+  };
   /** The record as the app writes it: the moves alone from the opening, the board before them otherwise. */
   const recordText = () => (isStart(start) ? kifuOf(moves) : `${boardText(start)} ${kifuOf(moves)}`.trim());
 
   const applyLoad = (r: GameRecord) => {
+    // A record that has not ended can be played on from its end; one that has goes to study.
     if (mode === 'play') {
-      location.href = studyUrl(r.start, r.moves);
+      if (isOver(line(r.start, r.moves).at(-1)!)) {
+        location.href = studyUrl(r.start, r.moves);
+        return;
+      }
+      setLoadOpen(false);
+      offerFrom(r);
       return;
     }
     dropHints();
@@ -314,8 +364,18 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
   };
 
 
-  const c = count(pos);
-  const yours = mode === 'play' && playing && !choosing && !over && pos.turn === game.you && !thinking && !settling;
+  // Under a cover holding a record to play from, the board, scores and record are that record's; the game stays as it was.
+  const pending = mode === 'play' && cover?.kind === 'from' ? cover : null;
+  const pendingLine = React.useMemo(() => (pending ? line(pending.start, pending.moves) : null), [pending]);
+  const vStart = pending?.start ?? start;
+  const vMoves = pending?.moves ?? moves;
+  const vPositions = pendingLine ?? positions;
+  const vAt = pending ? vMoves.length : at;
+  const vPos = vPositions[vAt];
+  const vOver = isOver(vPos);
+
+  const c = count(vPos);
+  const yours = mode === 'play' && playing && !choosing && !vOver && vPos.turn === game.you && !thinking && !settling;
 
   // Every eval on screen is a whole number; which move is best, and their order, come from the unrounded values.
   const showEvals = (on: boolean) => { if (!on) dropHints(); setHintsOn(on); };
@@ -326,25 +386,27 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
   );
   // With no game, or once it is over, the next one is what is left to do
   const newGameButton = (
-    <Button kind={over || !playing ? 'primary' : 'secondary'} onClick={() => setChoosing(true)} style={{ flex: 1 }}>{L('newGame')}</Button>
+    <Button kind={vOver || !playing ? 'primary' : 'secondary'} onClick={() => setCover({ kind: 'new' })} style={{ flex: 1 }}>{L('newGame')}</Button>
   );
-  const viewItems = [
+  const changeable = playing && !vOver;
+  const menuItems = [
     { label: L('showEvals'), checked: hintsOn, onSelect: () => showEvals(!hintsOn) },
+    ...(changeable ? [{ label: L('change'), onSelect: openChange }] : []),
   ];
-  const shown = hints?.at === at && (mode === 'study' || hintsOn) ? hints : null;
-  const exact = !!shown && empties(pos) - 1 <= shown.depth;
+  const shown = !pending && hints?.at === vAt && (mode === 'study' || hintsOn) ? hints : null;
+  const exact = !!shown && empties(vPos) - 1 <= shown.depth;
   const readNote = shown ? (exact ? L('solved') : L('depth', { n: shown.depth })) : '';
   const boardEvals: Record<number, EvalInfo> = Object.fromEntries(
     (shown?.moves ?? []).map((m, i) => [m.move, { score: m.score, best: i === 0, src: exact ? 'solve' as const : undefined }]),
   );
 
   // Each move's value after it from Black's view, and what it cost the side that played it (2 discs or more).
-  const rows: Move[] = moves.map((m, i) => {
+  const rows: Move[] = vMoves.map((m, i) => {
     const value = graph[i + 1]?.value;
     const prev = graph[i]?.value;
-    const mover = positions[i].turn;
+    const mover = vPositions[i].turn;
     const drop = value === undefined || prev === undefined ? 0 : mover === 1 ? prev - value : value - prev;
-    const read = mode === 'play' && mover !== game.you ? reads[i] : undefined;
+    const read = mode === 'play' && !pending ? reads[i] : undefined;
     const after = graph[i + 1];
     return {
       n: i + 1, move: squareName(m), color: mover === 1 ? 'b' : 'w', score: value, loss: drop >= 2 ? drop : undefined,
@@ -356,8 +418,8 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
 
   const kuroobi: Side = (3 - game.you) as Side;
   // The side to move stands out; until KUROOBI's stones settle the turn stays with it. KUROOBI's card says only that it thinks.
-  const going = (mode === 'study' || playing) && !over;
-  const moving: Side = settling ? kuroobi : pos.turn;
+  const going = (mode === 'study' || (playing && !pending)) && !vOver;
+  const moving: Side = settling ? kuroobi : vPos.turn;
   const side = (s: Side): ScoreSide => ({
     count: s === 1 ? c.b : c.w,
     turn: going && moving === s,
@@ -365,15 +427,15 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
   });
   const R = (key: string) => t(lang, 'result.' + key);
   const winner: Side | 0 = c.b > c.w ? 1 : c.w > c.b ? 2 : 0;
-  const result = !over || settling || (mode === 'play' && !playing) ? null
+  const result = !vOver || settling || (mode === 'play' && !playing) ? null
     : mode === 'study'
       ? { title: R(winner === 1 ? 'blackWin' : winner === 2 ? 'whiteWin' : 'draw'), tone: 'neutral' as const }
       : { title: R(winner === game.you ? 'youWin' : winner ? 'kuroobiWin' : 'draw'), tone: winner === game.you ? 'win' as const : winner ? 'loss' as const : 'neutral' as const };
 
-  const shareUrl = () => location.origin + studyUrl(start, moves, at);
+  const shareUrl = () => location.origin + studyUrl(vStart, vMoves, vAt);
   const shareItems = [
     { label: L('shareLink'), icon: 'link' as const, onSelect: () => copy(shareUrl(), L('linkCopied')) },
-    ...(moves.length || !isStart(start) ? [{ label: L('shareKifu'), icon: 'copy' as const, onSelect: () => copy(recordText(), L('kifuCopied')) }] : []),
+    ...(vMoves.length || !isStart(vStart) ? [{ label: L('shareKifu'), icon: 'copy' as const, onSelect: () => copy(recordText(), L('kifuCopied')) }] : []),
     {
       label: L('shareX'), icon: 'x' as const, external: t(lang, 'site.newWindow'),
       onSelect: () => window.open(`https://x.com/intent/post?text=${encodeURIComponent(L('shareText'))}&url=${encodeURIComponent(shareUrl())}`, '_blank', 'noopener'),
@@ -391,7 +453,8 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
         <h1 className="pa-title">Kuroobi for web</h1>
         <Segmented label={L('modes')} items={[
           { label: L('title'), href: href(lang, '/play/'), on: mode === 'play' },
-          { label: L('studyTitle'), href: studyUrl(start, moves), on: mode === 'study' },
+          { label: L('studyTitle'), href: studyUrl(vStart, vMoves), on: mode === 'study' },
+          { label: L('benchTitle'), href: href(lang, '/play/bench/'), on: false },
         ]} />
         <div className="pa-tools">
           <Button icon="load" aria-label={L('load')} aria-haspopup="dialog" onClick={() => setLoadOpen(true)}>{L('load')}</Button>
@@ -429,24 +492,31 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
             <div className={ready ? undefined : 'pa-dim'} style={{ width: '100%', height: '100%' }}>
               <Board
                 lang={lang}
-                cells={pos.cells}
-                legal={over || (mode === 'play' && (!playing || choosing)) ? [] : legal(pos.cells, pos.turn)}
+                cells={vPos.cells}
+                legal={vOver || (mode === 'play' && (!playing || choosing)) ? [] : legal(vPos.cells, vPos.turn)}
                 evals={boardEvals}
-                turn={pos.turn === 1 ? 'b' : 'w'}
-                last={at > 0 ? moves[at - 1] : null}
+                turn={vPos.turn === 1 ? 'b' : 'w'}
+                last={vAt > 0 ? vMoves[vAt - 1] : null}
                 coords
                 disabled={!ready || (mode === 'play' && !yours)}
                 onPlay={onPlay}
               />
             </div>
-            {mode === 'play' && choosing && (
-              <BoardCover title={L('setupTitle')}>
+            {mode === 'play' && cover && (
+              <BoardCover title={L(cover.kind === 'from' ? 'playFrom' : cover.kind === 'change' ? 'changeTitle' : 'setupTitle')}>
+                {pending && (
+                  <Field label={L('startAt')}>
+                    <span className="pa-value">{L('startAtValue', { n: vMoves.length + 1, side: L(vPos.turn === 1 ? 'black' : 'white') })}</span>
+                  </Field>
+                )}
                 <RadioCards legend={L('side')} name="side" value={setup.you} onChange={(you) => setSetup({ ...setup, you })}
                   options={[{ value: 1 as Side, label: L('sideBlack'), stone: 'b', hint: L('sideFirst') }, { value: 2 as Side, label: L('sideWhite'), stone: 'w', hint: L('sideSecond') }]} />
                 <Strength lang={lang} label={L('strength')} value={setup.level} onChange={(level) => setSetup({ ...setup, level })} />
                 <div className="pa-cover-actions">
-                  <Button onClick={() => setChoosing(false)}>{L('cancel')}</Button>
-                  <Button kind="primary" disabled={!ready} onClick={begin}>{L('begin')}</Button>
+                  <Button onClick={cancelCover}>{L('cancel')}</Button>
+                  {cover.kind === 'change'
+                    ? <Button kind="primary" onClick={resume}>{L('resume')}</Button>
+                    : <Button kind="primary" disabled={!ready} onClick={begin}>{L('begin')}</Button>}
                 </div>
               </BoardCover>
             )}
@@ -458,14 +528,14 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
               {undoButton}
               {newGameButton}
               <div className="pa-o-view">
-                <MenuButton label={L('view')} icon="view" items={viewItems} />
+                <MenuButton label={L('menu')} icon="more" items={menuItems} />
               </div>
             </div>
           )}
 
           {mode === 'study' && (
             <div className="pa-o-step">
-              <StepNav lang={lang} at={at} total={moves.length} onJump={jump} />
+              <StepNav lang={lang} at={vAt} total={vMoves.length} onJump={jump} />
             </div>
           )}
 
@@ -475,11 +545,11 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
                 lang={lang}
                 points={graph}
                 plies={PLIES}
-                cursor={at}
+                cursor={vAt}
                 blunder={whole ? undefined : blunder}
                 busy={!!whole}
-                onJump={(n) => { if (n <= moves.length) jump(n); }}
-                moveName={(n) => (n >= 1 && n <= moves.length ? squareName(moves[n - 1]) : undefined)}
+                onJump={(n) => { if (n <= vMoves.length) jump(n); }}
+                moveName={(n) => (n >= 1 && n <= vMoves.length ? squareName(vMoves[n - 1]) : undefined)}
               />
             </div>
           )}
@@ -495,6 +565,7 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
                   <RadioCards legend={L('side')} name="side-now" value={game.you} disabled onChange={() => {}}
                     options={[{ value: 1 as Side, label: L('sideBlack'), stone: 'b', hint: L('sideFirst') }, { value: 2 as Side, label: L('sideWhite'), stone: 'w', hint: L('sideSecond') }]} />
                   <Strength lang={lang} label={L('strength')} value={game.level} disabled onChange={() => {}} />
+                  <Button disabled={!changeable} onClick={openChange}>{L('change')}</Button>
                 </>}
               </Panel>
             </div>
@@ -504,8 +575,8 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
             <div className="pa-o-main">
               <Panel id="pa-cands" title={L('candidates')} note={readNote}>
                 <CandidateList
-                  moves={over || !legal(pos.cells, pos.turn).length ? [] : (shown?.moves ?? []).map((m) => ({ square: squareName(m.move), score: m.score }))}
-                  empty={over || !legal(pos.cells, pos.turn).length ? L('noMoves') : !ready ? L('waiting') : whole ? L('afterAnalysis') : L('analyzing')}
+                  moves={vOver || !legal(vPos.cells, vPos.turn).length ? [] : (shown?.moves ?? []).map((m) => ({ square: squareName(m.move), score: m.score }))}
+                  empty={vOver || !legal(vPos.cells, vPos.turn).length ? L('noMoves') : !ready ? L('waiting') : whole ? L('afterAnalysis') : L('analyzing')}
                 />
                 <Strength lang={lang} label={L('analysisDepth')} value={studyLevel} onChange={setStudyLevel} disabled={!!whole} />
                 {whole ? (
@@ -518,8 +589,9 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
                     <Progress value={whole.done / whole.total} label={L('analyzeAll')} />
                   </div>
                 ) : (
-                  <Button kind="primary" disabled={!ready || !moves.length} onClick={analyzeAll}>{L('analyzeAll')}</Button>
+                  <Button kind="primary" disabled={!ready || !vMoves.length} onClick={analyzeAll}>{L('analyzeAll')}</Button>
                 )}
+                <Button disabled={vOver} onClick={() => { location.href = playUrl(start, moves.slice(0, at)); }}>{L('playFrom')}</Button>
               </Panel>
             </div>
           )}
@@ -527,7 +599,7 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
           <div className="pa-o-kifu">
           <Panel id="pa-kifu" title={L('kifu')}>
             <div className="pa-kifu">
-              <KifuTable lang={lang} moves={rows} current={at} onSelect={mode === 'study' ? jump : undefined}
+              <KifuTable lang={lang} moves={rows} current={vAt} onSelect={mode === 'study' ? jump : undefined}
                 columns={mode === 'study' ? 'eval' : 'reading'} />
             </div>
           </Panel>

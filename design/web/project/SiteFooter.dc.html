@@ -34,6 +34,7 @@ body{margin:0}
 <span class="ft-head">Kuroobi for web</span>
 <a href="Play.dc.html" class="w-nav">{{t.play}}</a>
 <a href="Study.dc.html" class="w-nav">{{t.study}}</a>
+<a href="Bench.dc.html" class="w-nav">{{t.bench}}</a>
 </div>
 <div class="ft-col">
 <span class="ft-head">{{t.notes}}</span>
@@ -55,9 +56,9 @@ class Component extends DCLogic {
     const lang = this.props.lang ?? 'ja';
     const T = {
       ja: { newWindow: '新しいウィンドウで開きます', home: 'KUROOBI トップへ', tagline: 'オセロの思考エンジン', nav: 'サイトの一覧', app: 'アプリ', features: '特徴',
-        play: '対局', study: '検討', notes: '技術情報', allNotes: 'すべての記事', trademark: '「オセロ」は株式会社メガハウスの登録商標です。' },
+        play: '対局', study: '検討', bench: '計測', notes: '技術情報', allNotes: 'すべての記事', trademark: '「オセロ」は株式会社メガハウスの登録商標です。' },
       en: { newWindow: 'opens in a new window', home: 'KUROOBI home', tagline: 'An Othello engine', nav: 'Site map', app: 'App', features: 'Features',
-        play: 'Play', study: 'Study', notes: 'Notes', allNotes: 'All notes', trademark: '“Othello” is a registered trademark of MegaHouse Corporation.' },
+        play: 'Play', study: 'Study', bench: 'Benchmark', notes: 'Notes', allNotes: 'All notes', trademark: '“Othello” is a registered trademark of MegaHouse Corporation.' },
     };
     const home = lang === 'en' ? 'MainEn.dc.html' : 'Main.dc.html';
     return { lang, t: T[lang] || T.ja, home, appHref: home + '#app', howHref: home + '#how' };

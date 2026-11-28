@@ -22,6 +22,7 @@
     "features": "特徴",
     "play": "対局",
     "study": "検討",
+    "bench": "計測",
     "allNotes": "すべての記事",
     "trademark": "「オセロ」は株式会社メガハウスの登録商標です。"
   },
@@ -112,7 +113,15 @@
     "view": "表示",
     "setupTitle": "対局の準備",
     "sideFirst": "先手",
-    "sideSecond": "後手"
+    "sideSecond": "後手",
+    "benchTitle": "計測",
+    "playFrom": "この局面から対局",
+    "changeTitle": "対局の設定",
+    "change": "設定を変更",
+    "resume": "対局を続ける",
+    "startAt": "開始局面",
+    "startAtValue": "{n} 手目 · {side}番",
+    "menu": "対局のメニュー"
   },
   "notes": {
     "title": "技術情報",
@@ -204,5 +213,30 @@
     "prev": "1 手戻る",
     "next": "1 手進む",
     "last": "最後の局面へ"
+  },
+  "bench": {
+    "description": "FFO の\u200b終盤問題を\u200bKUROOBI が\u200bこのブラウザで\u200b読み切る\u200b速さを、\u200b問題ごとに\u200b測ります。",
+    "loadObf": "obf を読み込み",
+    "loadBad": "obf として読めませんでした",
+    "tooBig": "10 MB を超えるファイルは読めません",
+    "panel": "ベンチマーク",
+    "set": "問題",
+    "threads": "{n} スレッド",
+    "run": "計測を始める",
+    "running": "計測中",
+    "stop": "止める",
+    "results": "結果",
+    "no": "#",
+    "empties": "空き",
+    "answer": "正解",
+    "got": "KUROOBI",
+    "time": "時間",
+    "nodes": "ノード数",
+    "nps": "NPS",
+    "total": "合計",
+    "empty": "まだ計測していません。",
+    "wrong": "不正解",
+    "more": "他 {n}",
+    "caption": "{set} #{no} · {e} マス空き · {side}番"
   }
 }

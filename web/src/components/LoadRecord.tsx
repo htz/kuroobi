@@ -56,7 +56,7 @@ export function LoadRecord({ lang, initial = '', file: file0 = '', big = false, 
           <Button kind="primary" disabled={!record || tooBig} onClick={() => record && onLoad(record)}>{L('loadApply')}</Button>
         </span>
       </>}>
-      <input ref={picker} type="file" hidden accept=".ggf,.txt,.kifu,.json,text/plain,application/json"
+      <input ref={picker} type="file" hidden
         onChange={(e) => { void take(e.target.files?.[0]); e.target.value = ''; }} />
       <textarea value={text} rows={5} spellCheck={false} aria-label={L('load')} aria-invalid={bad}
         placeholder={L('loadPlaceholder')} className="k-input"

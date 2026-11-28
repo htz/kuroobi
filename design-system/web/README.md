@@ -93,13 +93,15 @@ from the built bundle as `window.KuroobiWeb`.
 | `MenuButton` | A `Button` that opens a list of actions under it, right-aligned: `card` ground, 44px items with an icon in `sub`; Escape and a click outside close it, arrow keys move between items. An item with `checked` is a switch (`menuitemcheckbox`): it stays open when pressed and shows an `accent` check at the right while on |
 | `Dialog` | A modal over the page (`<dialog>`): `panel` ground, `border`, 20px padding, title `t-body` 700 with a 44px close button at its right, actions in a wrapping row at the foot; Escape, the backdrop and the close button close it; `inline` draws it in place for the canvas |
 | `Tag` | A value's label inside a component (the format a record was read as): a 24px pill, `t-meta` 500 on `card` |
-| `LoadRecord` | The load dialog: a 5-row `ff-code` text box that also takes a dropped file (dashed `accent` edge while one is over it), a 120px board of where the record ends with its format `Tag`, file name, disc counts and moves · side to move; Choose a file at the left of the foot, Cancel and Load at the right. Reads what the app reads: moves, a board, a board with moves, GGF, Othello Quest |
+| `LoadRecord` | The load dialog: a 5-row `ff-code` text box that also takes a dropped file (dashed `accent` edge while one is over it), a 120px board of where the record ends with its format `Tag`, file name, disc counts and moves · side to move; Choose a file at the left of the foot, Cancel and Load at the right. Reads what the app reads: moves, a board, a board with moves, GGF, Othello Quest. Its picker, like Load an obf's, lists every file: a type filter greys out .ggf and .obf on iOS, which has no type for them |
 | `BoardCover` | A card over the board for what has to be settled before the board is played (a game's colour and strength, and Start the game): the board dimmed behind it in the page's ground, a `panel` card up to 380px with a `t-body` 700 title. It sits in the board's frame, so it is in view wherever the board is, a phone's first screen included |
 | `StepNav` | Moving through a record from just under the board: first, back, `n / m` (`ff-code`, the current ply bold), forward, last; 44px buttons, the ends disabled where there is nowhere to go |
-| `Segmented` | A choice of pages or modes shown side by side (Play / Study); 44px items in a 3px-padded frame |
+| `Segmented` | A choice of pages or modes shown side by side (Play / Study / Benchmark); 44px items in a 3px-padded frame |
 | `RadioCards` | Two to four exclusive choices as cards; 44px each. Where the choice is a colour each card holds its `stone`, the name and a `t-meta` `sub` `hint` at the right (first, second); the radio dot goes (it stays for keyboards and readers) and the chosen card shows as `card` ground with a 2px `accent` edge. Disabled, the whole set goes to 0.7 and `sub` text, the chosen card keeps a `border` edge and the others `border-weak` |
 | `Select` | A native select styled to 44px, `t-small`, with its own `chevron` 14px in from the right edge (the browser's arrow is turned off); full width in a panel |
 | `Strength` | KUROOBI's level: a `Select` of Lv1–Lv13, each named with how it reads (Lv7 · 12 手 · 読切 16 マス), and Custom, which opens two `Select`s for depth and solve under it |
+| `Field` | A `t-meta` `sub` label over a control or a value (`.pa-value`, `t-small`), 8px apart |
+| `BenchTable` | A run of endgame problems, one 40px row per problem: #, empties, then time (3 decimals), nodes and NPS ending flush right so a phone shows them without scrolling, then the answer (two best moves, `/` between, the rest counted in `sub` `t-meta` (他 7); empty where the obf gives none; a cell too narrow ends in …) and KUROOBI's move and value 12px apart from them; a value that is not the answer in `bad`; the problem being solved shows `Busy`'s dot. A row pressed shows its board and is the current one (`card` ground, `accent` edge). The totals (time, nodes, NPS, and right answers of those solved that have one) close it in 700 once one is solved. `ff-code`, wider than its box scrolls sideways inside it |
 | `Toggle` | An on/off switch with its label on the left; a 44px row, a 44×26 switch |
 | `Progress` | A known share of work done; a 6px bar, `track` groove, `accent` fill |
 | `Busy` | Work running now: an 8px `accent` dot and `t-small` `accent` text |
@@ -140,6 +142,17 @@ again. The evaluation loads, or fails to,
 only before a game; a failure is an alert row (`bad` edge and text) with
 Reload the page.
 
+The cover has three uses, one title each: Set up a game (New game, from the
+opening); Play from this position, when a record that has not ended is loaded
+in play or Play from this position is pressed in study, with the record's board,
+scores and moves under it, a Starting position `Field` (move n · side to move)
+above the colour (the side to move by default) and Start the game; and Game
+settings, from Change settings in the game panel (under the colour and strength
+it shows disabled) or in a phone's game menu, with Continue the game. Cancel leaves
+the game as it was in all three. A changed colour or strength applies from the
+position as it stands: KUROOBI reads again if it is now its turn. A loaded record
+that has ended goes to study.
+
 Study has a `StepNav` under the board. It reads the position's moves only
 when the worker is free: while the whole record is analyzed the candidate list
 says so, and at the end of a game there is nothing to read.
@@ -149,10 +162,26 @@ the board and what belongs to it (score, `StepNav`, graph) are the left
 column and the panels the right. Below 860px the two become one column in the
 order a phone is used: score, board, then what moves it, the graph, the record.
 In a game that is one row under the board in place of the game panel: Take back,
-New game and an icon-only View menu holding the evals switch; in study it is
+New game and an icon-only game menu (`more`) holding the evals switch and,
+while the game goes on, Change settings; in study it is
 the `StepNav` and the analysis panel. Below 560px the bar above keeps to one row: the
 page's name is left to the header (it stays for readers), and Load and Share
 keep only their icons.
+
+## Benchmark
+
+`/play/bench/` times endgame problems solved to the end in the browser: FFO's four
+sets (`problems/fforum-*.obf`) built in, and any obf one loads. The results `Panel`
+with the `BenchTable` is the left column; the right holds the run's `Panel` (Benchmark,
+the threads the engine searches on as its note, the problem set as a
+`Select`, Load an obf, then Start the benchmark, which while it runs becomes `Busy`, n / m, Stop and a
+`Progress`) and under it the board of the current problem, with each move's value
+from the obf on it where the obf gives them (the best bold, no mark: nothing says
+whether they were solved), and its set, number, empties and side to move. A loaded obf joins the sets under its file name and is
+chosen; its problems are numbered from 1, and a file with no board in it, or one over
+10 MB, is said so in a `Toast`. Each problem is solved
+to the end from empty tables. On a narrow screen: the board, the run's panel, the
+results.
 
 ## Site pages
 

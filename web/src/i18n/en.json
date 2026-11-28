@@ -22,6 +22,7 @@
     "features": "Features",
     "play": "Play",
     "study": "Study",
+    "bench": "Benchmark",
     "allNotes": "All notes",
     "trademark": "“Othello” is a registered trademark of MegaHouse Corporation."
   },
@@ -112,7 +113,15 @@
     "view": "View",
     "setupTitle": "Set up a game",
     "sideFirst": "first",
-    "sideSecond": "second"
+    "sideSecond": "second",
+    "benchTitle": "Benchmark",
+    "playFrom": "Play from this position",
+    "changeTitle": "Game settings",
+    "change": "Change settings",
+    "resume": "Continue the game",
+    "startAt": "Starting position",
+    "startAtValue": "Move {n} · {side} to move",
+    "menu": "Game menu"
   },
   "notes": {
     "title": "Notes",
@@ -204,5 +213,30 @@
     "prev": "Back one move",
     "next": "Forward one move",
     "last": "To the end"
+  },
+  "bench": {
+    "description": "Times KUROOBI solving the FFO endgame problems in this browser, problem by problem.",
+    "loadObf": "Load an obf",
+    "loadBad": "Could not read this as an obf",
+    "tooBig": "Files over 10 MB cannot be read",
+    "panel": "Benchmark",
+    "set": "Problems",
+    "threads": "{n} threads",
+    "run": "Start the benchmark",
+    "running": "Measuring",
+    "stop": "Stop",
+    "results": "Results",
+    "no": "#",
+    "empties": "Empty",
+    "answer": "Answer",
+    "got": "KUROOBI",
+    "time": "Time",
+    "nodes": "Nodes",
+    "nps": "NPS",
+    "total": "Total",
+    "empty": "Nothing measured yet.",
+    "wrong": "wrong",
+    "more": "{n} more",
+    "caption": "{set} #{no} · {e} empty · {side} to move"
   }
 }

@@ -13,6 +13,8 @@ export class Engine {
   private pending = new Map<number, (r: Reply) => void>();
   onProgress: (loaded: number, total: number) => void = () => {};
   ready!: Promise<void>;
+  /** The threads it searches on, known once ready. */
+  threads = 1;
 
   constructor() {
     this.start();
@@ -24,7 +26,10 @@ export class Engine {
       this.worker.onmessage = (e: MessageEvent<Reply>) => {
         const r = e.data;
         if (r.kind === 'progress') this.onProgress(r.loaded, r.total);
-        else if (r.kind === 'ready') resolve();
+        else if (r.kind === 'ready') {
+          this.threads = r.threads;
+          resolve();
+        }
         else if (r.kind === 'failed') reject(new Error(r.message));
         else {
           this.pending.get(r.id)?.(r);

@@ -19,7 +19,7 @@ export type Value = { score: number; exact: boolean; depth: number; selective: n
 
 export type Reply =
   | { kind: 'progress'; loaded: number; total: number }
-  | { kind: 'ready' }
+  | { kind: 'ready'; threads: number }
   | { kind: 'failed'; message: string }
   | { id: number; kind: 'choose'; choice: Choice }
   | { id: number; kind: 'evaluate'; value: Value }

@@ -59,12 +59,15 @@ body{margin:0}
 <x-import component-from-global-scope="KuroobiWeb.Board" lang="{{lang}}" cells="{{pos.cells}}" legal="{{pos.legal}}" evals="{{boardEvals}}" turn="{{pos.turn}}" last="{{pos.last}}" coords="{{yes}}" disabled="{{boardOff}}"></x-import>
 </div>
 <sc-if value="{{cover}}" hint-placeholder-val="{{false}}">
-<x-import component-from-global-scope="KuroobiWeb.BoardCover" title="{{t.setupTitle}}">
-<x-import component-from-global-scope="KuroobiWeb.RadioCards" legend="{{t.side}}" name="side" value="{{one}}" options="{{sides}}" on-change="{{noop}}"></x-import>
-<x-import component-from-global-scope="KuroobiWeb.Strength" lang="{{lang}}" label="{{t.strength}}" value="{{level}}" on-change="{{noop}}"></x-import>
+<x-import component-from-global-scope="KuroobiWeb.BoardCover" title="{{coverTitle}}">
+<sc-if value="{{coverFrom}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiWeb.Field" label="{{t.startAt}}"><span class="pa-value">{{startAtText}}</span></x-import>
+</sc-if>
+<x-import component-from-global-scope="KuroobiWeb.RadioCards" legend="{{t.side}}" name="side" value="{{coverSide}}" options="{{sides}}" on-change="{{noop}}"></x-import>
+<x-import component-from-global-scope="KuroobiWeb.Strength" lang="{{lang}}" label="{{t.strength}}" value="{{coverLevel}}" on-change="{{noop}}"></x-import>
 <div class="pa-cover-actions">
 <x-import component-from-global-scope="KuroobiWeb.Button" style="{{grow}}">{{t.cancel}}</x-import>
-<x-import component-from-global-scope="KuroobiWeb.Button" kind="primary" style="{{grow}}" disabled="{{notReady}}">{{t.begin}}</x-import>
+<x-import component-from-global-scope="KuroobiWeb.Button" kind="primary" style="{{grow}}" disabled="{{notReady}}">{{coverGo}}</x-import>
 </div>
 </x-import>
 </sc-if>
@@ -80,7 +83,7 @@ body{margin:0}
 <x-import component-from-global-scope="KuroobiWeb.Button" style="{{grow}}" disabled="{{noUndo}}">{{t.undo}}</x-import>
 <x-import component-from-global-scope="KuroobiWeb.Button" kind="{{newKind}}" style="{{grow}}">{{t.newGame}}</x-import>
 <div class="pa-o-view">
-<x-import component-from-global-scope="KuroobiWeb.MenuButton" label="{{t.view}}" icon="view" items="{{viewItems}}" open="{{viewOpen}}"></x-import>
+<x-import component-from-global-scope="KuroobiWeb.MenuButton" label="{{t.menu}}" icon="more" items="{{menuItems}}" open="{{viewOpen}}"></x-import>
 </div>
 </div>
 </sc-if>
@@ -109,6 +112,7 @@ body{margin:0}
 <sc-if value="{{inGame}}" hint-placeholder-val="{{true}}">
 <x-import component-from-global-scope="KuroobiWeb.RadioCards" legend="{{t.side}}" name="side-now" value="{{one}}" options="{{sides}}" on-change="{{noop}}" disabled="{{yes}}"></x-import>
 <x-import component-from-global-scope="KuroobiWeb.Strength" lang="{{lang}}" label="{{t.strength}}" value="{{level}}" on-change="{{noop}}" disabled="{{yes}}"></x-import>
+<x-import component-from-global-scope="KuroobiWeb.Button" disabled="{{noChange}}">{{t.change}}</x-import>
 </sc-if>
 </x-import>
 </div>
@@ -132,6 +136,7 @@ body{margin:0}
 <sc-if value="{{idle}}" hint-placeholder-val="{{true}}">
 <x-import component-from-global-scope="KuroobiWeb.Button" kind="primary" disabled="{{notReady}}">{{t.analyzeAll}}</x-import>
 </sc-if>
+<x-import component-from-global-scope="KuroobiWeb.Button" disabled="{{overNow}}">{{t.playFrom}}</x-import>
 </x-import>
 </div>
 </sc-if>
@@ -168,7 +173,7 @@ body{margin:0}
 </sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"lang":{"editor":"enum","options":["ja","en"],"default":"ja"},"screen":{"editor":"enum","options":["play","study"],"default":"play"},"state":{"editor":"enum","options":["thinking","yours","setup","idle","over","won","draw","endgame","loading","failed","fresh","analyzing"],"default":"thinking"},"evals":{"editor":"boolean","default":false},"custom":{"editor":"boolean","default":false},"reading":{"editor":"boolean","default":false},"choose":{"editor":"boolean","default":false},"view":{"editor":"boolean","default":false},"share":{"editor":"boolean","default":false},"toast":{"editor":"enum","options":["","link","kifu"],"default":""},"load":{"editor":"boolean","default":false},"bare":{"editor":"boolean","default":false},"scrub":{"editor":"number","default":0},"book":{"editor":"boolean","default":false},"$preview":{"width":1280,"height":1180}}'>
+<script type="text/x-dc" data-dc-script data-props='{"lang":{"editor":"enum","options":["ja","en"],"default":"ja"},"screen":{"editor":"enum","options":["play","study"],"default":"play"},"state":{"editor":"enum","options":["thinking","yours","setup","idle","over","won","draw","endgame","loading","failed","fresh","analyzing"],"default":"thinking"},"evals":{"editor":"boolean","default":false},"custom":{"editor":"boolean","default":false},"reading":{"editor":"boolean","default":false},"choose":{"editor":"boolean","default":false},"view":{"editor":"boolean","default":false},"share":{"editor":"boolean","default":false},"toast":{"editor":"enum","options":["","link","kifu"],"default":""},"load":{"editor":"boolean","default":false},"bare":{"editor":"boolean","default":false},"scrub":{"editor":"number","default":0},"book":{"editor":"boolean","default":false},"cover":{"editor":"enum","options":["","from","change"],"default":""},"$preview":{"width":1280,"height":1180}}'>
 class Component extends DCLogic {
   renderVals() {
     const lang = this.props.lang ?? 'ja';
@@ -184,7 +189,9 @@ class Component extends DCLogic {
         candidatesAt: (how) => '候補の評価値 · ' + how, seconds: (x) => x + ' 秒',
         related: 'このページの技術情報', noteTitle: '[記事のタイトル]', appSoon: 'デスクトップアプリ (準備中)',
         linkCopied: 'リンクをコピーしました', kifuCopied: '棋譜をコピーしました',
-        view: '表示', cancel: 'キャンセル',
+        view: '表示', cancel: 'キャンセル', menu: '対局のメニュー', bench: '計測',
+        playFrom: 'この局面から対局', changeTitle: '対局の設定', change: '設定を変更', resume: '対局を続ける', startAt: '開始局面',
+        startAtValue: (n, side) => n + ' 手目 · ' + side + '番',
         newWindow: '新しいウィンドウで開きます', shareLink: 'リンクをコピー', shareKifu: '棋譜をコピー', shareX: 'X でシェア', shareMore: 'その他のアプリ',
       },
       en: {
@@ -198,7 +205,9 @@ class Component extends DCLogic {
         candidatesAt: (how) => 'Move evals · ' + how, seconds: (x) => x + ' s',
         related: 'Notes on this page', noteTitle: '[Note title]', appSoon: 'Desktop app (coming soon)',
         linkCopied: 'Link copied', kifuCopied: 'Record copied',
-        view: 'View', cancel: 'Cancel',
+        view: 'View', cancel: 'Cancel', menu: 'Game menu', bench: 'Benchmark',
+        playFrom: 'Play from this position', changeTitle: 'Game settings', change: 'Change settings', resume: 'Continue the game', startAt: 'Starting position',
+        startAtValue: (n, side) => 'Move ' + n + ' · ' + side + ' to move',
         newWindow: 'opens in a new window', shareLink: 'Copy link', shareKifu: 'Copy record', shareX: 'Share on X', shareMore: 'More apps',
       },
     };
@@ -229,12 +238,18 @@ class Component extends DCLogic {
     const choose = !study && !setup && (this.props.choose ?? false);
     // The setup closed with Cancel before any game: the opening board, and New game to open it again
     const idle = !study && state === 'idle';
+    // A record loaded in play that has not ended (or Play from this position in study) comes up over the board to play on
+    // from: the board, scores and record are the record's, the side to move yours to begin with; Cancel leaves things as they were.
+    const from = !study && this.props.cover === 'from';
+    // Change settings, in a game: the same cover over the game as it stands; Continue the game applies them from there.
+    const change = !study && !from && this.props.cover === 'change';
     // In play KUROOBI (White) thinks after 15 moves; otherwise Black is to move after 16. A game over is played out to the end.
     const thinking = !study && state === 'thinking';
     const record = drawn ? 'c4c5f6b3b5a6a2f5f4d3e6g4h3g5e2f1g6h4g3d7c8f7e7f2f8g8g2h2a5b6c7d8h8b7h5b8c2b4e3d6a3a4e8f3a7h7c6d2g7b1c3h6e1a8b2c1g1a1h1d1'
       : endgame ? 'c4c3c2b2a2c1d3c5e6e3c6d6b4e7f2b6f6b3a3e2e1g5a7a6a5f5b5b1a1f3a4d1g6b7f4d7f8f1a8g2h5f7d8h7g3e8g7d2h1h4h6b8c7g8c8g1g4h8h2h3'.slice(0, study ? 120 : 80)
       : won ? 'c4c3c2b2a2c1d3c5e6e3c6d6b4e7f2b6f6b3a3e2e1g5a7a6a5f5b5b1a1f3a4d1g6b7f4d7f8f1a8g2h5f7d8h7g3e8g7d2h1h4h6b8c7g8c8g1g4h8h2h3'
       : over ? 'c4c5f6e3e2f2c6b6b5b4a3a4c3d2a5c7b3g7d8a7d7f4b7c8f5g6c2e6d3b1b8a8d6a6g3g4c1e7h4b2e8h3g5f8h2a2h7h6f1g2a1e1h5g1g8h8f7h1d1f3'
+      : from ? 'f5d6c3d3c4f4f6f3e6e7d7c6c5b5b6b4'
       : setup || idle ? '' : thinking ? 'f5d6c3d3c4f4f6f3e6e7d7c6c5b5b6' : 'f5d6c3d3c4f4f6f3e6e7d7c6c5b5b6b4';
     // The board is built by actually playing out the record (sq = col*8 + row, 1 = black, 2 = white)
     const D = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
@@ -264,7 +279,7 @@ class Component extends DCLogic {
     }
     if (snap) { c.splice(0, 64, ...snap.c); last = snap.last; me = snap.me; }
     if (!legalOf(c, me).length) me = 3 - me;
-    const legal = over || setup || choose || idle ? [] : legalOf(c, me);
+    const legal = over || setup || choose || idle || from || change ? [] : legalOf(c, me);
     const n = moves.length;
     const sqOf = (name) => 'abcdefgh'.indexOf(name[0]) * 8 + (+name[1] - 1);
     // What KUROOBI (ep12, depth 6) reads for Black's moves after b4; order and best come from these unrounded values
@@ -296,7 +311,7 @@ class Component extends DCLogic {
       const drop = value === undefined || prev === undefined ? 0 : m.side === 1 ? prev - value : value - prev;
       // What KUROOBI (White, Lv7) read for each move it played: value, depth, and the work it took
       // KUROOBI's reply from 21 empties (move 40) is the engine's own: a selective solve at t 0.6, 227 ms, 2.51M positions
-      const read = !study && m.side === 2 ? (endgame && i === 39 ? { score: -31, depth: 21, exact: false, selective: pct(0.6), ms: 227, nodes: 2510445 }
+      const read = !study && !from && m.side === 2 ? (endgame && i === 39 ? { score: -31, depth: 21, exact: false, selective: pct(0.6), ms: 227, nodes: 2510445 }
         : { score: [0.4, -1.2, 0.8, 1.6, -0.3, 2.1, 1.1, 0.6][(i >> 1) % 8], depth: endgame ? 14 : 12, exact: false, ms: 380 + ((i * 137) % 900), nodes: 210000 + ((i * 7919) % 400000) }) : undefined;
       const after = graph[i + 1];
       // The analysis reads each position to its depth (Lv7's 12; the graph stops at 14), solving none this early in a game
@@ -323,14 +338,22 @@ class Component extends DCLogic {
       notReady: !ready,
       setup,
       choose,
-      cover: setup || choose,
-      inGame: !study && !setup && !idle,
-      actions: !study && !setup && !choose,
+      cover: setup || choose || from || change,
+      coverTitle: from ? t.playFrom : change ? t.changeTitle : t.setupTitle,
+      coverFrom: from,
+      startAtText: t.startAtValue(n + 1, me === 1 ? t.black : t.white),
+      coverSide: from ? me : 1,
+      coverLevel: this.props.custom ? { depth: 15, solve: 19 } : { depth: 12, solve: 16 },
+      coverGo: change ? t.resume : t.begin,
+      inGame: !study && !setup && !idle && !from,
+      actions: !study && !setup && !choose && !from && !change,
+      noChange: over,
+      overNow: over && !endgame,
       // With no game, or once it is over, the next one is what is left to do
       newKind: over || idle ? 'primary' : 'secondary',
       viewOpen: this.props.view ?? false,
       noUndo: idle,
-      boardOff: !ready || setup || choose || idle || thinking || over,
+      boardOff: !ready || setup || choose || idle || from || change || thinking || over,
       dimClass: ready ? '' : 'pa-dim',
       yes: true,
       one: 1,
@@ -368,7 +391,8 @@ class Component extends DCLogic {
       progressText: done + ' / ' + (n + 1),
       progress: done / (n + 1),
       kifu,
-      viewItems: [{ label: t.showEvals, checked: evalsShown && !study }],
+      // A game's menu under the board on a phone: the evals switch, and Change settings while the game goes on
+      menuItems: [{ label: t.showEvals, checked: evalsShown && !study }, ...(over ? [] : [{ label: t.change }])],
       // A game's record shows only its moves; what KUROOBI read for one of its own opens when that move is pressed
       kifuColumns: study ? 'eval' : 'reading',
       kifuOpen: endgame && !study ? 40 : reading && n >= 2 ? (moves[n - 1].side === 2 ? n : n - 1) : undefined,
@@ -387,6 +411,7 @@ class Component extends DCLogic {
       modes: [
         { label: t.play, href: 'Play.dc.html', on: !study },
         { label: t.study, href: 'Study.dc.html', on: study },
+        { label: t.bench, href: 'Bench.dc.html', on: false },
       ],
     };
   }

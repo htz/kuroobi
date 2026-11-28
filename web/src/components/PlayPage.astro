@@ -2,19 +2,24 @@
 import { href, t, type Lang } from '../i18n';
 import Base from '../layouts/Base.astro';
 import { notesIn, slugOf } from '../lib/notes';
+import BenchApp from './BenchApp';
 import PlayApp from './PlayApp';
 
 interface Props {
   lang: Lang;
-  mode: 'play' | 'study';
+  mode: 'play' | 'study' | 'bench';
 }
 const { lang, mode } = Astro.props;
 const related = (await notesIn(lang)).filter((n) => n.data.tags.includes('web'));
 ---
 
-<Base title={t(lang, mode === 'play' ? 'play.title' : 'play.studyTitle')} description={t(lang, 'play.description')} active="web">
+<Base
+  title={t(lang, mode === 'play' ? 'play.title' : mode === 'study' ? 'play.studyTitle' : 'play.benchTitle')}
+  description={t(lang, mode === 'bench' ? 'bench.description' : 'play.description')}
+  active="web"
+>
   <main class="w-wrap play">
-    <PlayApp client:load lang={lang} mode={mode} />
+    {mode === 'bench' ? <BenchApp client:load lang={lang} /> : <PlayApp client:load lang={lang} mode={mode} />}
   </main>
   {
     related.length > 0 && (
