@@ -91,53 +91,57 @@ const themes = ['auto', 'light', 'dark'] as const;
 <script>
   import { applyTheme, savedTheme, type Theme } from '../lib/theme';
 
-  const menus = [...document.querySelectorAll<HTMLElement>('[data-menu]')];
+  // The router keeps this module across pages and swaps the header in anew: the header's own controls are wired on
+  // every page, the document's listeners once.
+  const menus = () => [...document.querySelectorAll<HTMLElement>('[data-menu]')];
   const close = (except?: HTMLElement) => {
-    for (const m of menus) {
+    for (const m of menus()) {
       if (m === except) continue;
       m.querySelector('[role=group]')!.toggleAttribute('hidden', true);
       m.querySelector('button')!.setAttribute('aria-expanded', 'false');
     }
   };
-  for (const m of menus) {
-    const button = m.querySelector('button')!;
-    const pop = m.querySelector<HTMLElement>('[role=group]')!;
-    button.addEventListener('click', () => {
-      const open = pop.hidden;
-      close(m);
-      pop.hidden = !open;
-      button.setAttribute('aria-expanded', String(open));
-    });
-  }
   document.addEventListener('click', (e) => {
-    if (!menus.some((m) => m.contains(e.target as Node))) close();
+    if (!menus().some((m) => m.contains(e.target as Node))) close();
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') close();
   });
 
-  const themeMenu = document.querySelector<HTMLElement>('[data-theme-menu]')!;
-  const themeButton = themeMenu.querySelector('button')!;
-  const names = JSON.parse(themeButton.dataset.names!) as Record<Theme, string>;
-  const show = (theme: Theme) => {
-    themeButton.setAttribute('aria-label', themeButton.dataset.label!.replace('{name}', names[theme]));
-    for (const icon of themeButton.querySelectorAll<SVGElement>('[data-icon]')) {
-      icon.style.display = icon.dataset.icon === theme ? '' : 'none';
+  document.addEventListener('astro:page-load', () => {
+    for (const m of menus()) {
+      const button = m.querySelector('button')!;
+      const pop = m.querySelector<HTMLElement>('[role=group]')!;
+      button.addEventListener('click', () => {
+        const open = pop.hidden;
+        close(m);
+        pop.hidden = !open;
+        button.setAttribute('aria-expanded', String(open));
+      });
     }
-    for (const b of themeMenu.querySelectorAll<HTMLElement>('[data-theme-choice]')) {
-      const on = b.dataset.themeChoice === theme;
-      b.setAttribute('aria-pressed', String(on));
-      b.querySelector('.hd-mark')!.textContent = on ? '✓' : '';
-    }
-  };
-  for (const b of themeMenu.querySelectorAll<HTMLElement>('[data-theme-choice]')) {
-    b.addEventListener('click', () => {
-      const theme = b.dataset.themeChoice as Theme;
-      applyTheme(theme);
-      show(theme);
-      close();
-    });
-  }
-  show(savedTheme());
-</script>
 
+    const themeMenu = document.querySelector<HTMLElement>('[data-theme-menu]')!;
+    const themeButton = themeMenu.querySelector('button')!;
+    const names = JSON.parse(themeButton.dataset.names!) as Record<Theme, string>;
+    const show = (theme: Theme) => {
+      themeButton.setAttribute('aria-label', themeButton.dataset.label!.replace('{name}', names[theme]));
+      for (const icon of themeButton.querySelectorAll<SVGElement>('[data-icon]')) {
+        icon.style.display = icon.dataset.icon === theme ? '' : 'none';
+      }
+      for (const b of themeMenu.querySelectorAll<HTMLElement>('[data-theme-choice]')) {
+        const on = b.dataset.themeChoice === theme;
+        b.setAttribute('aria-pressed', String(on));
+        b.querySelector('.hd-mark')!.textContent = on ? '✓' : '';
+      }
+    };
+    for (const b of themeMenu.querySelectorAll<HTMLElement>('[data-theme-choice]')) {
+      b.addEventListener('click', () => {
+        const theme = b.dataset.themeChoice as Theme;
+        applyTheme(theme);
+        show(theme);
+        close();
+      });
+    }
+    show(savedTheme());
+  });
+</script>

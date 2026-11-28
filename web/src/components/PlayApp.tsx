@@ -1,4 +1,5 @@
 import React from 'react';
+import { navigate } from 'astro:transitions/client';
 import type { Valued } from '../engine/protocol';
 import { useEngine } from '../engine/useEngine';
 import { href, t, type Lang } from '../i18n';
@@ -221,7 +222,7 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
     setMoves(cover?.kind === 'from' ? cover.moves : []);
     setCover(null);
     setPlaying(true);
-    if (location.search) history.replaceState(null, '', location.pathname);
+    if (location.search) history.replaceState(history.state, '', location.pathname);
   };
 
   const openChange = () => {
@@ -243,7 +244,7 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
   const cancelCover = () => {
     if (cover?.kind === 'change') setSetup(game);
     setCover(null);
-    if (cover?.kind === 'from' && location.search) history.replaceState(null, '', location.pathname);
+    if (cover?.kind === 'from' && location.search) history.replaceState(history.state, '', location.pathname);
   };
 
   const undo = () => {
@@ -348,7 +349,7 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
     // A record that has not ended can be played on from its end; one that has goes to study.
     if (mode === 'play') {
       if (isOver(line(r.start, r.moves).at(-1)!)) {
-        location.href = studyUrl(r.start, r.moves);
+        void navigate(studyUrl(r.start, r.moves));
         return;
       }
       setLoadOpen(false);
@@ -591,7 +592,7 @@ export default function PlayApp({ lang, mode, preview }: { lang: Lang; mode: Mod
                 ) : (
                   <Button kind="primary" disabled={!ready || !vMoves.length} onClick={analyzeAll}>{L('analyzeAll')}</Button>
                 )}
-                <Button disabled={vOver} onClick={() => { location.href = playUrl(start, moves.slice(0, at)); }}>{L('playFrom')}</Button>
+                <Button disabled={vOver} onClick={() => { void navigate(playUrl(start, moves.slice(0, at))); }}>{L('playFrom')}</Button>
               </Panel>
             </div>
           )}

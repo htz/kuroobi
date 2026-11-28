@@ -47,6 +47,11 @@ export class Engine {
     return this.ready;
   }
 
+  /** Whether a search is still running or queued. */
+  get busy(): boolean {
+    return this.pending.size > 0;
+  }
+
   private ask(req: Dist<Request>): Promise<Reply> {
     const id = this.next++;
     return new Promise((resolve) => {

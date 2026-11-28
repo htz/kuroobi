@@ -183,6 +183,11 @@ chosen; its problems are numbered from 1, and a file with no board in it, or one
 to the end from empty tables. On a narrow screen: the board, the run's panel, the
 results.
 
+Moving between play, study and the benchmark does not reload the page (Astro's
+`ClientRouter`, with no animation): the engine and its evaluation load once per
+visit, so the loading row shows only the first time. A page left while the engine
+is still searching restarts it, so the next page does not wait behind that search.
+
 ## Site pages
 
 The header, footer, notes index, articles and the 404 page are markup with

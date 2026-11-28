@@ -1,5 +1,6 @@
 ---
 import { Font } from 'astro:assets';
+import { ClientRouter } from 'astro:transitions';
 import touchIcon from '../../../crates/gui/icons/128x128@2x.png';
 import tabIcon from '../../../crates/gui/icons/32x32.png';
 import SiteFooter from '../components/SiteFooter.astro';
@@ -22,7 +23,7 @@ const site = t(lang, 'site.title');
 ---
 
 <!doctype html>
-<html lang={lang}>
+<html lang={lang} transition:animate="none">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -33,11 +34,19 @@ const site = t(lang, 'site.title');
     {LANGS.map((l) => <link rel="alternate" hreflang={l} href={href(l, path)} />)}
     <link rel="alternate" hreflang="x-default" href={href('ja', path)} />
     <script is:inline>
-      try {
-        const v = localStorage.getItem('kuroobi-theme');
-        if (v === 'light' || v === 'dark') document.documentElement.setAttribute('data-theme', v);
-      } catch (e) {}
+      // Again after each page the router swaps in, whose <html> comes without the chosen theme.
+      if (!window.__kuroobiTheme) {
+        window.__kuroobiTheme = () => {
+          try {
+            const v = localStorage.getItem('kuroobi-theme');
+            if (v === 'light' || v === 'dark') document.documentElement.setAttribute('data-theme', v);
+          } catch (e) {}
+        };
+        window.__kuroobiTheme();
+        document.addEventListener('astro:after-swap', window.__kuroobiTheme);
+      }
     </script>
+    <ClientRouter />
     <Font cssVariable="--font-jp" preload />
     <Font cssVariable="--font-mono" />
   </head>

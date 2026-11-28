@@ -79,8 +79,6 @@ const tag = note.data.tags[0];
 
 <script>
   const EXT_ICON = '<svg class="w-ext-icon" aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path></svg>';
-  // Code blocks and tables get the frame the design draws around them; markdown has no markup for either.
-  const article = document.querySelector<HTMLElement>('.na-body');
   const check = '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>';
   let toast: HTMLElement | null = null;
   const done = (text: string) => {
@@ -94,62 +92,69 @@ const tag = note.data.tags[0];
     toast = t;
     setTimeout(() => t.remove(), 2000);
   };
-  if (article) {
-    for (const pre of article.querySelectorAll<HTMLElement>('pre')) {
-      const figure = document.createElement('figure');
-      figure.className = 'na-code';
-      const bar = document.createElement('div');
-      bar.className = 'na-code-bar';
-      const lang = document.createElement('span');
-      lang.className = 'na-code-lang';
-      lang.textContent = pre.dataset.language && pre.dataset.language !== 'plaintext' ? pre.dataset.language : '';
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'w-btn na-code-copy';
-      b.textContent = article.dataset.copy!;
-      b.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(pre.innerText);
-          done(article.dataset.copied!);
-        } catch {
-          // Without clipboard access the code is still there to select.
-        }
-      });
-      bar.append(lang, b);
-      pre.replaceWith(figure);
-      figure.append(bar, pre);
-    }
-    for (const table of article.querySelectorAll('table')) {
-      const wrap = document.createElement('div');
-      wrap.className = 'na-table';
-      table.replaceWith(wrap);
-      wrap.append(table);
-    }
-    // A link out of the site opens in a new window and says so, as ExtIcon.astro marks the site's own.
-    for (const a of article.querySelectorAll<HTMLAnchorElement>('a[href^="http"]')) {
-      if (a.host === location.host) continue;
-      a.target = '_blank';
-      a.rel = 'noopener';
-      a.classList.add('w-ext');
-      a.insertAdjacentHTML('beforeend', EXT_ICON + `<span class="w-sr"> (${article.dataset.newWindow})</span>`);
-    }
-  }
-  // The table of contents marks the section being read; the first until another comes into view.
-  const links = [...document.querySelectorAll<HTMLAnchorElement>('[data-toc]')];
-  const seen = new IntersectionObserver(
-    (entries) => {
-      for (const e of entries) {
-        if (!e.isIntersecting) continue;
-        for (const a of links) {
-          if (a.dataset.toc === e.target.id) a.setAttribute('aria-current', 'true');
-          else a.removeAttribute('aria-current');
-        }
+  let seen: IntersectionObserver | null = null;
+  // The router keeps this module across pages: each article page that comes in is framed and watched anew.
+  document.addEventListener('astro:before-swap', () => seen?.disconnect());
+  document.addEventListener('astro:page-load', () => {
+    const article = document.querySelector<HTMLElement>('.na-body');
+    // Code blocks and tables get the frame the design draws around them; markdown has no markup for either.
+    if (article) {
+      for (const pre of article.querySelectorAll<HTMLElement>('pre')) {
+        const figure = document.createElement('figure');
+        figure.className = 'na-code';
+        const bar = document.createElement('div');
+        bar.className = 'na-code-bar';
+        const lang = document.createElement('span');
+        lang.className = 'na-code-lang';
+        lang.textContent = pre.dataset.language && pre.dataset.language !== 'plaintext' ? pre.dataset.language : '';
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'w-btn na-code-copy';
+        b.textContent = article.dataset.copy!;
+        b.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(pre.innerText);
+            done(article.dataset.copied!);
+          } catch {
+            // Without clipboard access the code is still there to select.
+          }
+        });
+        bar.append(lang, b);
+        pre.replaceWith(figure);
+        figure.append(bar, pre);
       }
-    },
-    { rootMargin: '0px 0px -70% 0px' },
-  );
-  for (const a of links) {
-    const h = document.getElementById(a.dataset.toc!);
-    if (h) seen.observe(h);
-  }
+      for (const table of article.querySelectorAll('table')) {
+        const wrap = document.createElement('div');
+        wrap.className = 'na-table';
+        table.replaceWith(wrap);
+        wrap.append(table);
+      }
+      // A link out of the site opens in a new window and says so, as ExtIcon.astro marks the site's own.
+      for (const a of article.querySelectorAll<HTMLAnchorElement>('a[href^="http"]')) {
+        if (a.host === location.host) continue;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.classList.add('w-ext');
+        a.insertAdjacentHTML('beforeend', EXT_ICON + `<span class="w-sr"> (${article.dataset.newWindow})</span>`);
+      }
+    }
+    // The table of contents marks the section being read; the first until another comes into view.
+    const links = [...document.querySelectorAll<HTMLAnchorElement>('[data-toc]')];
+    seen = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (!e.isIntersecting) continue;
+          for (const a of links) {
+            if (a.dataset.toc === e.target.id) a.setAttribute('aria-current', 'true');
+            else a.removeAttribute('aria-current');
+          }
+        }
+      },
+      { rootMargin: '0px 0px -70% 0px' },
+    );
+    for (const a of links) {
+      const h = document.getElementById(a.dataset.toc!);
+      if (h) seen.observe(h);
+    }
+  });
 </script>
