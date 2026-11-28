@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>サイトの足元</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="site.css">
+<script src="ds/kuroobiweb/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<footer lang="{{lang}}" class="ft">
+<div class="w-wrap ft-in">
+<div class="ft-top">
+<div class="ft-brand">
+<a href="{{home}}" aria-label="{{t.home}}" class="w-plain ft-logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="11.5 9.5 311 45" style="display: block; width: 100%; height: auto" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 14 V50"></path><path d="M44 14 L20 32 L44 50"></path><path d="M65 14 V36 A14 14 0 0 0 93 36 V14"></path><path d="M114 50 V14 H127 A11 11 0 0 1 127 36 H114"></path><path d="M127 36 L138 50"></path><circle cx="177" cy="32" r="18"></circle><circle cx="234" cy="32" r="18" fill="currentColor"></circle><path d="M273 32 H288 A9 9 0 0 1 288 50 H273 V14 H288 A9 9 0 0 1 288 32 H273"></path><path d="M318 14 V50"></path></g></svg></a>
+<span class="ft-sub">{{t.tagline}}</span>
+</div>
+<nav aria-label="{{t.nav}}" class="ft-nav">
+<div class="ft-col">
+<span class="ft-head">KUROOBI</span>
+<a href="{{appHref}}" class="w-nav">{{t.app}}</a>
+<a href="{{howHref}}" class="w-nav">{{t.features}}</a>
+<a href="https://github.com/htz/kuroobi" class="w-nav w-ext" target="_blank" rel="noopener">GitHub<svg class="w-ext-icon" aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"></path></svg><span class="w-sr"> ({{t.newWindow}})</span></a>
+</div>
+<div class="ft-col">
+<span class="ft-head">Kuroobi for web</span>
+<a href="Play.dc.html" class="w-nav">{{t.play}}</a>
+<a href="Study.dc.html" class="w-nav">{{t.study}}</a>
+</div>
+<div class="ft-col">
+<span class="ft-head">{{t.notes}}</span>
+<a href="Notes.dc.html" class="w-nav">{{t.allNotes}}</a>
+<a href="Notes.dc.html" class="w-nav">RSS</a>
+</div>
+</nav>
+</div>
+<div class="ft-bottom">
+<span>[著作権表示]</span>
+<span class="ft-tm">{{t.trademark}}</span>
+</div>
+</div>
+</footer>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"lang":{"editor":"enum","options":["ja","en"],"default":"ja"},"$preview":{"width":1280,"height":380}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const lang = this.props.lang ?? 'ja';
+    const T = {
+      ja: { newWindow: '新しいウィンドウで開きます', home: 'KUROOBI トップへ', tagline: 'オセロの思考エンジン', nav: 'サイトの一覧', app: 'アプリ', features: '特徴',
+        play: '対局', study: '検討', notes: '技術情報', allNotes: 'すべての記事', trademark: '「オセロ」は株式会社メガハウスの登録商標です。' },
+      en: { newWindow: 'opens in a new window', home: 'KUROOBI home', tagline: 'An Othello engine', nav: 'Site map', app: 'App', features: 'Features',
+        play: 'Play', study: 'Study', notes: 'Notes', allNotes: 'All notes', trademark: '“Othello” is a registered trademark of MegaHouse Corporation.' },
+    };
+    const home = lang === 'en' ? 'MainEn.dc.html' : 'Main.dc.html';
+    return { lang, t: T[lang] || T.ja, home, appHref: home + '#app', howHref: home + '#how' };
+  }
+}
+</script>
+</body>
+</html>

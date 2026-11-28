@@ -104,10 +104,18 @@ GGS data are found relative to the launch folder; a GUI built and launched
 in a worktree once found neither, logged in anyway and lost two games on
 time.
 
-**The design system lives in `design-system/`, the screen designs in
-`design/`** (how to build and publish each: its README). A change to a
-screen updates `design-system/project/screens.md` in the same commit as
-the code, so the spec never trails the implementation.
+**The app's design system lives in `design-system/gui/`, its screen
+designs in `design/gui/`** (how to build and publish each: its README). A
+change to a screen updates `design-system/gui/project/screens.md` in the
+same commit as the code, so the spec never trails the implementation.
+
+**The site (`web/`) has its own design system, `design-system/web/`, and
+its own canvas, `design/web/`; never the app's.** A web page is read and
+tapped, not used in a desktop window: no text under 13px as it appears on
+screen (graphics included), 44px for anything pressed. Any change to what
+a page shows goes canvas first, then the design system if the canvas needs
+something new, then the code; the canvas draws with the design system's
+built components (`window.KuroobiWeb`).
 
 ## Measure before deciding
 

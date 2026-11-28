@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>盤 · 石が返る動き</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="site.css">
+<script src="ds/kuroobiweb/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="min-height: 100vh; box-sizing: border-box; padding: 40px; display: flex; justify-content: center; background: var(--bg)">
+<x-import component-from-global-scope="KuroobiWeb.BoardDefs"></x-import>
+<div style="width: 560px; aspect-ratio: 1 / 1">
+<x-import component-from-global-scope="KuroobiWeb.Board" lang="ja" cells="{{cells}}" legal="{{legal}}" turn="{{turn}}" last="{{last}}" coords="{{yes}}"></x-import>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":640,"height":640}}'>
+class Component extends DCLogic {
+  // One move every 1.2 s, then back to the start: the placed stone grows in, the turned ones flip nearest first,
+  // and the legal marks come back only once they settle
+  componentDidMount() {
+    this.timer = setInterval(() => this.setState({ ply: ((this.state && this.state.ply) || 0) + 1 }), 1200);
+  }
+  componentWillUnmount() { clearInterval(this.timer); }
+  renderVals() {
+    const record = 'f5d6c3d3c4f4f6f3e6e7d7c6c5b5b6b4';
+    const D = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+    const flips = (c, sq, me) => {
+      if (c[sq]) return [];
+      const f0 = Math.floor(sq / 8), r0 = sq % 8, op = 3 - me, out = [];
+      for (const [df, dr] of D) {
+        const run = [];
+        let f = f0 + df, r = r0 + dr;
+        while (f >= 0 && f < 8 && r >= 0 && r < 8 && c[f * 8 + r] === op) { run.push(f * 8 + r); f += df; r += dr; }
+        if (run.length && f >= 0 && f < 8 && r >= 0 && r < 8 && c[f * 8 + r] === me) out.push(...run);
+      }
+      return out;
+    };
+    const legalOf = (c, me) => Array.from({ length: 64 }, (_, i) => i).filter((i) => flips(c, i, me).length);
+    const n = ((this.state && this.state.ply) || 0) % (record.length / 2 + 1);
+    const c = Array(64).fill(0);
+    c[3 * 8 + 4] = c[4 * 8 + 3] = 1; c[3 * 8 + 3] = c[4 * 8 + 4] = 2;
+    let me = 1, last = null;
+    for (let i = 0; i < n * 2; i += 2) {
+      const sq = 'abcdefgh'.indexOf(record[i]) * 8 + (+record[i + 1] - 1);
+      if (!legalOf(c, me).length) me = 3 - me;
+      const fl = flips(c, sq, me);
+      c[sq] = me; fl.forEach((x) => { c[x] = me; }); last = sq; me = 3 - me;
+    }
+    if (!legalOf(c, me).length) me = 3 - me;
+    return { yes: true, cells: c, legal: legalOf(c, me), turn: me === 1 ? 'b' : 'w', last };
+  }
+}
+</script>
+</body>
+</html>

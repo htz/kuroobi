@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>棋譜を読み込み · 状態</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="site.css">
+<script src="ds/kuroobiweb/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="min-height: 100vh; box-sizing: border-box; padding: 40px; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 40px; background: rgba(0, 0, 0, .55)">
+<div style="width: 560px; flex: none"><x-import component-from-global-scope="KuroobiWeb.LoadRecord" lang="ja" initial="" inline="{{yes}}" on-load="{{noop}}" on-close="{{noop}}"></x-import></div>
+<div style="width: 560px; flex: none"><x-import component-from-global-scope="KuroobiWeb.LoadRecord" lang="ja" initial="" dragging="{{yes}}" inline="{{yes}}" on-load="{{noop}}" on-close="{{noop}}"></x-import></div>
+<div style="width: 560px; flex: none"><x-import component-from-global-scope="KuroobiWeb.LoadRecord" lang="ja" initial="f5 d6 c3 f5" inline="{{yes}}" on-load="{{noop}}" on-close="{{noop}}"></x-import></div>
+<div style="width: 560px; flex: none"><x-import component-from-global-scope="KuroobiWeb.LoadRecord" lang="ja" initial="" file="games-2026.txt" big="{{yes}}" inline="{{yes}}" on-load="{{noop}}" on-close="{{noop}}"></x-import></div>
+<div style="width: 560px; flex: none"><x-import component-from-global-scope="KuroobiWeb.LoadRecord" lang="en" initial="{{sample}}" file="game.ggf" inline="{{yes}}" on-load="{{noop}}" on-close="{{noop}}"></x-import></div>
+<div style="width: 390px; flex: none; padding: 0 16px; box-sizing: border-box">
+<div><x-import component-from-global-scope="KuroobiWeb.LoadRecord" lang="ja" initial="{{sample}}" file="game.ggf" inline="{{yes}}" on-load="{{noop}}" on-close="{{noop}}"></x-import></div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1500}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      yes: true,
+      noop: () => {},
+      sample: '(;GM[Othello]PC[NBoard]DT[2026-11-20]PB[black]PW[white]RE[?]TI[0]TY[8]BO[8 ------------------***O---OO**O---OO***---*O***----O**-----O*---- *]B[B8]W[E2]B[D2]W[E1]B[C2]W[E8];)',
+    };
+  }
+}
+</script>
+</body>
+</html>

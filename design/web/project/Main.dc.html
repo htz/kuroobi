@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>KUROOBI</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="site.css">
+<script src="ds/kuroobiweb/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div lang="{{lang}}" style="min-height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); font-family: var(--ff-web)">
+<x-import component-from-global-scope="KuroobiWeb.BoardDefs"></x-import>
+<dc-import name="SiteHeader" active="top" lang="{{lang}}" hint-size="100%,64px"></dc-import>
+
+<main style="flex: 1">
+
+<section style="max-width: var(--c-max); margin: 0 auto; box-sizing: border-box; padding: clamp(48px, 8vw, 104px) var(--gutter) var(--s-section); display: grid; grid-template-columns: repeat(auto-fit, minmax(min(440px, 100%), 1fr)); align-items: center; gap: clamp(40px, 6vw, 80px)">
+<div style="display: flex; flex-direction: column; gap: 28px; min-width: 0">
+<span style="font-size: var(--t-meta); font-weight: 500; letter-spacing: .12em; color: var(--accent)">{{t.eyebrow}}</span>
+<h1 style="margin: 0; width: min(400px, 100%); color: var(--text)"><svg role="img" aria-label="KUROOBI" xmlns="http://www.w3.org/2000/svg" viewBox="11.5 9.5 311 45" style="display: block; width: 100%; height: auto"><g fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 14 V50"></path><path d="M44 14 L20 32 L44 50"></path><path d="M65 14 V36 A14 14 0 0 0 93 36 V14"></path><path d="M114 50 V14 H127 A11 11 0 0 1 127 36 H114"></path><path d="M127 36 L138 50"></path><circle cx="177" cy="32" r="18"></circle><circle cx="234" cy="32" r="18" fill="currentColor"></circle><path d="M273 32 H288 A9 9 0 0 1 288 50 H273 V14 H288 A9 9 0 0 1 288 32 H273"></path><path d="M318 14 V50"></path></g></svg></h1>
+<p class="w-keep" style="margin: 0; max-width: 34em; font-size: var(--t-lead); line-height: 1.9; text-wrap: pretty">{{t.lead}}</p>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+<a href="Play.dc.html" class="w-plain w-btn w-btn-primary" style="display: inline-flex; align-items: center; min-height: 48px; padding: 0 24px; box-sizing: border-box; border-radius: 10px; border: 1px solid var(--accent-dim); background: var(--accent-dim); color: var(--on-accent); font-size: var(--t-body); font-weight: 700">{{t.ctaPlay}}</a>
+</div>
+</div>
+<div style="justify-self: center; width: 100%; max-width: 500px; aspect-ratio: 1 / 1">
+<x-import component-from-global-scope="KuroobiWeb.Board" lang="ja" cells="{{pos.cells}}" legal="{{pos.legal}}" turn="{{pos.turn}}" last="{{pos.last}}" coords="{{no}}" disabled="{{yes}}"></x-import>
+</div>
+</section>
+
+<section id="web" aria-labelledby="web-h" style="border-top: 1px solid var(--border)">
+<div style="max-width: var(--c-max); margin: 0 auto; box-sizing: border-box; padding: var(--s-section) var(--gutter); display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); align-items: center; gap: clamp(40px, 6vw, 72px)">
+<div style="display: flex; flex-direction: column; gap: 20px; min-width: 0">
+<span style="font-size: var(--t-meta); font-weight: 500; letter-spacing: .12em; color: var(--accent)">Kuroobi for web</span>
+<h2 id="web-h" class="w-keep" style="margin: 0; font-size: var(--t-h1); line-height: var(--lh-head); font-weight: 700; text-wrap: balance">{{t.webH}}</h2>
+<p class="w-keep" style="margin: 0; font-size: var(--t-body); line-height: 1.9; color: var(--sub); text-wrap: pretty">{{t.webP}}</p>
+</div>
+<a href="Play.dc.html" class="w-plain w-card" aria-label="{{t.webCta}}" style="display: block; position: relative; width: 100%; aspect-ratio: 1280 / 800; overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-card); background: var(--bg); box-shadow: var(--sh-2)">
+<div aria-hidden="true" style="position: absolute; left: 0; top: 0; width: 200%; transform: scale(.5); transform-origin: 0 0; pointer-events: none">
+<dc-import name="Play" screen="play" state="thinking" bare="{{yes}}" hint-size="100%,1600px"></dc-import>
+</div>
+</a>
+</div>
+</section>
+
+<section id="how" aria-labelledby="how-h" style="background: var(--panel); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border)">
+<div style="max-width: var(--c-max); margin: 0 auto; box-sizing: border-box; padding: var(--s-section) var(--gutter); display: flex; flex-direction: column; gap: 48px">
+<div style="display: flex; flex-direction: column; gap: 16px; max-width: 40em">
+<span style="font-size: var(--t-meta); font-weight: 500; letter-spacing: .12em; color: var(--accent)">{{t.howLabel}}</span>
+<h2 id="how-h" class="w-keep" style="margin: 0; font-size: var(--t-h1); line-height: var(--lh-head); font-weight: 700; text-wrap: balance">{{t.howH}}</h2>
+</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 40px 40px">
+<sc-for list="{{features}}" as="f" hint-placeholder-count="3">
+<div style="display: flex; flex-direction: column; gap: 12px; padding-top: 20px; border-top: 2px solid var(--text)">
+<h3 class="w-keep" style="margin: 0; font-size: var(--t-h3); line-height: 1.5; font-weight: 700">{{f.h}}</h3>
+<p class="w-keep" style="margin: 0; font-size: var(--t-small); line-height: 1.9; color: var(--sub)">{{f.p}}</p>
+</div>
+</sc-for>
+</div>
+<div><a href="Notes.dc.html" class="w-more">{{t.howMore}}</a></div>
+</div>
+</section>
+
+<section id="app" aria-labelledby="app-h">
+<div style="max-width: var(--c-max); margin: 0 auto; box-sizing: border-box; padding: var(--s-section) var(--gutter); display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); align-items: center; gap: clamp(40px, 6vw, 72px)">
+<div style="display: flex; flex-direction: column; gap: 20px; min-width: 0">
+<div style="display: flex; align-items: center; gap: 12px">
+<span style="font-size: var(--t-meta); font-weight: 500; letter-spacing: .12em; color: var(--accent)">{{t.appLabel}}</span>
+<span style="padding: 3px 12px; border-radius: var(--r-pill); border: 1px solid var(--border); font-size: var(--t-meta); font-weight: 700; letter-spacing: .08em; color: var(--sub)">COMING SOON</span>
+</div>
+<h2 id="app-h" class="w-keep" style="margin: 0; font-size: var(--t-h1); line-height: var(--lh-head); font-weight: 700; text-wrap: balance">{{t.appH}}</h2>
+<p class="w-keep" style="margin: 0; font-size: var(--t-body); line-height: 1.9; color: var(--sub); text-wrap: pretty">{{t.appP}}</p>
+</div>
+<img src="app-play.png" alt="{{t.appAlt}}" style="display: block; width: 100%; height: auto; aspect-ratio: 2064 / 1600; object-fit: cover; border-radius: var(--r-card); border: 1px solid var(--border); background: var(--panel)">
+</div>
+</section>
+
+<sc-if value="{{hasNotes}}" hint-placeholder-val="{{true}}">
+<section aria-labelledby="notes-h" style="border-top: 1px solid var(--border)">
+<div style="max-width: var(--c-max); margin: 0 auto; box-sizing: border-box; padding: var(--s-section) var(--gutter); display: flex; flex-direction: column; gap: 32px">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 16px">
+<h2 id="notes-h" style="margin: 0; font-size: var(--t-h1); line-height: var(--lh-head); font-weight: 700">{{t.notesH}}</h2>
+<a href="Notes.dc.html" class="w-more" style="margin-left: auto">{{t.notesAll}}</a>
+</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 20px">
+<sc-for list="{{notes}}" as="n" hint-placeholder-count="4">
+<a href="Article.dc.html" class="w-plain w-card" style="display: flex; flex-direction: column; gap: 12px; padding: 24px; border: 1px solid var(--border); border-radius: var(--r-card); background: var(--panel)">
+<span class="tag">{{n.tag}}</span>
+<span style="font-size: var(--t-h3); line-height: 1.5; font-weight: 700; text-wrap: pretty">{{n.title}}</span>
+<span style="flex: 1; font-size: var(--t-small); line-height: 1.8; color: var(--sub)">{{t.summary}}</span>
+<span style="font-size: var(--t-meta); color: var(--sub); font-variant-numeric: tabular-nums">{{t.date}}</span>
+</a>
+</sc-for>
+</div>
+</div>
+</section>
+</sc-if>
+</main>
+
+<dc-import name="SiteFooter" lang="{{lang}}" hint-size="100%,380px"></dc-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"lang":{"editor":"enum","options":["ja","en"],"default":"ja"},"empty":{"editor":"boolean","default":false},"$preview":{"width":1280,"height":3600}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const lang = this.props.lang ?? 'ja';
+    // In the site these strings live in one locale file per language (src/i18n/ja.json, en.json)
+    const T = {
+      ja: {
+        eyebrow: 'オセロの思考エンジン',
+        lead: 'KUROOBI は\u200bオセロの\u200b思考エンジンです。\u200b対局の\u200b相手にも、\u200b自分の\u200b棋譜の\u200b振り返りにも\u200b使えます。\u200bKuroobi\u00a0for\u00a0web なら、\u200bインストールなしで\u200bブラウザから\u200bすぐに\u200b打てます。',
+        ctaPlay: 'ブラウザで対局する',
+        webH: 'ブラウザで、\u200bすぐに対局と検討を', webP: '強さと\u200b手番を\u200b選んで\u200b打ち、\u200b終わった\u200b棋譜は\u200bそのまま\u200b検討で\u200b振り返れます。', webCta: 'Kuroobi for web を開く',
+        howLabel: '特徴', howH: '打つ相手として、\u200b振り返る道具として', howMore: 'しくみは技術情報で',
+        f: [
+          ['強さを\u200b選んで\u200b打てる', '手加減した\u200b相手から\u200b本気の\u200b相手まで。\u200b黒番でも\u200b白番でも\u200b打てます。'],
+          ['終盤は\u200b最後まで\u200b読み切る', '残りが\u200b少なくなると、\u200b終局まで\u200b全部\u200b読んで\u200b最善の\u200b手を\u200b打ちます。'],
+          ['一手ごとの\u200b良し悪しが\u200bわかる', 'どの手が\u200bどれだけ\u200b良いかを\u200b石差で\u200b示します。\u200b勝負の\u200b分かれ目に\u200bなった\u200b手も\u200b一目で\u200bわかります。'],
+        ],
+        appLabel: 'アプリ', appH: 'デスクトップアプリ', appP: '対局・検討・定石を、\u200bひとつの窓で。', appAlt: '開発中のアプリの対局画面',
+        notesH: '技術情報', notesAll: 'すべての記事', summary: '[概要]', date: '[日付]',
+        notes: [['Web', 'ブラウザ用の評価関数を小さくする'], ['評価関数', '評価関数 (NNUE) の構成'], ['探索', '終盤の読切と手の並べ替え'], ['定石', '定石の学習']],
+      },
+      en: {
+        eyebrow: 'An Othello engine',
+        lead: 'KUROOBI is an Othello engine. Play against it, or go back over your own games with it. Kuroobi for web runs right in your browser, with nothing to install.',
+        ctaPlay: 'Play in your browser',
+        webH: 'Play and study, right in the browser', webP: 'Pick a strength and a colour, play, then go straight back over the game in Study.', webCta: 'Open Kuroobi for web',
+        howLabel: 'Features', howH: 'An opponent to play, a coach to look back with', howMore: 'How it works, in the notes',
+        f: [
+          ['Pick its strength', 'From a gentle opponent to full strength. Play black or white.'],
+          ['Endgames read to the end', 'Once few squares are left, it reads every line to the finish and plays the best move.'],
+          ['See how good each move was', 'Every move is scored in discs, so the move that decided the game stands out.'],
+        ],
+        appLabel: 'App', appH: 'Desktop app', appP: 'Play, study and the opening book, in one window.', appAlt: 'The game screen of the app in development',
+        notesH: 'Notes', notesAll: 'All notes', summary: '[Summary]', date: '[Date]',
+        notes: [['Web', 'Shrinking the evaluation for the browser'], ['Evaluation', 'How the NNUE evaluation is built'], ['Search', 'Endgame solving and move ordering'], ['Book', 'Learning the opening book']],
+      },
+    };
+    const t = T[lang] || T.ja;
+    // The board is built by actually playing out the record (sq = col*8 + row, 1 = black, 2 = white)
+    const D = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+    const flips = (c, sq, me) => {
+      if (c[sq]) return [];
+      const f0 = Math.floor(sq / 8), r0 = sq % 8, op = 3 - me, out = [];
+      for (const [df, dr] of D) {
+        const run = [];
+        let f = f0 + df, r = r0 + dr;
+        while (f >= 0 && f < 8 && r >= 0 && r < 8 && c[f * 8 + r] === op) { run.push(f * 8 + r); f += df; r += dr; }
+        if (run.length && f >= 0 && f < 8 && r >= 0 && r < 8 && c[f * 8 + r] === me) out.push(...run);
+      }
+      return out;
+    };
+    const legalOf = (c, me) => Array.from({ length: 64 }, (_, i) => i).filter((i) => flips(c, i, me).length);
+    const play = (line) => {
+      const c = Array(64).fill(0);
+      c[3 * 8 + 4] = c[4 * 8 + 3] = 1; c[3 * 8 + 3] = c[4 * 8 + 4] = 2;
+      let me = 1, last = null;
+      for (let i = 0; i + 1 < line.length; i += 2) {
+        const sq = 'abcdefgh'.indexOf(line[i]) * 8 + (+line[i + 1] - 1);
+        if (!legalOf(c, me).length) me = 3 - me;
+        const fl = flips(c, sq, me);
+        if (!fl.length) break;
+        c[sq] = me; fl.forEach((x) => { c[x] = me; }); last = sq; me = 3 - me;
+      }
+      if (!legalOf(c, me).length) me = 3 - me;
+      return { cells: c, last, legal: legalOf(c, me), turn: me === 1 ? 'b' : 'w' };
+    };
+    const pos = play('f5d6c3d3c4f4f6f3e6e7d7c6c5b5b6b4');
+    return {
+      lang,
+      t,
+      no: false,
+      yes: true,
+      pos,
+      // With no notes yet the section is left out, not shown empty
+      hasNotes: !(this.props.empty ?? false),
+      features: t.f.map(([h, p]) => ({ h, p })),
+      notes: t.notes.map(([tag, title]) => ({ tag, title })),
+    };
+  }
+}
+</script>
+</body>
+</html>

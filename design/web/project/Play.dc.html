@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Kuroobi for web</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="site.css">
+<script src="ds/kuroobiweb/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div lang="{{lang}}" style="position: relative; min-height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); font-family: var(--ff-web)">
+<x-import component-from-global-scope="KuroobiWeb.BoardDefs"></x-import>
+<sc-if value="{{chrome}}" hint-placeholder-val="{{true}}">
+<dc-import name="SiteHeader" active="web" lang="{{lang}}" hint-size="100%,64px"></dc-import>
+</sc-if>
+
+<main style="flex: 1; width: 100%; max-width: var(--c-max); margin: 0 auto; box-sizing: border-box; padding: 24px var(--gutter) 56px">
+<div class="pa">
+
+<div class="pa-bar">
+<h1 class="pa-title">Kuroobi for web</h1>
+<x-import component-from-global-scope="KuroobiWeb.Segmented" label="{{t.modes}}" items="{{modes}}"></x-import>
+<div class="pa-tools">
+<x-import component-from-global-scope="KuroobiWeb.Button" icon="load" aria-label="{{t.load}}">{{t.load}}</x-import>
+<x-import component-from-global-scope="KuroobiWeb.MenuButton" label="{{t.share}}" icon="share" items="{{shareItems}}" open="{{shareOpen}}"></x-import>
+</div>
+</div>
+
+<sc-if value="{{loading}}" hint-placeholder-val="{{false}}">
+<div role="status" class="pa-loading">
+<span class="pa-strong">{{t.loading}}</span>
+<span class="pa-loading-bar"><x-import component-from-global-scope="KuroobiWeb.Progress" value="{{loadRatio}}" label="{{t.loadingAria}}"></x-import></span>
+<span class="pa-mono">12.3 / 43.7 MB</span>
+</div>
+</sc-if>
+
+<sc-if value="{{failed}}" hint-placeholder-val="{{false}}">
+<div role="alert" class="pa-failed">
+<span class="pa-strong">{{t.loadFailed}}</span>
+<x-import component-from-global-scope="KuroobiWeb.Button" style="{{pushRight}}">{{t.reload}}</x-import>
+</div>
+</sc-if>
+
+<div class="pa-cols">
+<div class="pa-left">
+<div class="pa-o-score {{dimClass}}">
+<x-import component-from-global-scope="KuroobiWeb.Scoreboard" lang="{{lang}}" black="{{score.b}}" white="{{score.w}}" result="{{result}}"></x-import>
+</div>
+<div class="pa-o-board pa-board">
+<div class="{{dimClass}}" style="width: 100%; height: 100%">
+<x-import component-from-global-scope="KuroobiWeb.Board" lang="{{lang}}" cells="{{pos.cells}}" legal="{{pos.legal}}" evals="{{boardEvals}}" turn="{{pos.turn}}" last="{{pos.last}}" coords="{{yes}}" disabled="{{boardOff}}"></x-import>
+</div>
+<sc-if value="{{cover}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiWeb.BoardCover" title="{{t.setupTitle}}">
+<x-import component-from-global-scope="KuroobiWeb.RadioCards" legend="{{t.side}}" name="side" value="{{one}}" options="{{sides}}" on-change="{{noop}}"></x-import>
+<x-import component-from-global-scope="KuroobiWeb.Strength" lang="{{lang}}" label="{{t.strength}}" value="{{level}}" on-change="{{noop}}"></x-import>
+<div class="pa-cover-actions">
+<x-import component-from-global-scope="KuroobiWeb.Button" style="{{grow}}">{{t.cancel}}</x-import>
+<x-import component-from-global-scope="KuroobiWeb.Button" kind="primary" style="{{grow}}" disabled="{{notReady}}">{{t.begin}}</x-import>
+</div>
+</x-import>
+</sc-if>
+</div>
+<sc-if value="{{evalsOnBoard}}" hint-placeholder-val="{{false}}">
+<div class="pa-o-legend">
+<x-import component-from-global-scope="KuroobiWeb.EvalLegend" lang="{{lang}}" book="{{book}}"></x-import>
+</div>
+</sc-if>
+
+<sc-if value="{{actions}}" hint-placeholder-val="{{false}}">
+<div class="pa-o-act">
+<x-import component-from-global-scope="KuroobiWeb.Button" style="{{grow}}" disabled="{{noUndo}}">{{t.undo}}</x-import>
+<x-import component-from-global-scope="KuroobiWeb.Button" kind="{{newKind}}" style="{{grow}}">{{t.newGame}}</x-import>
+<div class="pa-o-view">
+<x-import component-from-global-scope="KuroobiWeb.MenuButton" label="{{t.view}}" icon="view" items="{{viewItems}}" open="{{viewOpen}}"></x-import>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{study}}" hint-placeholder-val="{{false}}">
+<div class="pa-o-step">
+<x-import component-from-global-scope="KuroobiWeb.StepNav" lang="{{lang}}" at="{{moveCount}}" total="{{moveTotal}}" on-jump="{{noop}}"></x-import>
+</div>
+<div class="pa-o-graph">
+<x-import component-from-global-scope="KuroobiWeb.EvalGraph" lang="{{lang}}" points="{{graph}}" plies="{{plies}}" cursor="{{moveCount}}" blunder="{{blunder}}" busy="{{analyzing}}" on-jump="{{noop}}" move-name="{{moveName}}" pointer="{{graphPointer}}"></x-import>
+</div>
+</sc-if>
+</div>
+
+<div class="pa-right">
+<sc-if value="{{play}}" hint-placeholder-val="{{true}}">
+<div class="pa-o-main pa-o-game">
+<x-import component-from-global-scope="KuroobiWeb.Panel" id="game-h" title="{{t.game}}">
+<sc-if value="{{actions}}" hint-placeholder-val="{{true}}">
+<div class="pa-buttons">
+<x-import component-from-global-scope="KuroobiWeb.Button" style="{{grow}}" disabled="{{noUndo}}">{{t.undo}}</x-import>
+<x-import component-from-global-scope="KuroobiWeb.Button" kind="{{newKind}}" style="{{grow}}">{{t.newGame}}</x-import>
+</div>
+</sc-if>
+<x-import component-from-global-scope="KuroobiWeb.Toggle" label="{{t.showEvals}}" checked="{{evalsOn}}" on-change="{{noop}}"></x-import>
+<sc-if value="{{inGame}}" hint-placeholder-val="{{true}}">
+<x-import component-from-global-scope="KuroobiWeb.RadioCards" legend="{{t.side}}" name="side-now" value="{{one}}" options="{{sides}}" on-change="{{noop}}" disabled="{{yes}}"></x-import>
+<x-import component-from-global-scope="KuroobiWeb.Strength" lang="{{lang}}" label="{{t.strength}}" value="{{level}}" on-change="{{noop}}" disabled="{{yes}}"></x-import>
+</sc-if>
+</x-import>
+</div>
+</sc-if>
+
+<sc-if value="{{study}}" hint-placeholder-val="{{false}}">
+<div class="pa-o-main">
+<x-import component-from-global-scope="KuroobiWeb.Panel" id="ana-h" title="{{t.candidates}}" note="{{candsNote}}">
+<x-import component-from-global-scope="KuroobiWeb.CandidateList" moves="{{cands}}" empty="{{candsEmpty}}"></x-import>
+<x-import component-from-global-scope="KuroobiWeb.Strength" lang="{{lang}}" label="{{t.analysisDepth}}" value="{{level}}" on-change="{{noop}}" disabled="{{analyzing}}"></x-import>
+<sc-if value="{{analyzing}}" hint-placeholder-val="{{false}}">
+<div role="status" class="pa-analysis">
+<div class="pa-analysis-row">
+<x-import component-from-global-scope="KuroobiWeb.Busy">{{t.analyzingShort}}</x-import>
+<span class="pa-mono">{{progressText}}</span>
+<x-import component-from-global-scope="KuroobiWeb.Button" style="{{pushRight}}">{{t.stop}}</x-import>
+</div>
+<x-import component-from-global-scope="KuroobiWeb.Progress" value="{{progress}}" label="{{t.analyzeAll}}"></x-import>
+</div>
+</sc-if>
+<sc-if value="{{idle}}" hint-placeholder-val="{{true}}">
+<x-import component-from-global-scope="KuroobiWeb.Button" kind="primary" disabled="{{notReady}}">{{t.analyzeAll}}</x-import>
+</sc-if>
+</x-import>
+</div>
+</sc-if>
+
+<div class="pa-o-kifu">
+<x-import component-from-global-scope="KuroobiWeb.Panel" id="kifu-h" title="{{t.kifu}}">
+<div class="pa-kifu">
+<x-import component-from-global-scope="KuroobiWeb.KifuTable" lang="{{lang}}" moves="{{kifu}}" current="{{moveCount}}" on-select="{{kifuSelect}}" columns="{{kifuColumns}}" open="{{kifuOpen}}"></x-import>
+</div>
+</x-import>
+</div>
+</div>
+</div>
+</div>
+</main>
+
+<sc-if value="{{chrome}}" hint-placeholder-val="{{true}}">
+<section aria-labelledby="rel-h" style="border-top: 1px solid var(--border)">
+<div style="width: 100%; max-width: var(--c-max); margin: 0 auto; box-sizing: border-box; padding: 28px var(--gutter) 44px; display: flex; flex-wrap: wrap; align-items: center; gap: 0 32px">
+<h2 id="rel-h" style="margin: 0; font-size: var(--t-small); font-weight: 700; color: var(--sub)">{{t.related}}</h2>
+<a href="Article.dc.html" class="w-more">{{t.noteTitle}}</a>
+<a href="Main.dc.html" class="w-more" style="margin-left: auto">{{t.appSoon}}</a>
+</div>
+</section>
+<dc-import name="SiteFooter" lang="{{lang}}" hint-size="100%,380px"></dc-import>
+</sc-if>
+<sc-if value="{{toastOn}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiWeb.Toast">{{toastText}}</x-import>
+</sc-if>
+<sc-if value="{{loadOpen}}" hint-placeholder-val="{{false}}">
+<div style="position: absolute; inset: 0; z-index: 30; display: flex; justify-content: center; align-items: flex-start; padding-top: 160px; background: rgba(0, 0, 0, .55)">
+<x-import component-from-global-scope="KuroobiWeb.LoadRecord" lang="{{lang}}" initial="{{loadSample}}" file="game.ggf" inline="{{yes}}" on-load="{{noop}}" on-close="{{noop}}"></x-import>
+</div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"lang":{"editor":"enum","options":["ja","en"],"default":"ja"},"screen":{"editor":"enum","options":["play","study"],"default":"play"},"state":{"editor":"enum","options":["thinking","yours","setup","idle","over","won","draw","endgame","loading","failed","fresh","analyzing"],"default":"thinking"},"evals":{"editor":"boolean","default":false},"custom":{"editor":"boolean","default":false},"reading":{"editor":"boolean","default":false},"choose":{"editor":"boolean","default":false},"view":{"editor":"boolean","default":false},"share":{"editor":"boolean","default":false},"toast":{"editor":"enum","options":["","link","kifu"],"default":""},"load":{"editor":"boolean","default":false},"bare":{"editor":"boolean","default":false},"scrub":{"editor":"number","default":0},"book":{"editor":"boolean","default":false},"$preview":{"width":1280,"height":1180}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const lang = this.props.lang ?? 'ja';
+    const T = {
+      ja: {
+        modes: 'モード', play: '対局', study: '検討', load: '棋譜を読み込み', share: 'シェア',
+        loading: '評価関数を読み込んでいます', loadingAria: '評価関数の読み込み', loadFailed: '評価関数を読み込めませんでした', reload: 'ページを再読み込み',
+        game: '対局', side: 'あなたの石', sideBlack: '黒', sideWhite: '白', sideFirst: '先手', sideSecond: '後手', strength: 'KUROOBI の強さ', showEvals: '盤に評価値を表示',
+        begin: '対局を始める', newGame: '新しい対局', undo: '待った', candidates: 'この局面の候補手', analysisDepth: '分析の強さ', analyzingShort: '分析中', stop: '止める',
+        analyzeAll: '棋譜を分析', kifu: '棋譜', setupTitle: '対局の準備', youWin: 'あなたの勝ち', kuroobiWin: 'KUROOBI の勝ち', blackWin: '黒の勝ち', whiteWin: '白の勝ち', draw: '引き分け', black: '黒', white: '白', you: 'あなた', thinking: '考えています', yourTurn: 'あなたの番',
+        toMove: (s) => s + '番', waiting: '評価関数の読み込み待ち', reading: '読んでいます', afterAnalysis: '分析が終わってから読みます', noMoves: '打てる手がありません',
+        over: (b, w) => '終局 · 黒 ' + b + ' – ' + w + ' 白', last: (v, how) => '評価値 ' + v + ' · ' + how, depth: (n) => '深さ ' + n, solved: '読切',
+        candidatesAt: (how) => '候補の評価値 · ' + how, seconds: (x) => x + ' 秒',
+        related: 'このページの技術情報', noteTitle: '[記事のタイトル]', appSoon: 'デスクトップアプリ (準備中)',
+        linkCopied: 'リンクをコピーしました', kifuCopied: '棋譜をコピーしました',
+        view: '表示', cancel: 'キャンセル',
+        newWindow: '新しいウィンドウで開きます', shareLink: 'リンクをコピー', shareKifu: '棋譜をコピー', shareX: 'X でシェア', shareMore: 'その他のアプリ',
+      },
+      en: {
+        modes: 'Mode', play: 'Play', study: 'Study', load: 'Load a record', share: 'Share',
+        loading: 'Loading the evaluation', loadingAria: 'Loading the evaluation', loadFailed: 'Could not load the evaluation', reload: 'Reload the page',
+        game: 'Game', side: 'Your colour', sideBlack: 'Black', sideWhite: 'White', sideFirst: 'first', sideSecond: 'second', strength: "KUROOBI's strength", showEvals: 'Show evals on the board',
+        begin: 'Start the game', newGame: 'New game', undo: 'Take back', candidates: 'Moves in this position', analysisDepth: 'Analysis strength', analyzingShort: 'Analyzing', stop: 'Stop',
+        analyzeAll: 'Analyze the game', kifu: 'Record', setupTitle: 'Set up a game', youWin: 'You win', kuroobiWin: 'KUROOBI wins', blackWin: 'Black wins', whiteWin: 'White wins', draw: 'Draw', black: 'Black', white: 'White', you: 'You', thinking: 'Thinking', yourTurn: 'Your move',
+        toMove: (s) => s + ' to move', waiting: 'Waiting for the evaluation', reading: 'Reading', afterAnalysis: 'Read once the analysis is done', noMoves: 'No move to play',
+        over: (b, w) => 'Game over · Black ' + b + ' – ' + w + ' White', last: (v, how) => 'Eval ' + v + ' · ' + how, depth: (n) => 'depth ' + n, solved: 'solved',
+        candidatesAt: (how) => 'Move evals · ' + how, seconds: (x) => x + ' s',
+        related: 'Notes on this page', noteTitle: '[Note title]', appSoon: 'Desktop app (coming soon)',
+        linkCopied: 'Link copied', kifuCopied: 'Record copied',
+        view: 'View', cancel: 'Cancel',
+        newWindow: 'opens in a new window', shareLink: 'Copy link', shareKifu: 'Copy record', shareX: 'Share on X', shareMore: 'More apps',
+      },
+    };
+    const t = T[lang] || T.ja;
+    const screen = this.props.screen ?? 'play';
+    const state = this.props.state ?? 'thinking';
+    const bare = this.props.bare ?? false;
+    const study = screen === 'study';
+    const loading = state === 'loading';
+    const failed = state === 'failed';
+    const ready = !loading && !failed;
+    const analyzing = study && state === 'analyzing';
+    // Three finished games: KUROOBI (White) wins 43–21, you (Black) win 39–25, and a 32–32 draw
+    const won = state === 'won';
+    const drawn = state === 'draw';
+    // The won game read at Lv8 (depth 14, solve 18): its four empties above the solve read selectively. Study holds
+    // the whole game; play stops at move 40, KUROOBI's selective reply from 21 empties, opened in the record.
+    const endgame = state === 'endgame';
+    const over = state === 'over' || won || drawn;
+    // Study shows that game opened at move 41, so the record's selective rows are in view
+    // A pointer on the graph (a mouse over it, or a finger sliding along it) at move `scrub`: the readout, and the
+    // board moved to that move
+    const scrub = study && endgame ? Number(this.props.scrub ?? 0) : 0;
+    const stopAt = endgame && study ? scrub || 41 : null;
+    // A game begins with its button; until then (and while the evaluation loads) the settings can change
+    const setup = !study && (state === 'setup' || loading || failed);
+    // "New game" from a game, finished or not, sets up the next one over the board as it stands; Cancel goes back to it
+    const choose = !study && !setup && (this.props.choose ?? false);
+    // The setup closed with Cancel before any game: the opening board, and New game to open it again
+    const idle = !study && state === 'idle';
+    // In play KUROOBI (White) thinks after 15 moves; otherwise Black is to move after 16. A game over is played out to the end.
+    const thinking = !study && state === 'thinking';
+    const record = drawn ? 'c4c5f6b3b5a6a2f5f4d3e6g4h3g5e2f1g6h4g3d7c8f7e7f2f8g8g2h2a5b6c7d8h8b7h5b8c2b4e3d6a3a4e8f3a7h7c6d2g7b1c3h6e1a8b2c1g1a1h1d1'
+      : endgame ? 'c4c3c2b2a2c1d3c5e6e3c6d6b4e7f2b6f6b3a3e2e1g5a7a6a5f5b5b1a1f3a4d1g6b7f4d7f8f1a8g2h5f7d8h7g3e8g7d2h1h4h6b8c7g8c8g1g4h8h2h3'.slice(0, study ? 120 : 80)
+      : won ? 'c4c3c2b2a2c1d3c5e6e3c6d6b4e7f2b6f6b3a3e2e1g5a7a6a5f5b5b1a1f3a4d1g6b7f4d7f8f1a8g2h5f7d8h7g3e8g7d2h1h4h6b8c7g8c8g1g4h8h2h3'
+      : over ? 'c4c5f6e3e2f2c6b6b5b4a3a4c3d2a5c7b3g7d8a7d7f4b7c8f5g6c2e6d3b1b8a8d6a6g3g4c1e7h4b2e8h3g5f8h2a2h7h6f1g2a1e1h5g1g8h8f7h1d1f3'
+      : setup || idle ? '' : thinking ? 'f5d6c3d3c4f4f6f3e6e7d7c6c5b5b6' : 'f5d6c3d3c4f4f6f3e6e7d7c6c5b5b6b4';
+    // The board is built by actually playing out the record (sq = col*8 + row, 1 = black, 2 = white)
+    const D = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+    const flips = (c, sq, me) => {
+      if (c[sq]) return [];
+      const f0 = Math.floor(sq / 8), r0 = sq % 8, op = 3 - me, out = [];
+      for (const [df, dr] of D) {
+        const run = [];
+        let f = f0 + df, r = r0 + dr;
+        while (f >= 0 && f < 8 && r >= 0 && r < 8 && c[f * 8 + r] === op) { run.push(f * 8 + r); f += df; r += dr; }
+        if (run.length && f >= 0 && f < 8 && r >= 0 && r < 8 && c[f * 8 + r] === me) out.push(...run);
+      }
+      return out;
+    };
+    const legalOf = (c, me) => Array.from({ length: 64 }, (_, i) => i).filter((i) => flips(c, i, me).length);
+    const c = Array(64).fill(0);
+    c[3 * 8 + 4] = c[4 * 8 + 3] = 1; c[3 * 8 + 3] = c[4 * 8 + 4] = 2;
+    let me = 1, last = null, snap = null;
+    const moves = [];
+    for (let i = 0; i + 1 < record.length; i += 2) {
+      const sq = 'abcdefgh'.indexOf(record[i]) * 8 + (+record[i + 1] - 1);
+      if (!legalOf(c, me).length) me = 3 - me;
+      const fl = flips(c, sq, me);
+      if (!fl.length) break;
+      c[sq] = me; fl.forEach((x) => { c[x] = me; }); last = sq; moves.push({ mv: record.slice(i, i + 2), side: me }); me = 3 - me;
+      if (moves.length === stopAt) snap = { c: c.slice(), last, me: legalOf(c, me).length ? me : 3 - me };
+    }
+    if (snap) { c.splice(0, 64, ...snap.c); last = snap.last; me = snap.me; }
+    if (!legalOf(c, me).length) me = 3 - me;
+    const legal = over || setup || choose || idle ? [] : legalOf(c, me);
+    const n = moves.length;
+    const sqOf = (name) => 'abcdefgh'.indexOf(name[0]) * 8 + (+name[1] - 1);
+    // What KUROOBI (ep12, depth 6) reads for Black's moves after b4; order and best come from these unrounded values
+    // At move 41 of the won game (19 empties, White to move) the board's evals are solved: the web engine's analyze(19)
+    const endRead = [['c7', -30], ['b8', -32], ['g3', -32], ['e8', -34], ['h7', -34], ['g4', -36], ['g7', -36], ['h6', -40], ['f7', -46]];
+    const read = endgame && study && !scrub ? endRead : [['e3', 2.5], ['c7', -1.3], ['d8', -2.8], ['d2', -3.9], ['g4', -4.1], ['e8', -4.5], ['f7', -5.2], ['a5', -6.2], ['c2', -7.3], ['g3', -8.2], ['f2', -10.2], ['a4', -13.9], ['b3', -14.1], ['g2', -20.9]];
+    // Study reads the position only once it is ready, not while the whole record is analyzed, and has nothing to read at the end
+    const candsShown = study && ready && !analyzing && !over && state !== 'fresh' && (!endgame || !scrub);
+    const evalsShown = candsShown || (state === 'yours' && !study && (this.props.evals ?? false));
+    // The opening book's values on the board, for when the web reads them from the book (it does not yet)
+    const book = study && (this.props.book ?? false);
+    const readHow = endgame && study ? t.solved : t.depth(6);
+    const boardEvals = evalsShown ? Object.fromEntries(read.map(([s, v], i) => [sqOf(s), { score: v, best: i === 0, src: book ? 'book' : endgame && study ? 'solve' : undefined }])) : {};
+    // Its whole-game analysis at Lv5, from the last move back: Black's view of each position. Nothing until it is asked for.
+    const values = [0.48, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 0.11, 4.94, 4.94, 7.65, 1.18, 1.18];
+    const analyzed = study && (state === 'yours' || analyzing);
+    const done = analyzing ? 9 : n + 1;
+    // What the web engine gave along the won game at Lv8, Black's view: value, solved, depth, selective t
+    const END = [{v:-0.33,x:0,d:14,t:0},{v:0.41,x:0,d:14,t:0},{v:0.40,x:0,d:14,t:0},{v:-11.77,x:0,d:14,t:0},{v:27.02,x:0,d:14,t:0},{v:-50.44,x:0,d:14,t:0},{v:-35.47,x:0,d:14,t:0},{v:-31.34,x:0,d:14,t:0},{v:-18.36,x:0,d:14,t:0},{v:-23.98,x:0,d:14,t:0},{v:-23.67,x:0,d:14,t:0},{v:-23.10,x:0,d:14,t:0},{v:-22.96,x:0,d:14,t:0},{v:-21.83,x:0,d:14,t:0},{v:-8.11,x:0,d:14,t:0},{v:-11.29,x:0,d:14,t:0},{v:-11.83,x:0,d:14,t:0},{v:-12.42,x:0,d:14,t:0},{v:-11.50,x:0,d:14,t:0},{v:-18.11,x:0,d:14,t:0},{v:-10.62,x:0,d:14,t:0},{v:-27.29,x:0,d:14,t:0},{v:-14.72,x:0,d:14,t:0},{v:-29.40,x:0,d:14,t:0},{v:-30.97,x:0,d:14,t:0},{v:-31.98,x:0,d:14,t:0},{v:-24.70,x:0,d:14,t:0},{v:-22.77,x:0,d:14,t:0},{v:62.21,x:0,d:14,t:0},{v:61.06,x:0,d:14,t:0},{v:64.00,x:0,d:14,t:0},{v:57.32,x:0,d:14,t:0},{v:55.01,x:0,d:14,t:0},{v:13.28,x:0,d:14,t:0},{v:26.83,x:0,d:14,t:0},{v:18.55,x:0,d:14,t:0},{v:20.12,x:0,d:14,t:0},{v:17.69,x:0,d:14,t:0},{v:31.00,x:0,d:22,t:0.4},{v:31.00,x:0,d:21,t:0.6},{v:30.00,x:0,d:20,t:0.8},{v:30.00,x:0,d:19,t:1.1},{v:46.00,x:1,d:0,t:0},{v:32.00,x:1,d:0,t:0},{v:34.00,x:1,d:0,t:0},{v:18.00,x:1,d:0,t:0},{v:32.00,x:1,d:0,t:0},{v:8.00,x:1,d:0,t:0},{v:8.00,x:1,d:0,t:0},{v:8.00,x:1,d:0,t:0},{v:12.00,x:1,d:0,t:0},{v:10.00,x:1,d:0,t:0},{v:20.00,x:1,d:0,t:0},{v:6.00,x:1,d:0,t:0},{v:16.00,x:1,d:0,t:0},{v:12.00,x:1,d:0,t:0},{v:20.00,x:1,d:0,t:0},{v:14.00,x:1,d:0,t:0},{v:14.00,x:1,d:0,t:0},{v:14.00,x:1,d:0,t:0},{v:14.00,x:1,d:0,t:0}];
+    // A selective solve's t (sigmas) as the share within ±t of a normal distribution, in %, as the app shows it
+    const pct = (tt) => { if (!(tt > 0)) return undefined; const x = tt / Math.SQRT2, k = 1 / (1 + 0.3275911 * x);
+      const poly = k * (0.254829592 + k * (-0.284496736 + k * (1.421413741 + k * (-1.453152027 + k * 1.061405429))));
+      return Math.round((1 - poly * Math.exp(-x * x)) * 100); };
+    const graph = endgame && study ? END.map((p) => ({ value: p.v, exact: !!p.x, depth: p.d, selective: pct(p.t) }))
+      : analyzed ? values.map((v, i) => (i >= values.length - done ? { value: v } : undefined)) : [];
+    const kifu = moves.map((m, i) => {
+      const value = graph[i + 1] ? graph[i + 1].value : undefined;
+      const prev = graph[i] ? graph[i].value : undefined;
+      const drop = value === undefined || prev === undefined ? 0 : m.side === 1 ? prev - value : value - prev;
+      // What KUROOBI (White, Lv7) read for each move it played: value, depth, and the work it took
+      // KUROOBI's reply from 21 empties (move 40) is the engine's own: a selective solve at t 0.6, 227 ms, 2.51M positions
+      const read = !study && m.side === 2 ? (endgame && i === 39 ? { score: -31, depth: 21, exact: false, selective: pct(0.6), ms: 227, nodes: 2510445 }
+        : { score: [0.4, -1.2, 0.8, 1.6, -0.3, 2.1, 1.1, 0.6][(i >> 1) % 8], depth: endgame ? 14 : 12, exact: false, ms: 380 + ((i * 137) % 900), nodes: 210000 + ((i * 7919) % 400000) }) : undefined;
+      const after = graph[i + 1];
+      // The analysis reads each position to its depth (Lv7's 12; the graph stops at 14), solving none this early in a game
+      return { n: i + 1, move: m.mv, color: m.side === 1 ? 'b' : 'w', score: value, loss: drop >= 2 ? drop : undefined,
+        depth: value === undefined ? undefined : after && after.depth !== undefined ? after.depth : 12,
+        solved: after ? after.exact : undefined, selective: after ? after.selective : undefined, read };
+    });
+    const worst = kifu.reduce((b, k) => (k.loss && (!b || k.loss > b.loss) ? { at: k.n, loss: k.loss } : b), undefined);
+    const cb = c.filter((x) => x === 1).length, cw = c.filter((x) => x === 2).length;
+    const noop = () => {};
+    // KUROOBI's last reply: what it read for the move it played (+1 at depth 12 mid-game, the final count when it closed the game)
+    const toast = this.props.toast ?? '';
+    const reading = !study && ((this.props.reading ?? false) || endgame);
+    return {
+      lang,
+      t,
+      chrome: !bare,
+      play: !study,
+      study,
+      loading,
+      failed,
+      analyzing,
+      idle: !analyzing,
+      notReady: !ready,
+      setup,
+      choose,
+      cover: setup || choose,
+      inGame: !study && !setup && !idle,
+      actions: !study && !setup && !choose,
+      // With no game, or once it is over, the next one is what is left to do
+      newKind: over || idle ? 'primary' : 'secondary',
+      viewOpen: this.props.view ?? false,
+      noUndo: idle,
+      boardOff: !ready || setup || choose || idle || thinking || over,
+      dimClass: ready ? '' : 'pa-dim',
+      yes: true,
+      one: 1,
+      noop,
+      kifuSelect: study ? noop : undefined,
+      grow: { flex: 1 },
+      pushRight: { marginLeft: 'auto' },
+      plies: 60,
+      loadRatio: 12.3 / 43.7,
+      level: this.props.custom ? { depth: 15, solve: 19 } : endgame ? { depth: 14, solve: 18 } : { depth: 12, solve: 16 },
+      sides: [{ value: 1, label: t.sideBlack, stone: 'b', hint: t.sideFirst }, { value: 2, label: t.sideWhite, stone: 'w', hint: t.sideSecond }],
+      evalsOn: evalsShown && !study,
+      pos: { cells: c, last, legal, turn: me === 1 ? 'b' : 'w' },
+      // The side to move stands out (raised card, ringed stone that breathes while KUROOBI thinks); at the end nobody is to move
+      score: {
+        b: { count: cb, turn: !setup && !idle && !over && me === 1 },
+        w: { count: cw, turn: !setup && !idle && !over && me === 2, busy: thinking ? t.thinking : undefined },
+      },
+      // At the end the two cards become one: the result beside the final count
+      result: !over ? undefined : {
+        title: study ? (cb > cw ? t.blackWin : cw > cb ? t.whiteWin : t.draw) : cb > cw ? t.youWin : cw > cb ? t.kuroobiWin : t.draw,
+        tone: study ? 'neutral' : cb > cw ? 'win' : cw > cb ? 'loss' : 'neutral' },
+      boardEvals,
+      evalsOnBoard: evalsShown,
+      book,
+      cands: candsShown ? read.map(([s, v]) => ({ square: s, score: v })) : [],
+      candsEmpty: !ready ? t.waiting : over ? t.noMoves : analyzing ? t.afterAnalysis : t.reading,
+      candsNote: candsShown ? readHow : '',
+      graph,
+      blunder: analyzing ? undefined : worst,
+      moveCount: stopAt ?? n,
+      graphPointer: scrub || undefined,
+      moveTotal: n,
+      moveName: (k) => (k >= 1 && k <= n ? moves[k - 1].mv : undefined),
+      progressText: done + ' / ' + (n + 1),
+      progress: done / (n + 1),
+      kifu,
+      viewItems: [{ label: t.showEvals, checked: evalsShown && !study }],
+      // A game's record shows only its moves; what KUROOBI read for one of its own opens when that move is pressed
+      kifuColumns: study ? 'eval' : 'reading',
+      kifuOpen: endgame && !study ? 40 : reading && n >= 2 ? (moves[n - 1].side === 2 ? n : n - 1) : undefined,
+      shareOpen: this.props.share ?? false,
+      toastOn: toast !== '',
+      toastText: toast === 'kifu' ? t.kifuCopied : t.linkCopied,
+      loadOpen: this.props.load ?? false,
+      // A GGF from a board 20 moves in, as a file saved from another server brings it
+      loadSample: '(;GM[Othello]PC[NBoard]DT[2026-11-20]PB[black]PW[white]RE[?]TI[0]TY[8]BO[8 ------------------***O---OO**O---OO***---*O***----O**-----O*---- *]B[B8]W[E2]B[D2]W[E1]B[C2]W[E8];)',
+      shareItems: [
+        { label: t.shareLink, icon: 'link' },
+        { label: t.shareKifu, icon: 'copy' },
+        { label: t.shareX, icon: 'x', external: t.newWindow },
+        { label: t.shareMore, icon: 'more' },
+      ],
+      modes: [
+        { label: t.play, href: 'Play.dc.html', on: !study },
+        { label: t.study, href: 'Study.dc.html', on: study },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

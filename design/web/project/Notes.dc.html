@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>技術情報 · KUROOBI</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="site.css">
+<script src="ds/kuroobiweb/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div lang="{{lang}}" style="min-height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); font-family: var(--ff-web)">
+<dc-import name="SiteHeader" active="notes" lang="{{lang}}" hint-size="100%,64px"></dc-import>
+
+<main class="w-wrap nx" style="flex: 1">
+<div class="nx-head">
+<h1>{{t.title}}</h1>
+<p class="w-keep">{{t.lead}}</p>
+</div>
+
+<nav aria-label="{{t.tagsNav}}" class="nx-tags">
+<sc-for list="{{tags}}" as="c" hint-placeholder-count="6">
+<a href="{{c.href}}" class="w-plain w-btn" aria-current="{{c.current}}">{{c.label}}</a>
+</sc-for>
+</nav>
+
+<sc-if value="{{hasNotes}}" hint-placeholder-val="{{true}}">
+<ol class="nx-list">
+<sc-for list="{{notes}}" as="n" hint-placeholder-count="6">
+<li>
+<a href="Article.dc.html" class="w-plain">
+<time>[日付]</time>
+<span class="nx-body">
+<span class="nx-title">{{n.title}}</span>
+<span class="nx-sum">[概要]</span>
+</span>
+<span class="tag">{{n.tag}}</span>
+</a>
+</li>
+</sc-for>
+</ol>
+</sc-if>
+<sc-if value="{{noNotes}}" hint-placeholder-val="{{false}}">
+<p class="nx-empty">{{t.empty}}</p>
+</sc-if>
+</main>
+
+<dc-import name="SiteFooter" lang="{{lang}}" hint-size="100%,380px"></dc-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"lang":{"editor":"enum","options":["ja","en"],"default":"ja"},"tag":{"editor":"enum","options":["","web","eval","search","board","book"],"default":""},"empty":{"editor":"boolean","default":false},"$preview":{"width":1280,"height":1500}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const lang = this.props.lang ?? 'ja';
+    const tag = this.props.tag ?? '';
+    const empty = this.props.empty ?? false;
+    const T = {
+      ja: { title: '技術情報', lead: 'KUROOBI の\u200b設計と、\u200b採否を\u200b決めた\u200b測定の\u200b記録。', tagsNav: 'タグ', all: 'すべて', empty: '記事はまだありません。',
+        tags: { web: 'Web', eval: '評価関数', search: '探索', board: '盤', book: '定石' },
+        notes: [['web', 'ブラウザ用の評価関数を小さくする'], ['eval', '評価関数 (NNUE) の構成'], ['search', '終盤の読切と手の並べ替え'], ['search', '持ち時間の探索'], ['board', '盤の表現とビット演算'], ['book', '定石の学習']] },
+      en: { title: 'Notes', lead: 'How KUROOBI is built, and the measurements that decided what stayed.', tagsNav: 'Tags', all: 'All', empty: 'No notes yet.',
+        tags: { web: 'Web', eval: 'Evaluation', search: 'Search', board: 'Board', book: 'Book' },
+        notes: [['web', 'Shrinking the evaluation for the browser'], ['eval', 'How the evaluation (NNUE) is built'], ['search', 'Endgame solving and move ordering'], ['search', 'Searching on a clock'], ['board', 'Bitboards'], ['book', 'Learning the book']] },
+    };
+    const t = T[lang] || T.ja;
+    const ids = ['', 'web', 'eval', 'search', 'board', 'book'];
+    const page = (id) => (id === '' ? 'Notes.dc.html' : 'NotesTag.dc.html');
+    const notes = t.notes.filter(([id]) => !tag || id === tag).map(([id, title]) => ({ tag: t.tags[id], title }));
+    return {
+      lang,
+      t,
+      tags: ids.map((id) => ({ label: id ? t.tags[id] : t.all, href: page(id), current: id === tag ? 'page' : 'false' })),
+      notes,
+      hasNotes: !empty,
+      noNotes: empty,
+    };
+  }
+}
+</script>
+</body>
+</html>

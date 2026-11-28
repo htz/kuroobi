@@ -1,0 +1,373 @@
+/* Kuroobi web — web/src/styles/site.css */
+
+/* Colours, board and stones come from the app; type, measure and spacing are the site's own. */
+:root {
+  --ff-web: "Noto Sans JP", -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+  --ff-code: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* A site is read at arm's length, so body text starts at 16px, not the app's 13px. */
+  --t-display: clamp(34px, 5.2vw, 60px);
+  --t-h1: clamp(28px, 3.6vw, 40px);
+  --t-h2: clamp(22px, 2.4vw, 28px);
+  --t-h3: 19px;
+  --t-lead: clamp(16px, 1.6vw, 19px);
+  --t-body: 16px;
+  --t-small: 14px;
+  --t-meta: 13px;
+  --lh-body: 1.9;
+  --lh-head: 1.35;
+
+  --c-max: 1200px;
+  --c-text: 680px;
+  --gutter: clamp(16px, 4vw, 40px);
+  --h-header: 64px;
+  --s-section: clamp(64px, 9vw, 112px);
+  --r-card: 14px;
+}
+
+html { color-scheme: dark; }
+:root[data-theme="light"] { color-scheme: light; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { color-scheme: light; }
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font: var(--t-body)/var(--lh-body) var(--ff-web);
+}
+main { flex: 1; }
+/* Japanese headings break between phrases, not inside a word. */
+:where(h1, h2, h3) { word-break: auto-phrase; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:hover { color: var(--text); }
+:where(a, button, input, select, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.w-plain { color: inherit; text-decoration: none; }
+.w-plain:hover { color: inherit; }
+.w-nav { color: var(--sub); text-decoration: none; }
+.w-nav:hover, .w-nav[aria-current="page"] { color: var(--text); }
+.w-card { transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease); }
+.w-card:hover { border-color: var(--sub); }
+.w-btn { transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease); cursor: pointer; }
+.w-btn:hover { border-color: var(--sub); }
+.w-btn-primary:hover { background: var(--accent); border-color: var(--accent); }
+
+.w-wrap { width: 100%; max-width: var(--c-max); margin: 0 auto; box-sizing: border-box; padding-left: var(--gutter); padding-right: var(--gutter); }
+.w-eyebrow { font-size: var(--t-meta); font-weight: 500; letter-spacing: .12em; color: var(--accent); }
+.w-primary {
+  display: inline-flex; align-items: center; min-height: 48px; padding: 0 24px; box-sizing: border-box;
+  border-radius: 10px; border: 1px solid var(--accent-dim); background: var(--accent-dim);
+  color: var(--on-accent); font-size: var(--t-body); font-weight: 700; text-decoration: none;
+}
+.w-primary:hover { color: var(--on-accent); }
+
+/* A label on a card or an article (design-system/web: .tag). */
+.tag {
+  display: inline-flex; align-items: center; align-self: flex-start; padding: 2px 10px; border-radius: var(--r-pill);
+  background: var(--panel); border: 1px solid var(--border); font-size: var(--t-meta); font-weight: 500; color: var(--sub);
+}
+
+/* Code in articles carries both themes' colours; the page's theme picks one. */
+.astro-code, .astro-code span { color: var(--shiki-dark); }
+:root[data-theme="light"] :is(.astro-code, .astro-code span) { color: var(--shiki-light); }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) :is(.astro-code, .astro-code span) { color: var(--shiki-light); }
+}
+
+/* The app's state layers and scrollers (crates/gui/src-ui/base.css), for the components it lends the play screen. */
+.k-press { transition: border-color var(--dur) var(--ease); }
+.k-press:hover:not(:disabled):not([aria-disabled="true"]) { background-image: linear-gradient(var(--hover), var(--hover)) !important; }
+.k-press:active:not(:disabled):not([aria-disabled="true"]) { background-image: linear-gradient(var(--hover), var(--hover)), linear-gradient(var(--hover), var(--hover)) !important; }
+.k-row { cursor: pointer; }
+.k-row:focus-visible { outline-offset: -2px; }
+.k-row:hover { background-image: linear-gradient(var(--hover), var(--hover)) !important; }
+.k-row[aria-current="true"]:hover, .k-row.k-on:hover { background-image: linear-gradient(var(--hover-on), var(--hover-on)) !important; }
+/* A record's row opened to what KUROOBI read: the row and its figures light as one block. */
+.w-kifu-open .k-row:hover { background-image: none !important; }
+.w-kifu-open:has(.k-row:hover) { background-image: linear-gradient(var(--hover), var(--hover)); }
+.k-input { transition: border-color var(--dur) var(--ease); }
+.k-input:hover:not([readonly]) { border-color: var(--sub); }
+.k-input:focus-within, .k-input:focus { border-color: var(--accent); }
+.w-dialog::backdrop { background: rgba(0, 0, 0, .55); }
+.k-scroll { overflow-y: auto; overscroll-behavior: contain; }
+.k-scroll > * { flex-shrink: 0; }
+
+/* The board's own rules, as the app's base.css has them. */
+.k-cell { cursor: pointer; }
+.k-cell circle { transition: opacity var(--dur) var(--ease), r var(--dur) var(--ease); }
+.k-cell:hover .k-legal { opacity: 1; }
+
+@media (max-width: 760px) {
+  .w-hide-phone { display: none !important; }
+}
+@media (min-width: 761px) {
+  .w-only-phone { display: none !important; }
+}
+/* A short note that something was done (copied), at the foot of the screen; whoever shows it removes it. */
+.w-toast {
+  position: fixed; left: 50%; bottom: 24px; z-index: 40; transform: translateX(-50%); max-width: calc(100vw - 32px);
+  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 20px 0 16px; box-sizing: border-box;
+  border-radius: var(--r-pill); border: 1px solid var(--border); background: var(--card); color: var(--text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .35); font: 500 var(--t-small) var(--ff-web); white-space: nowrap;
+  animation: w-toast-in var(--dur) var(--ease);
+}
+.w-toast-icon { display: inline-flex; color: var(--accent); }
+@keyframes w-toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+
+/* The site header (SiteHeader.astro, SiteHeader.dc.html). */
+.hd { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--border); }
+.hd-row { height: var(--h-header); display: flex; align-items: center; gap: clamp(16px, 3vw, 40px); }
+.hd-logo { display: flex; align-items: center; min-height: 44px; flex: none; width: clamp(96px, 10vw, 120px); color: var(--text); }
+.hd-nav { margin-left: auto; align-self: stretch; display: flex; align-items: stretch; gap: clamp(12px, 2.4vw, 32px); }
+.hd-item { display: inline-flex; align-items: center; white-space: nowrap; font-size: var(--t-small); font-weight: 500; }
+.hd-item[aria-current='page'] { box-shadow: inset 0 -2px 0 var(--accent); }
+.hd-tools { flex: none; display: flex; align-items: center; gap: 8px; }
+/* A phone has no room for the sections beside the tools, so they take a second row. */
+@media (max-width: 760px) {
+  .hd-row { height: auto; flex-wrap: wrap; row-gap: 0; padding-top: 12px; }
+  .hd-tools { margin-left: auto; }
+  .hd-nav { order: 3; width: 100%; height: 44px; margin-left: 0; }
+  .hd-lang { width: 44px; padding: 0; }
+}
+.hd-menu { position: relative; }
+.hd-icon, .hd-lang {
+  display: inline-flex; align-items: center; justify-content: center; height: 44px; box-sizing: border-box;
+  border-radius: 10px; border: 1px solid var(--border); background: transparent; color: var(--text);
+}
+.hd-icon { width: 44px; padding: 0; }
+a.hd-icon { color: var(--sub); }
+.hd-lang { gap: 6px; padding: 0 12px; font: 500 var(--t-meta) var(--ff-web); }
+.hd-menu button[aria-expanded='true'] { background: var(--card); }
+.hd-pop {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 6; width: 180px; box-sizing: border-box; padding: 6px;
+  display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--card); box-shadow: var(--sh-2);
+}
+.hd-pop[hidden] { display: none; }
+.hd-pop-wide { width: 200px; }
+.hd-choice {
+  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; box-sizing: border-box;
+  border: 0; border-radius: 8px; background: transparent; color: var(--text);
+  font: 500 var(--t-small) var(--ff-web); text-align: left;
+}
+.hd-choice > span:first-child { flex: 1; }
+.hd-choice[aria-current='page'], .hd-choice[aria-pressed='true'] { background: var(--hover-on); }
+.hd-mark { width: 16px; color: var(--accent); font-weight: 700; }
+
+/* The site footer (SiteFooter.astro, SiteFooter.dc.html). */
+.ft { flex: none; border-top: 1px solid var(--border); background: var(--panel); }
+.ft-in { padding-top: 56px; padding-bottom: 40px; display: flex; flex-direction: column; gap: 48px; }
+.ft-top { display: flex; flex-wrap: wrap; gap: 48px; }
+.ft-brand { flex: 999 1 280px; display: flex; flex-direction: column; gap: 14px; }
+.ft-logo { display: flex; align-items: center; min-height: 44px; width: 112px; color: var(--text); }
+.ft-sub { font-size: var(--t-small); color: var(--sub); }
+.ft-nav { flex: 1 1 360px; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 32px; }
+.ft-col { display: flex; flex-direction: column; align-items: flex-start; font-size: var(--t-small); }
+.ft-col a { display: inline-flex; align-items: center; min-height: 44px; }
+.ft-head { margin-bottom: 4px; font-size: var(--t-meta); font-weight: 700; }
+.ft-bottom { display: flex; flex-wrap: wrap; gap: 16px; padding-top: 24px; border-top: 1px solid var(--border); font-size: var(--t-meta); color: var(--sub); }
+.ft-tm { margin-left: auto; }
+
+/* A link standing on its own (more, all notes, open in study): a 44px target, not a run of text. */
+.w-more { display: inline-flex; align-items: center; min-height: 44px; font-size: var(--t-small); font-weight: 500; }
+
+/* The notes index (NotesIndex.astro, Notes.dc.html). */
+.nx { padding-top: clamp(40px, 6vw, 80px); padding-bottom: var(--s-section); display: flex; flex-direction: column; gap: 40px; }
+.nx-head { display: flex; flex-direction: column; gap: 16px; max-width: var(--c-text); }
+.nx-head h1 { margin: 0; font-size: var(--t-display); line-height: 1.2; font-weight: 700; }
+.nx-head p { margin: 0; font-size: var(--t-lead); line-height: 1.9; color: var(--sub); }
+.nx-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.nx-tags a {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; box-sizing: border-box;
+  border-radius: var(--r-pill); border: 1px solid var(--border); font-size: var(--t-small); font-weight: 500;
+}
+.nx-tags a[aria-current='page'] { background: var(--text); border-color: var(--text); color: var(--bg); }
+.nx-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }
+.nx-list li { border-bottom: 1px solid var(--border); }
+.nx-list a { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 32px; padding: 28px 0; }
+.nx-list time { flex: 0 0 140px; font-family: var(--ff-code); font-size: var(--t-meta); color: var(--sub); }
+.nx-body { flex: 999 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.nx-title { font-size: var(--t-h2); line-height: 1.45; font-weight: 700; text-wrap: pretty; }
+.nx-sum { font-size: var(--t-small); line-height: 1.85; color: var(--sub); }
+.nx-empty { margin: 0; color: var(--sub); }
+
+/* Articles (NoteArticle.astro, Position.astro, Article.dc.html); the body is markdown's own elements. */
+.na { padding-top: clamp(40px, 6vw, 72px); padding-bottom: var(--s-section); }
+.na-head {
+  max-width: 880px; display: flex; flex-direction: column; gap: 20px;
+  padding-bottom: 40px; margin-bottom: 48px; border-bottom: 1px solid var(--border);
+}
+.na-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; margin: -12px 0; font-size: var(--t-small); color: var(--sub); }
+.na-crumbs a { display: inline-flex; align-items: center; min-height: 44px; }
+.na-head h1 { margin: 0; font-size: var(--t-h1); line-height: 1.4; font-weight: 700; text-wrap: balance; }
+.na-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; font-size: var(--t-meta); color: var(--sub); }
+.na-meta time { font-family: var(--ff-code); }
+/* wrap-reverse puts the contents above the article on a phone; `start` keeps both at the top when side by side. */
+.na-cols { display: flex; flex-wrap: wrap-reverse; align-items: start; gap: 48px clamp(40px, 6vw, 96px); }
+.na-body { flex: 999 1 560px; min-width: 0; max-width: var(--c-text); font-size: var(--t-body); line-height: var(--lh-body); }
+
+.na-toc { flex: 1 1 220px; min-width: 0; max-width: 280px; display: flex; flex-direction: column; gap: 12px; }
+.na-toc-head { font-size: var(--t-meta); font-weight: 700; letter-spacing: .08em; color: var(--sub); }
+.na-toc ol { margin: 0; padding: 0; list-style: none; border-left: 1px solid var(--border); }
+.na-toc a { display: flex; align-items: center; min-height: 44px; margin-left: -1px; padding: 0 0 0 16px; font-size: var(--t-small); line-height: 1.6; }
+.na-toc a[aria-current='true'] { color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+
+.na-around { margin-top: 40px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 16px; }
+.na-around a { display: flex; flex-direction: column; gap: 6px; padding: 20px; border: 1px solid var(--border); border-radius: 12px; }
+.na-around span { font-size: var(--t-meta); color: var(--sub); }
+.na-around b { font-size: var(--t-body); line-height: 1.6; }
+.na-next { text-align: right; }
+
+.na-body p, .na-body ul, .na-body ol, .na-body blockquote { margin: 0 0 24px; }
+.na-body li + li { margin-top: 8px; }
+.na-body h2 { margin: 48px 0 24px; font-size: var(--t-h2); line-height: var(--lh-head); font-weight: 700; scroll-margin-top: calc(var(--h-header) + 16px); }
+.na-body h3 { margin: 32px 0 16px; font-size: var(--t-h3); line-height: 1.5; font-weight: 700; }
+.na-body > :first-child { margin-top: 0; font-size: var(--t-lead); line-height: 1.95; }
+.na-body code { font-family: var(--ff-code); }
+.na-body :not(pre) > code { font-size: max(13px, .9em); padding: 1px 6px; border-radius: 6px; background: var(--panel); border: 1px solid var(--border-weak); }
+.na-body blockquote { padding: 4px 0 4px 20px; border-left: 3px solid var(--border); color: var(--sub); }
+.na-body blockquote > :last-child { margin-bottom: 0; }
+.na-body img { display: block; max-width: 100%; height: auto; margin: 8px 0 32px; border-radius: 12px; border: 1px solid var(--border); }
+.na-code { margin: 8px 0 32px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--panel); }
+.na-code-bar { display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 16px; border-bottom: 1px solid var(--border); }
+.na-code-lang { flex: 1; min-width: 0; font-family: var(--ff-code); font-size: var(--t-meta); color: var(--sub); }
+.na-code-copy {
+  min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--border);
+  background: transparent; color: var(--text); font: 500 var(--t-small) var(--ff-web);
+}
+.na-body pre { margin: 0; padding: 18px 20px; overflow-x: auto; background: var(--bg) !important; font-size: 13.5px; line-height: 1.75; }
+.na-table { margin: 8px 0 32px; overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
+.na-table table { width: 100%; border-collapse: collapse; font-size: var(--t-small); line-height: 1.6; font-variant-numeric: tabular-nums; }
+.na-table th { padding: 12px 16px; text-align: left; font-weight: 700; background: var(--panel); border-bottom: 1px solid var(--border); }
+.na-table td { padding: 12px 16px; border-bottom: 1px solid var(--border-weak); }
+.na-table tr:last-child td { border-bottom: 0; }
+
+.np { margin: 8px 0 32px; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px 24px; }
+.np-board { width: min(300px, 100%); aspect-ratio: 1 / 1; }
+.np figcaption { flex: 1 1 200px; display: flex; flex-direction: column; gap: 4px; font-size: var(--t-meta); color: var(--sub); }
+
+/* The 404 page (404.astro, NotFound.dc.html): the same words in both languages, either one's reader finds theirs. */
+.nf { padding-top: var(--s-section); padding-bottom: var(--s-section); display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 48px 64px; }
+.nf-block { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
+.nf-block p { margin: 0; color: var(--sub); line-height: 1.9; }
+.nf-block .nf-title { margin: 0; font-size: var(--t-h1); line-height: var(--lh-head); font-weight: 700; color: var(--text); }
+
+/* A move on the board (Board.tsx): the stone placed grows in; each stone it turns narrows to nothing and opens in its new colour. */
+@keyframes w-place { from { transform: scale(.4); opacity: 0; } }
+@keyframes w-flip-out { to { transform: scaleX(0); } }
+@keyframes w-flip-in { from { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .w-toast { animation: none; }
+  svg g { animation-duration: 1ms !important; animation-delay: 0ms !important; }
+}
+
+/* The scoreboard's ring while KUROOBI thinks, and the result as it comes in. */
+.w-breathe { animation: w-breathe 1.4s ease-in-out infinite; }
+@keyframes w-breathe { 50% { box-shadow: 0 0 0 3px var(--card), 0 0 0 6px transparent; } }
+.w-result { animation: w-result-in 360ms var(--ease) both; }
+@keyframes w-result-in { from { opacity: 0; transform: translateY(-6px) scale(.98); } }
+@media (prefers-reduced-motion: reduce) { .w-breathe, .w-result { animation: none; } }
+/* A score card (ui.tsx Scoreboard): stone, count, and at its right Thinking in a game or the result at its end.
+   A narrow card (a phone) sits closer and says Thinking with the breathing ring and the dot alone; one too narrow
+   for the result at its right (a small phone with a draw) puts it under the count. */
+.w-score { container-type: inline-size; }
+.w-score-in {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; column-gap: 16px;
+  min-height: 70px; padding: 10px 18px; box-sizing: border-box;
+}
+.w-score-side { justify-self: end; }
+.w-score-res { font-size: var(--t-body); line-height: 1.2; }
+.w-score-busy { white-space: nowrap; }
+@container (max-width: 260px) {
+  .w-score-in { column-gap: 10px; padding: 10px 12px; }
+  .w-score-res { font-size: var(--t-small); }
+  .w-score-busy { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+}
+@container (max-width: 166px) {
+  .w-score-stone { grid-row: span 2; }
+  .w-score-res { grid-column: 2; justify-self: start; }
+}
+
+/* Kuroobi for web's play and study screen (PlayApp.tsx, Play.dc.html); its parts are the design system's components. */
+.pa { display: flex; flex-direction: column; gap: 20px; }
+.pa-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; }
+.pa-title { margin: 0; font-size: var(--t-h3); font-weight: 700; white-space: nowrap; }
+.pa-tools { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; }
+
+.pa-loading {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 16px 20px;
+  border-radius: 12px; border: 1px solid var(--accent-dim); background: var(--panel); font-size: var(--t-small);
+}
+.pa-failed {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 12px 12px 12px 20px;
+  border-radius: 12px; border: 1px solid var(--bad); background: var(--panel); font-size: var(--t-small);
+}
+.pa-failed .pa-strong { color: var(--bad); }
+.pa-loading-bar { flex: 1 1 200px; }
+
+.pa-cols { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 24px 40px; }
+.pa-left { flex: 999 1 480px; min-width: 0; max-width: 640px; display: flex; flex-direction: column; gap: 12px; }
+.pa-right { flex: 1 1 320px; min-width: 0; max-width: 420px; display: flex; flex-direction: column; gap: 16px; }
+.pa-board { position: relative; width: 100%; aspect-ratio: 1 / 1; }
+/* The marks' legend belongs to the board: it sits closer to it than the next block. */
+.pa-o-legend { margin-top: -4px; }
+
+.pa-strong { font-weight: 700; }
+.pa-mono { font-family: var(--ff-code); font-variant-numeric: tabular-nums; color: var(--sub); font-size: var(--t-meta); }
+.pa-meta { font-size: var(--t-meta); color: var(--sub); }
+/* Grids, not flex: the canvas draws each button inside a wrapper, so the column, not the button, takes the width. */
+.pa-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pa-buttons button, .pa-cover-actions button, .pa-o-act button:not([aria-haspopup]) { width: 100%; }
+/* Grows with the record and scrolls past 360px, so an empty record leaves no blank box. */
+.pa-kifu { max-height: 360px; display: flex; flex-direction: column; }
+.pa-analysis { display: flex; flex-direction: column; gap: 12px; }
+.pa-analysis-row { display: flex; align-items: center; gap: 12px; }
+.pa-dim { opacity: .55; }
+/* A game's buttons under the board, for a narrow screen only (the game's panel holds them otherwise). */
+.pa-o-act { display: none; }
+.pa-cover-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+/* A narrow screen stacks the two columns as one, in the order a phone is used: the score and the board, then what
+   moves it (a game's buttons, the moves through a record, the analysis's panel), then the graph and the record. */
+@media (max-width: 860px) {
+  .pa { gap: 16px; }
+  .pa-cols { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 16px; }
+  .pa-left, .pa-right { display: contents; }
+  .pa-o-score { order: 1; } .pa-o-board, .pa-o-legend { order: 2; } .pa-o-step { order: 3; }
+  .pa-o-main { order: 4; } .pa-o-graph { order: 5; } .pa-o-kifu { order: 6; }
+  /* A game keeps its buttons in reach: one row under the board takes the place of the game's panel. */
+  .pa-o-act { order: 3; display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; }
+  .pa-o-act > * { min-width: 0; }
+  .pa-o-act .w-btn-label { white-space: nowrap; }
+  .pa-o-view [aria-haspopup] .w-btn-label { display: none; }
+  .pa-o-view [aria-haspopup] { width: 44px; padding: 0 !important; }
+  .pa-o-game { display: none; }
+}
+/* A phone keeps the bar above the board to one row: the page's name is the header's already, the tools keep their icons. */
+@media (max-width: 560px) {
+  .pa-title { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .pa-bar { flex-wrap: nowrap; gap: 8px; }
+  .pa-tools { flex-wrap: nowrap; }
+  .pa-tools .w-btn-label { display: none; }
+  .pa-tools .w-btn { width: 44px; padding: 0 !important; }
+}
+
+/* A link out of the site opens in a new window and says so after its text (ExtIcon.astro, lib/external-links.mjs);
+   the header's GitHub button, an icon already, carries the arrow at its corner. */
+.w-ext-icon { display: inline-block; flex: none; margin-left: 4px; vertical-align: -0.125em; opacity: .75; }
+.hd-ext { position: relative; }
+.hd-ext-mark { position: absolute; top: 6px; right: 6px; opacity: .75; }
+
+/* Japanese the site writes (ja.json) carries U+200B between phrases and breaks only there; prose brought in from
+   elsewhere (the notes) breaks by phrase where the browser can tell them apart, and as before where it cannot. */
+.w-keep:lang(ja) { word-break: keep-all; overflow-wrap: anywhere; }
+.na-body:lang(ja) { word-break: auto-phrase; }
+
+/* Seen by keyboards and screen readers only: a radio whose card shows the choice. */
+.w-sr { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.w-choice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }

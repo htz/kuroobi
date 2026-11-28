@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>記事 · 技術情報 · KUROOBI</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="site.css">
+<script src="ds/kuroobiweb/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div lang="{{lang}}" style="min-height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); font-family: var(--ff-web)">
+<x-import component-from-global-scope="KuroobiWeb.BoardDefs"></x-import>
+<dc-import name="SiteHeader" active="notes" lang="{{lang}}" hint-size="100%,64px"></dc-import>
+
+<main class="w-wrap na" style="flex: 1">
+
+<header class="na-head">
+<nav aria-label="{{t.crumbs}}" class="na-crumbs">
+<a href="Notes.dc.html" class="w-nav">{{t.notes}}</a><span aria-hidden="true">/</span><a href="NotesTag.dc.html" class="w-nav">Web</a>
+</nav>
+<h1>{{t.title}}</h1>
+<div class="na-meta">
+<time>[日付]</time>
+<span>[読む時間]</span>
+<span class="tag">Web</span>
+<span class="tag">{{t.tagEval}}</span>
+</div>
+</header>
+
+<div class="na-cols">
+<article class="na-body">
+<p>[本文 — 導入]</p>
+<h2 id="s1">[見出し]</h2>
+<p>[本文] <code>[コード]</code> [本文]</p>
+<ul>
+<li>[項目]</li>
+<li>[項目]</li>
+</ul>
+
+<div class="na-table">
+<table>
+<thead><tr><th>[列]</th><th style="text-align: right">[列]</th><th style="text-align: right">[列]</th></tr></thead>
+<tbody>
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="3">
+<tr><td>[値]</td><td style="text-align: right">[値]</td><td style="text-align: right">[値]</td></tr>
+</sc-for>
+</tbody>
+</table>
+</div>
+
+<p>[本文]</p>
+
+<figure class="na-code">
+<div class="na-code-bar">
+<span class="na-code-lang">[言語]</span>
+<button type="button" class="w-btn na-code-copy">{{t.copy}}</button>
+</div>
+<pre>[コード]</pre>
+</figure>
+
+<h2 id="s2">[見出し]</h2>
+<h3>[小見出し]</h3>
+<p>[本文]</p>
+<blockquote><p>[引用]</p></blockquote>
+
+<figure class="np">
+<div class="np-board">
+<x-import component-from-global-scope="KuroobiWeb.Board" lang="{{lang}}" cells="{{pos.cells}}" last="{{pos.last}}" coords="{{yes}}" disabled="{{yes}}"></x-import>
+</div>
+<figcaption>
+<span>[局面の説明]</span>
+<a href="Study.dc.html" class="w-more">{{t.openInStudy}}</a>
+</figcaption>
+</figure>
+
+<img src="app-play.png" alt="[画像の説明]">
+<ol>
+<li>[手順]</li>
+<li>[手順]</li>
+</ol>
+<p>[本文]</p>
+
+<nav aria-label="{{t.around}}" class="na-around">
+<sc-if value="{{hasPrev}}" hint-placeholder-val="{{true}}">
+<a href="Article.dc.html" class="w-plain w-card">
+<span>{{t.prev}}</span>
+<b>{{t.prevTitle}}</b>
+</a>
+</sc-if>
+<sc-if value="{{noPrev}}" hint-placeholder-val="{{false}}">
+<span></span>
+</sc-if>
+<a href="Article.dc.html" class="w-plain w-card na-next">
+<span>{{t.next}}</span>
+<b>{{t.nextTitle}}</b>
+</a>
+</nav>
+</article>
+
+<aside aria-label="{{t.toc}}" class="na-toc">
+<span class="na-toc-head">{{t.toc}}</span>
+<ol>
+<sc-for list="{{toc}}" as="h" hint-placeholder-count="2">
+<li><a href="{{h.href}}" class="w-nav" aria-current="{{h.current}}">{{h.label}}</a></li>
+</sc-for>
+</ol>
+</aside>
+</div>
+</main>
+
+<dc-import name="SiteFooter" lang="{{lang}}" hint-size="100%,380px"></dc-import>
+<sc-if value="{{copied}}" hint-placeholder-val="{{false}}">
+<x-import component-from-global-scope="KuroobiWeb.Toast">{{t.copied}}</x-import>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"lang":{"editor":"enum","options":["ja","en"],"default":"ja"},"first":{"editor":"boolean","default":false},"copied":{"editor":"boolean","default":false},"$preview":{"width":1280,"height":3200}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const lang = this.props.lang ?? 'ja';
+    const T = {
+      ja: { crumbs: 'パンくず', notes: '技術情報', title: 'ブラウザ用の評価関数を小さくする', tagEval: '評価関数', copy: 'コピー', copied: 'コードをコピーしました',
+        openInStudy: 'この局面を検討で開く', around: '前後の記事', prev: '前の記事', next: '次の記事', toc: '目次',
+        prevTitle: '評価関数 (NNUE) の構成', nextTitle: '終盤の読切と手の並べ替え' },
+      en: { crumbs: 'Breadcrumb', notes: 'Notes', title: 'Shrinking the evaluation for the browser', tagEval: 'Evaluation', copy: 'Copy', copied: 'Code copied',
+        openInStudy: 'Open this position in Study', around: 'More notes', prev: 'Previous', next: 'Next', toc: 'Contents',
+        prevTitle: 'How the evaluation (NNUE) is built', nextTitle: 'Endgame solving and move ordering' },
+    };
+    const t = T[lang] || T.ja;
+    const first = this.props.first ?? false;
+    const c = Array(64).fill(0);
+    c[3 * 8 + 4] = c[4 * 8 + 3] = 1; c[3 * 8 + 3] = c[4 * 8 + 4] = 2;
+    return {
+      lang,
+      t,
+      yes: true,
+      pos: { cells: c, last: null },
+      rows: [{}, {}, {}],
+      // The newest article has no previous one; the next keeps the right-hand column
+      hasPrev: !first,
+      noPrev: first,
+      copied: this.props.copied ?? false,
+      // The section in view is marked by the accent rule over the list's left line; the first until the reader scrolls
+      toc: ['[見出し]', '[見出し]'].map((label, i) => ({ label, href: '#s' + (i + 1), current: i === 0 ? 'true' : 'false' })),
+    };
+  }
+}
+</script>
+</body>
+</html>

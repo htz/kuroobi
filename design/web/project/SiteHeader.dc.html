@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>サイトの見出し</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="kuroobi-tokens.css">
+<link rel="stylesheet" href="site.css">
+<script src="ds/kuroobiweb/components/bundle.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<header lang="{{lang}}" class="hd">
+<div class="w-wrap hd-row">
+<a href="{{home}}" aria-label="{{t.home}}" class="w-plain hd-logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="11.5 9.5 311 45" style="display: block; width: 100%; height: auto" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 14 V50"></path><path d="M44 14 L20 32 L44 50"></path><path d="M65 14 V36 A14 14 0 0 0 93 36 V14"></path><path d="M114 50 V14 H127 A11 11 0 0 1 127 36 H114"></path><path d="M127 36 L138 50"></path><circle cx="177" cy="32" r="18"></circle><circle cx="234" cy="32" r="18" fill="currentColor"></circle><path d="M273 32 H288 A9 9 0 0 1 288 50 H273 V14 H288 A9 9 0 0 1 288 32 H273"></path><path d="M318 14 V50"></path></g></svg></a>
+<nav aria-label="{{t.nav}}" class="hd-nav">
+<sc-for list="{{items}}" as="it" hint-placeholder-count="3">
+<a href="{{it.href}}" class="w-nav hd-item {{it.cls}}" aria-current="{{it.current}}">{{it.label}}</a>
+</sc-for>
+</nav>
+<div class="hd-tools">
+<a href="https://github.com/htz/kuroobi" class="w-plain w-btn hd-icon hd-ext w-hide-phone" target="_blank" rel="noopener" aria-label="{{t.githubNew}}"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"></path></svg><svg class="hd-ext-mark" aria-hidden="true" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"></path><path d="M20 4l-9 9"></path></svg></a>
+
+<div class="hd-menu">
+<button type="button" class="w-btn hd-lang" aria-label="{{t.langLabel}}" aria-haspopup="true" aria-expanded="{{langOpenStr}}" onClick="{{toggleLang}}"><svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"></path></svg><span class="w-hide-phone">{{t.langShort}}</span></button>
+<sc-if value="{{langOpen}}" hint-placeholder-val="{{false}}">
+<div role="group" aria-label="{{t.langLabel}}" class="hd-pop">
+<sc-for list="{{langs}}" as="lg" hint-placeholder-count="2">
+<a href="{{lg.href}}" hreflang="{{lg.code}}" lang="{{lg.code}}" aria-current="{{lg.current}}" class="w-plain w-btn hd-choice">
+<span>{{lg.label}}</span>
+<span aria-hidden="true" class="hd-mark">{{lg.mark}}</span>
+</a>
+</sc-for>
+</div>
+</sc-if>
+</div>
+
+<div class="hd-menu">
+<button type="button" class="w-btn hd-icon" aria-label="{{themeLabel}}" aria-haspopup="true" aria-expanded="{{themeOpenStr}}" onClick="{{toggleTheme}}">
+<sc-if value="{{isAuto}}" hint-placeholder-val="{{true}}">
+<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"></path></svg>
+</sc-if>
+<sc-if value="{{isLight}}" hint-placeholder-val="{{false}}">
+<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+</sc-if>
+<sc-if value="{{isDark}}" hint-placeholder-val="{{false}}">
+<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"></path></svg>
+</sc-if>
+</button>
+<sc-if value="{{themeOpen}}" hint-placeholder-val="{{false}}">
+<div role="group" aria-label="{{t.themeGroup}}" class="hd-pop hd-pop-wide">
+<sc-for list="{{choices}}" as="ch" hint-placeholder-count="3">
+<button type="button" aria-pressed="{{ch.pressed}}" onClick="{{ch.pick}}" class="w-btn hd-choice">
+<span>{{ch.label}}</span>
+<span aria-hidden="true" class="hd-mark">{{ch.mark}}</span>
+</button>
+</sc-for>
+</div>
+</sc-if>
+</div>
+</div>
+</div>
+</header>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"active":{"editor":"enum","options":["top","web","notes"],"default":"top"},"lang":{"editor":"enum","options":["ja","en"],"default":"ja"},"$preview":{"width":1280,"height":64}}'>
+class Component extends DCLogic {
+  // The chosen theme lives on <html data-theme>, which kuroobi-tokens.css already reads; "auto" removes it so the OS decides
+  componentDidMount() {
+    let saved = null;
+    try { saved = window.localStorage.getItem('kuroobi-theme'); } catch (e) { saved = null; }
+    if (saved === 'light' || saved === 'dark') this.apply(saved);
+  }
+  apply(theme) {
+    const root = document.documentElement;
+    if (theme === 'auto') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', theme);
+    try { window.localStorage.setItem('kuroobi-theme', theme); } catch (e) { /* private window: the choice lasts this page only */ }
+    this.setState({ theme, menu: null });
+  }
+  renderVals() {
+    const active = this.props.active ?? 'top';
+    const lang = this.props.lang ?? 'ja';
+    const theme = (this.state && this.state.theme) || 'auto';
+    const menu = (this.state && this.state.menu) || null;
+    const T = {
+      ja: { home: 'KUROOBI トップへ', nav: 'サイト', app: 'アプリ', notes: '技術情報', github: 'GitHub のソースコード', githubNew: 'GitHub のソースコード (新しいウィンドウで開きます)',
+        langLabel: '言語', langShort: '日本語', themeGroup: '表示のテーマ', theme: '表示のテーマ: ',
+        auto: 'OS に合わせる', light: 'ライト', dark: 'ダーク' },
+      en: { home: 'KUROOBI home', nav: 'Site', app: 'App', notes: 'Notes', github: 'Source on GitHub', githubNew: 'Source on GitHub (opens in a new window)',
+        langLabel: 'Language', langShort: 'EN', themeGroup: 'Theme', theme: 'Theme: ',
+        auto: 'Match the OS', light: 'Light', dark: 'Dark' },
+    };
+    const t = T[lang] || T.ja;
+    // Each language has its own URL (/ and /en/); the mock's English page is the top only
+    const home = lang === 'en' ? 'MainEn.dc.html' : 'Main.dc.html';
+    const items = [
+      { id: 'app', label: t.app, href: home + '#app' },
+      { id: 'web', label: 'Kuroobi for web', href: 'Play.dc.html' },
+      { id: 'notes', label: t.notes, href: 'Notes.dc.html' },
+    ];
+    const pick = (on) => ({ mark: on ? '✓' : '', bg: on ? 'var(--hover-on)' : 'transparent' });
+    return {
+      lang,
+      t,
+      home,
+      // The current section carries a 2px accent rule on the header's bottom edge
+      items: items.map((it) => {
+        const on = it.id === active;
+        // The app is an anchor on the top page; on a phone the bar keeps only the two sections
+        return { ...it, cls: it.id === 'app' ? 'w-hide-phone' : '', current: on ? 'page' : 'false', bar: on ? 'inset 0 -2px 0 var(--accent)' : 'none' };
+      }),
+      // Language names stay in their own language, so a reader who cannot read the page still finds theirs
+      langs: [
+        { code: 'ja', label: '日本語', href: 'Main.dc.html' },
+        { code: 'en', label: 'English', href: 'MainEn.dc.html' },
+      ].map((l) => ({ ...l, current: l.code === lang ? 'page' : 'false', ...pick(l.code === lang) })),
+      langOpen: menu === 'lang',
+      langOpenStr: menu === 'lang' ? 'true' : 'false',
+      langBg: menu === 'lang' ? 'var(--card)' : 'transparent',
+      toggleLang: () => this.setState({ menu: menu === 'lang' ? null : 'lang' }),
+      isAuto: theme === 'auto',
+      isLight: theme === 'light',
+      isDark: theme === 'dark',
+      themeLabel: t.theme + t[theme],
+      themeOpen: menu === 'theme',
+      themeOpenStr: menu === 'theme' ? 'true' : 'false',
+      themeBg: menu === 'theme' ? 'var(--card)' : 'transparent',
+      toggleTheme: () => this.setState({ menu: menu === 'theme' ? null : 'theme' }),
+      choices: ['auto', 'light', 'dark'].map((id) => ({
+        label: t[id],
+        pressed: id === theme ? 'true' : 'false',
+        ...pick(id === theme),
+        pick: () => this.apply(id),
+      })),
+    };
+  }
+}
+</script>
+</body>
+</html>
